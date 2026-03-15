@@ -184,10 +184,10 @@ fn spawn_mdns_command(command: &str, args: &[String]) -> io::Result<MdnsPublishe
         .spawn()?;
 
     if let Ok(Some(status)) = child.try_wait() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("mDNS publisher exited immediately with status {}", status),
-        ));
+        return Err(io::Error::other(format!(
+            "mDNS publisher exited immediately with status {}",
+            status
+        )));
     }
 
     Ok(MdnsPublisher { child })
@@ -325,13 +325,9 @@ fn find_local_ts_opencode_package_dir() -> Option<PathBuf> {
         }
     }
 
-    for candidate in candidates {
-        if candidate.join("src/index.ts").exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("src/index.ts").exists())
 }
 
 fn run_acp_bridge_candidate(
@@ -410,10 +406,8 @@ fn try_run_external_acp_bridge(
                 Some(lhs == rhs)
             })
             .unwrap_or(false);
-        if !is_self {
-            if run_acp_bridge_candidate("rocode", &acp_args, None)? {
-                return Ok(true);
-            }
+        if !is_self && run_acp_bridge_candidate("rocode", &acp_args, None)? {
+            return Ok(true);
         }
     }
 

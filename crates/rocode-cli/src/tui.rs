@@ -6,22 +6,41 @@ use rocode_storage::{Database, SessionRepository};
 
 use crate::server::{start_mdns_publisher_if_needed, wait_for_server_ready, MdnsPublisher};
 
-pub(crate) async fn run_tui(
-    project: Option<PathBuf>,
-    model: Option<String>,
-    continue_last: bool,
-    session: Option<String>,
-    fork: bool,
-    agent_name: Option<String>,
-    initial_prompt: Option<String>,
-    port: u16,
-    hostname: String,
-    mdns: bool,
-    mdns_domain: String,
-    cors: Vec<String>,
-    attach_url: Option<String>,
-    _password: Option<String>,
-) -> anyhow::Result<()> {
+pub(crate) struct TuiLaunchOptions {
+    pub project: Option<PathBuf>,
+    pub model: Option<String>,
+    pub continue_last: bool,
+    pub session: Option<String>,
+    pub fork: bool,
+    pub agent_name: Option<String>,
+    pub initial_prompt: Option<String>,
+    pub port: u16,
+    pub hostname: String,
+    pub mdns: bool,
+    pub mdns_domain: String,
+    pub cors: Vec<String>,
+    pub attach_url: Option<String>,
+    pub password: Option<String>,
+}
+
+pub(crate) async fn run_tui(options: TuiLaunchOptions) -> anyhow::Result<()> {
+    let TuiLaunchOptions {
+        project,
+        model,
+        continue_last,
+        session,
+        fork,
+        agent_name,
+        initial_prompt,
+        port,
+        hostname,
+        mdns,
+        mdns_domain,
+        cors,
+        attach_url,
+        password: _password,
+    } = options;
+
     if let Some(project) = project {
         std::env::set_current_dir(&project).map_err(|e| {
             anyhow::anyhow!("Failed to change directory to {}: {}", project.display(), e)
@@ -78,7 +97,7 @@ pub(crate) async fn run_tui(
         std::env::set_var("ROCODE_TUI_SESSION", session_id);
     }
 
-    let run_result = tokio::task::spawn_blocking(|| rocode_tui::run_tui())
+    let run_result = tokio::task::spawn_blocking(rocode_tui::run_tui)
         .await
         .map_err(|e| anyhow::anyhow!("TUI task panicked: {}", e))?;
 

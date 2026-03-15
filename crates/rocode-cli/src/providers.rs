@@ -154,7 +154,6 @@ fn provider_to_bootstrap(provider: &rocode_config::ProviderConfig) -> BootstrapC
         models,
         blacklist: (!provider.blacklist.is_empty()).then_some(provider.blacklist.clone()),
         whitelist: (!provider.whitelist.is_empty()).then_some(provider.whitelist.clone()),
-        ..Default::default()
     }
 }
 
@@ -236,7 +235,6 @@ fn model_to_bootstrap(id: &str, model: &rocode_config::ModelConfig) -> Bootstrap
             }),
         options: (!options.is_empty()).then_some(options),
         variants,
-        ..Default::default()
     }
 }
 

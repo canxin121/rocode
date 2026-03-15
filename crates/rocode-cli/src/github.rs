@@ -621,7 +621,7 @@ pub(crate) fn prompt_from_github_context(
         if mentions.is_empty() {
             anyhow::bail!("No valid mentions configured in MENTIONS.");
         }
-        let exact_mention = mentions.iter().any(|m| body_lower == *m);
+        let exact_mention = mentions.contains(&body_lower);
         let contains_mention = mentions.iter().any(|m| body_lower.contains(m));
         let review_context = if event_name == "pull_request_review_comment" {
             let file = comment

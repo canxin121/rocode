@@ -641,9 +641,19 @@ fn render_message_block(message: &MessageBlock) -> String {
 fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
     match reasoning.phase {
         MessagePhase::Start => "[thinking] ".to_string(),
-        MessagePhase::Delta => reasoning.text.clone(),
+        MessagePhase::Delta => {
+            let cleaned = strip_think_tags(&reasoning.text);
+            cleaned
+        }
         MessagePhase::End => "\n".to_string(),
-        MessagePhase::Full => format!("[thinking] {}\n", reasoning.text),
+        MessagePhase::Full => {
+            let cleaned = strip_think_tags(&reasoning.text).trim().to_string();
+            if cleaned.is_empty() {
+                String::new()
+            } else {
+                format!("[thinking] {}\n", cleaned)
+            }
+        }
     }
 }
 
@@ -949,16 +959,36 @@ fn indent_continuation_lines(text: &str, prefix: &str) -> String {
     out
 }
 
+/// Strip `<think>` / `</think>` / `<think/>` tags that some models wrap around
+/// reasoning content (e.g. GLM-5, DeepSeek).
+fn strip_think_tags(text: &str) -> String {
+    text.replace("<think>", "")
+        .replace("</think>", "")
+        .replace("<think/>", "")
+}
+
 fn render_reasoning_rich(reasoning: &ReasoningBlock, style: &CliStyle) -> String {
     match reasoning.phase {
         MessagePhase::Start => {
             format!("  {} ", style.dim("💭"))
         }
-        MessagePhase::Delta => style.dim(&reasoning.text),
+        MessagePhase::Delta => {
+            let cleaned = strip_think_tags(&reasoning.text);
+            if cleaned.is_empty() {
+                String::new()
+            } else {
+                style.dim(&cleaned)
+            }
+        }
         MessagePhase::End => "\n".to_string(),
         MessagePhase::Full => {
-            let rendered = style.dim(&reasoning.text);
-            format!("  {} {}\n", style.dim("💭"), rendered)
+            let cleaned = strip_think_tags(&reasoning.text).trim().to_string();
+            if cleaned.is_empty() {
+                String::new()
+            } else {
+                let rendered = style.dim(&cleaned);
+                format!("  {} {}\n", style.dim("💭"), rendered)
+            }
         }
     }
 }

@@ -29,6 +29,21 @@ struct RemoteShareInfo {
     url: String,
 }
 
+pub(crate) struct RemoteAttachOptions {
+    pub base_url: String,
+    pub input: String,
+    pub command: Option<String>,
+    pub continue_last: bool,
+    pub session: Option<String>,
+    pub fork: bool,
+    pub share: bool,
+    pub model: Option<String>,
+    pub scheduler_profile: Option<String>,
+    pub variant: Option<String>,
+    pub format: RunOutputFormat,
+    pub title: Option<String>,
+}
+
 fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
     let kind = payload.get("kind")?.as_str()?;
     match kind {
@@ -160,8 +175,7 @@ fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
                 .unwrap_or_default()
                 .to_string(),
         })),
-        "scheduler_stage" => Some(OutputBlock::SchedulerStage(Box::new(
-            SchedulerStageBlock {
+        "scheduler_stage" => Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
             stage_id: payload
                 .get("stage_id")
                 .and_then(|v| v.as_str())
@@ -474,16 +488,13 @@ pub(crate) async fn consume_remote_sse(
             return Ok(());
         }
 
-        match event_type.as_str() {
-            "error" => {
-                let message = parsed
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
-                    .unwrap_or("unknown remote stream error");
-                eprintln!("\nError: {}", message);
-            }
-            _ => {}
+        if event_type.as_str() == "error" {
+            let message = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
+                .unwrap_or("unknown remote stream error");
+            eprintln!("\nError: {}", message);
         }
         Ok(())
     };
@@ -522,20 +533,21 @@ pub(crate) async fn consume_remote_sse(
     Ok(())
 }
 
-pub(crate) async fn run_non_interactive_attach(
-    base_url: String,
-    input: String,
-    command: Option<String>,
-    continue_last: bool,
-    session: Option<String>,
-    fork: bool,
-    share: bool,
-    model: Option<String>,
-    scheduler_profile: Option<String>,
-    variant: Option<String>,
-    format: RunOutputFormat,
-    title: Option<String>,
-) -> anyhow::Result<()> {
+pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> anyhow::Result<()> {
+    let RemoteAttachOptions {
+        base_url,
+        input,
+        command,
+        continue_last,
+        session,
+        fork,
+        share,
+        model,
+        scheduler_profile,
+        variant,
+        format,
+        title,
+    } = options;
     let client = reqwest::Client::new();
     let session_id =
         resolve_remote_session(&client, &base_url, continue_last, session, fork, title).await?;

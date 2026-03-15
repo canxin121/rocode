@@ -31,10 +31,10 @@ use generate::{handle_generate_command, list_models};
 use github::{handle_github_command, handle_pr_command};
 use import_export::{export_session_data, import_session_data};
 use mcp_cmd::handle_mcp_command;
-use run::run_non_interactive;
+use run::{run_non_interactive, RunNonInteractiveOptions};
 use server::{run_acp_command, run_server_command, run_web_command};
 use session_cmd::{handle_session_command, show_config};
-use tui::run_tui;
+use tui::{run_tui, TuiLaunchOptions};
 use upgrade::{handle_uninstall_command, handle_upgrade_command};
 
 #[tokio::main]
@@ -100,22 +100,22 @@ async fn main() -> anyhow::Result<()> {
             mdns_domain,
             cors,
         }) => {
-            run_tui(
+            run_tui(TuiLaunchOptions {
                 project,
                 model,
                 continue_last,
                 session,
                 fork,
-                agent,
-                prompt,
+                agent_name: agent,
+                initial_prompt: prompt,
                 port,
                 hostname,
                 mdns,
                 mdns_domain,
                 cors,
-                None,
-                None,
-            )
+                attach_url: None,
+                password: None,
+            })
             .await?;
         }
         Some(Commands::Attach {
@@ -124,22 +124,22 @@ async fn main() -> anyhow::Result<()> {
             session,
             password,
         }) => {
-            run_tui(
-                dir,
-                None,
-                false,
+            run_tui(TuiLaunchOptions {
+                project: dir,
+                model: None,
+                continue_last: false,
                 session,
-                false,
-                None,
-                None,
-                0,
-                "127.0.0.1".to_string(),
-                false,
-                "rocode.local".to_string(),
-                vec![],
-                Some(url),
+                fork: false,
+                agent_name: None,
+                initial_prompt: None,
+                port: 0,
+                hostname: "127.0.0.1".to_string(),
+                mdns: false,
+                mdns_domain: "rocode.local".to_string(),
+                cors: vec![],
+                attach_url: Some(url),
                 password,
-            )
+            })
             .await?;
         }
         Some(Commands::Run {
@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
             variant,
             thinking,
         }) => {
-            run_non_interactive(
+            run_non_interactive(RunNonInteractiveOptions {
                 message,
                 command,
                 continue_last,
@@ -169,9 +169,9 @@ async fn main() -> anyhow::Result<()> {
                 fork,
                 share,
                 model,
-                agent,
-                scheduler_profile,
-                file,
+                requested_agent: agent,
+                requested_scheduler_profile: scheduler_profile,
+                files: file,
                 format,
                 title,
                 attach,
@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
                 port,
                 variant,
                 thinking,
-            )
+            })
             .await?;
         }
         Some(Commands::Serve {
@@ -283,22 +283,22 @@ async fn main() -> anyhow::Result<()> {
             show_build_info();
         }
         None => {
-            run_tui(
-                None,
-                None,
-                false,
-                None,
-                false,
-                None,
-                None,
-                0,
-                "127.0.0.1".to_string(),
-                false,
-                "rocode.local".to_string(),
-                vec![],
-                None,
-                None,
-            )
+            run_tui(TuiLaunchOptions {
+                project: None,
+                model: None,
+                continue_last: false,
+                session: None,
+                fork: false,
+                agent_name: None,
+                initial_prompt: None,
+                port: 0,
+                hostname: "127.0.0.1".to_string(),
+                mdns: false,
+                mdns_domain: "rocode.local".to_string(),
+                cors: vec![],
+                attach_url: None,
+                password: None,
+            })
             .await?;
         }
     }

@@ -6,7 +6,6 @@
 
 use std::time::Duration;
 
-use serde_json;
 use tokio::sync::mpsc;
 
 use crate::util::server_url;
@@ -227,12 +226,9 @@ fn parse_event(
     };
 
     // Global events (no session filter).
-    match event_type.as_str() {
-        "config.updated" => {
-            // Could handle config reload, but for now skip.
-            return None;
-        }
-        _ => {}
+    if event_type.as_str() == "config.updated" {
+        // Could handle config reload, but for now skip.
+        return None;
     }
 
     // Session-scoped events — filter by session_id.

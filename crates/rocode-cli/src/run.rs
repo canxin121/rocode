@@ -55,7 +55,7 @@ use crate::api_client::{CliApiClient, McpStatusInfo, MessageTokensInfo, SessionI
 use crate::cli::RunOutputFormat;
 use crate::event_stream::{self, CliServerEvent};
 use crate::providers::{render_help, setup_providers};
-use crate::remote::run_non_interactive_attach;
+use crate::remote::{run_non_interactive_attach, RemoteAttachOptions};
 use crate::server_lifecycle::discover_or_start_server;
 use crate::util::{
     append_cli_file_attachments, collect_run_input, parse_model_and_provider, truncate_text,
@@ -132,25 +132,27 @@ fn resolve_requested_agent_name(
 
     "build".to_string()
 }
-pub(crate) async fn run_non_interactive(
-    message: Vec<String>,
-    command: Option<String>,
-    continue_last: bool,
-    session: Option<String>,
-    fork: bool,
-    share: bool,
-    model: Option<String>,
-    requested_agent: Option<String>,
-    requested_scheduler_profile: Option<String>,
-    files: Vec<PathBuf>,
-    format: RunOutputFormat,
-    title: Option<String>,
-    attach: Option<String>,
-    dir: Option<PathBuf>,
-    _port: Option<u16>,
-    variant: Option<String>,
-    _thinking: bool,
-) -> anyhow::Result<()> {
+pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> anyhow::Result<()> {
+    let RunNonInteractiveOptions {
+        message,
+        command,
+        continue_last,
+        session,
+        fork,
+        share,
+        model,
+        requested_agent,
+        requested_scheduler_profile,
+        files,
+        format,
+        title,
+        attach,
+        dir,
+        port: _port,
+        variant,
+        thinking,
+    } = options;
+
     if let Some(dir) = dir {
         std::env::set_current_dir(&dir).map_err(|e| {
             anyhow::anyhow!("Failed to change directory to {}: {}", dir.display(), e)
@@ -163,9 +165,10 @@ pub(crate) async fn run_non_interactive(
 
     let mut input = collect_run_input(message)?;
     append_cli_file_attachments(&mut input, &files)?;
+    let show_thinking = thinking || input.trim().is_empty();
 
     if let Some(base_url) = attach {
-        return run_non_interactive_attach(
+        return run_non_interactive_attach(RemoteAttachOptions {
             base_url,
             input,
             command,
@@ -174,11 +177,11 @@ pub(crate) async fn run_non_interactive(
             fork,
             share,
             model,
-            requested_scheduler_profile,
+            scheduler_profile: requested_scheduler_profile,
             variant,
             format,
             title,
-        )
+        })
         .await;
     }
 
@@ -214,6 +217,7 @@ pub(crate) async fn run_non_interactive(
             requested_scheduler_profile,
             None,
             false,
+            show_thinking,
         )
         .await;
     }
@@ -226,6 +230,7 @@ pub(crate) async fn run_non_interactive(
         requested_scheduler_profile,
         Some(input.clone()),
         true,
+        show_thinking,
     )
     .await?;
 
@@ -248,12 +253,33 @@ pub(crate) async fn run_non_interactive(
     Ok(())
 }
 
+pub(crate) struct RunNonInteractiveOptions {
+    pub message: Vec<String>,
+    pub command: Option<String>,
+    pub continue_last: bool,
+    pub session: Option<String>,
+    pub fork: bool,
+    pub share: bool,
+    pub model: Option<String>,
+    pub requested_agent: Option<String>,
+    pub requested_scheduler_profile: Option<String>,
+    pub files: Vec<PathBuf>,
+    pub format: RunOutputFormat,
+    pub title: Option<String>,
+    pub attach: Option<String>,
+    pub dir: Option<PathBuf>,
+    pub port: Option<u16>,
+    pub variant: Option<String>,
+    pub thinking: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 struct CliRunSelection {
     model: Option<String>,
     provider: Option<String>,
     requested_agent: Option<String>,
     requested_scheduler_profile: Option<String>,
+    show_thinking: bool,
 }
 
 struct CliExecutionRuntime {
@@ -284,6 +310,29 @@ struct CliExecutionRuntime {
     server_session_id: Option<String>,
     /// Tracks the last rendered message ID from the server for incremental rendering.
     last_rendered_message_id: Arc<std::sync::Mutex<Option<String>>>,
+    show_thinking: bool,
+}
+
+struct CliRuntimeBuildInput<'a> {
+    config: &'a Config,
+    current_dir: &'a Path,
+    provider_registry: Arc<rocode_provider::ProviderRegistry>,
+    tool_registry: Arc<rocode_tool::registry::ToolRegistry>,
+    agent_registry: Arc<AgentRegistry>,
+    selection: &'a CliRunSelection,
+    prior_conversation: Option<Conversation>,
+    prior_subsessions: Option<HashMap<String, PersistedSubsessionState>>,
+}
+
+#[derive(Clone)]
+struct CliInteractiveHandles {
+    terminal_surface: Arc<CliTerminalSurface>,
+    prompt_chrome: Arc<CliPromptChrome>,
+    prompt_session: Arc<PromptSession>,
+    queued_inputs: Arc<AsyncMutex<VecDeque<String>>>,
+    busy_flag: Arc<AtomicBool>,
+    exit_requested: Arc<AtomicBool>,
+    active_abort: Arc<AsyncMutex<Option<CliActiveAbortHandle>>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -827,10 +876,10 @@ impl CliTerminalSurface {
 
         if let Some(prompt_session) = prompt {
             let _ = prompt_session.suspend();
-            let write_result = (|| -> io::Result<()> {
+            let write_result: io::Result<()> = {
                 print!("{}", rendered);
                 io::stdout().flush()
-            })();
+            };
             let _ = prompt_session.resume();
             write_result
         } else {
@@ -1438,7 +1487,7 @@ fn apply_system_prompt_to_conversation(
     conversation: Option<Conversation>,
     system_prompt: &str,
 ) -> Conversation {
-    let mut conversation = conversation.unwrap_or_else(Conversation::new);
+    let mut conversation = conversation.unwrap_or_default();
     if let Some(first) = conversation.messages.first_mut() {
         if matches!(first.role, MessageRole::System) {
             first.content = system_prompt.to_string();
@@ -1502,15 +1551,18 @@ fn build_local_cli_server_state(
 }
 
 async fn build_cli_execution_runtime(
-    config: &Config,
-    current_dir: &Path,
-    provider_registry: Arc<rocode_provider::ProviderRegistry>,
-    tool_registry: Arc<rocode_tool::registry::ToolRegistry>,
-    agent_registry: Arc<AgentRegistry>,
-    selection: &CliRunSelection,
-    prior_conversation: Option<Conversation>,
-    prior_subsessions: Option<HashMap<String, PersistedSubsessionState>>,
+    input: CliRuntimeBuildInput<'_>,
 ) -> anyhow::Result<CliExecutionRuntime> {
+    let CliRuntimeBuildInput {
+        config,
+        current_dir,
+        provider_registry,
+        tool_registry,
+        agent_registry,
+        selection,
+        prior_conversation,
+        prior_subsessions,
+    } = input;
     let observed_topology = Arc::new(Mutex::new(CliObservedExecutionTopology::default()));
     let frontend_projection = Arc::new(Mutex::new(CliFrontendProjection::default()));
     let scheduler_stage_snapshots = Arc::new(Mutex::new(HashMap::new()));
@@ -1655,6 +1707,7 @@ async fn build_cli_execution_runtime(
         api_client: None,
         server_session_id: None,
         last_rendered_message_id: Arc::new(std::sync::Mutex::new(None)),
+        show_thinking: selection.show_thinking,
     })
 }
 
@@ -1960,25 +2013,19 @@ fn cli_active_stage_context_lines(
 
 fn cli_attach_interactive_handles(
     runtime: &mut CliExecutionRuntime,
-    terminal_surface: Arc<CliTerminalSurface>,
-    prompt_chrome: Arc<CliPromptChrome>,
-    prompt_session: Arc<PromptSession>,
-    queued_inputs: Arc<AsyncMutex<VecDeque<String>>>,
-    busy_flag: Arc<AtomicBool>,
-    exit_requested: Arc<AtomicBool>,
-    active_abort: Arc<AsyncMutex<Option<CliActiveAbortHandle>>>,
+    handles: CliInteractiveHandles,
 ) {
-    runtime.terminal_surface = Some(terminal_surface);
-    runtime.prompt_chrome = Some(prompt_chrome.clone());
-    runtime.prompt_session = Some(prompt_session.clone());
+    runtime.terminal_surface = Some(handles.terminal_surface);
+    runtime.prompt_chrome = Some(handles.prompt_chrome.clone());
+    runtime.prompt_session = Some(handles.prompt_session.clone());
     if let Ok(mut slot) = runtime.prompt_session_slot.lock() {
-        *slot = Some(prompt_session.clone());
+        *slot = Some(handles.prompt_session.clone());
     }
-    runtime.queued_inputs = queued_inputs;
-    runtime.busy_flag = busy_flag;
-    runtime.exit_requested = exit_requested;
-    runtime.active_abort = active_abort;
-    prompt_chrome.update_from_runtime(runtime);
+    runtime.queued_inputs = handles.queued_inputs;
+    runtime.busy_flag = handles.busy_flag;
+    runtime.exit_requested = handles.exit_requested;
+    runtime.active_abort = handles.active_abort;
+    handles.prompt_chrome.update_from_runtime(runtime);
     cli_refresh_prompt(runtime);
 }
 
@@ -2604,6 +2651,7 @@ async fn run_chat_session(
     requested_scheduler_profile: Option<String>,
     initial_prompt: Option<String>,
     single_shot: bool,
+    show_thinking: bool,
 ) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     let config = load_config(&current_dir)?;
@@ -2671,18 +2719,19 @@ async fn run_chat_session(
         provider: provider.or(carry_provider),
         requested_agent,
         requested_scheduler_profile: requested_scheduler_profile.or(carry_preset),
+        show_thinking,
     };
 
-    let mut runtime = build_cli_execution_runtime(
-        &config,
-        &current_dir,
-        provider_registry.clone(),
-        tool_registry.clone(),
-        agent_registry_arc.clone(),
-        &selection,
-        None,
-        None,
-    )
+    let mut runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
+        config: &config,
+        current_dir: &current_dir,
+        provider_registry: provider_registry.clone(),
+        tool_registry: tool_registry.clone(),
+        agent_registry: agent_registry_arc.clone(),
+        selection: &selection,
+        prior_conversation: None,
+        prior_subsessions: None,
+    })
     .await?;
     let repl_style = CliStyle::detect();
 
@@ -2743,13 +2792,15 @@ async fn run_chat_session(
     ))?;
     cli_attach_interactive_handles(
         &mut runtime,
-        terminal_surface.clone(),
-        prompt_chrome.clone(),
-        prompt_session.clone(),
-        queued_inputs.clone(),
-        busy_flag.clone(),
-        exit_requested.clone(),
-        active_abort.clone(),
+        CliInteractiveHandles {
+            terminal_surface: terminal_surface.clone(),
+            prompt_chrome: prompt_chrome.clone(),
+            prompt_session: prompt_session.clone(),
+            queued_inputs: queued_inputs.clone(),
+            busy_flag: busy_flag.clone(),
+            exit_requested: exit_requested.clone(),
+            active_abort: active_abort.clone(),
+        },
     );
 
     let (dispatch_tx, mut dispatch_rx) = mpsc::unbounded_channel::<CliDispatchInput>();
@@ -3187,27 +3238,29 @@ async fn run_chat_session(
                     let prior_subsessions = Some(runtime.executor.export_subsessions().await);
                     selection.provider = provider;
                     selection.model = model;
-                    runtime = build_cli_execution_runtime(
-                        &config,
-                        &current_dir,
-                        provider_registry.clone(),
-                        tool_registry.clone(),
-                        agent_registry_arc.clone(),
-                        &selection,
+                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
+                        config: &config,
+                        current_dir: &current_dir,
+                        provider_registry: provider_registry.clone(),
+                        tool_registry: tool_registry.clone(),
+                        agent_registry: agent_registry_arc.clone(),
+                        selection: &selection,
                         prior_conversation,
                         prior_subsessions,
-                    )
+                    })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
                     cli_attach_interactive_handles(
                         &mut runtime,
-                        terminal_surface.clone(),
-                        prompt_chrome.clone(),
-                        prompt_session.clone(),
-                        queued_inputs.clone(),
-                        busy_flag.clone(),
-                        exit_requested.clone(),
-                        active_abort.clone(),
+                        CliInteractiveHandles {
+                            terminal_surface: terminal_surface.clone(),
+                            prompt_chrome: prompt_chrome.clone(),
+                            prompt_session: prompt_session.clone(),
+                            queued_inputs: queued_inputs.clone(),
+                            busy_flag: busy_flag.clone(),
+                            exit_requested: exit_requested.clone(),
+                            active_abort: active_abort.clone(),
+                        },
                     );
                     cli_switch_message(Some(&runtime), "model", &runtime.resolved_model_label);
                 }
@@ -3270,27 +3323,29 @@ async fn run_chat_session(
                     selection.requested_agent = None;
                     selection.model = None;
                     selection.provider = None;
-                    runtime = build_cli_execution_runtime(
-                        &config,
-                        &current_dir,
-                        provider_registry.clone(),
-                        tool_registry.clone(),
-                        agent_registry_arc.clone(),
-                        &selection,
+                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
+                        config: &config,
+                        current_dir: &current_dir,
+                        provider_registry: provider_registry.clone(),
+                        tool_registry: tool_registry.clone(),
+                        agent_registry: agent_registry_arc.clone(),
+                        selection: &selection,
                         prior_conversation,
                         prior_subsessions,
-                    )
+                    })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
                     cli_attach_interactive_handles(
                         &mut runtime,
-                        terminal_surface.clone(),
-                        prompt_chrome.clone(),
-                        prompt_session.clone(),
-                        queued_inputs.clone(),
-                        busy_flag.clone(),
-                        exit_requested.clone(),
-                        active_abort.clone(),
+                        CliInteractiveHandles {
+                            terminal_surface: terminal_surface.clone(),
+                            prompt_chrome: prompt_chrome.clone(),
+                            prompt_session: prompt_session.clone(),
+                            queued_inputs: queued_inputs.clone(),
+                            busy_flag: busy_flag.clone(),
+                            exit_requested: exit_requested.clone(),
+                            active_abort: active_abort.clone(),
+                        },
                     );
                     cli_switch_message(
                         Some(&runtime),
@@ -3411,27 +3466,29 @@ async fn run_chat_session(
                     let prior_subsessions = Some(runtime.executor.export_subsessions().await);
                     selection.requested_agent = Some(name.clone());
                     selection.requested_scheduler_profile = None;
-                    runtime = build_cli_execution_runtime(
-                        &config,
-                        &current_dir,
-                        provider_registry.clone(),
-                        tool_registry.clone(),
-                        agent_registry_arc.clone(),
-                        &selection,
+                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
+                        config: &config,
+                        current_dir: &current_dir,
+                        provider_registry: provider_registry.clone(),
+                        tool_registry: tool_registry.clone(),
+                        agent_registry: agent_registry_arc.clone(),
+                        selection: &selection,
                         prior_conversation,
                         prior_subsessions,
-                    )
+                    })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
                     cli_attach_interactive_handles(
                         &mut runtime,
-                        terminal_surface.clone(),
-                        prompt_chrome.clone(),
-                        prompt_session.clone(),
-                        queued_inputs.clone(),
-                        busy_flag.clone(),
-                        exit_requested.clone(),
-                        active_abort.clone(),
+                        CliInteractiveHandles {
+                            terminal_surface: terminal_surface.clone(),
+                            prompt_chrome: prompt_chrome.clone(),
+                            prompt_session: prompt_session.clone(),
+                            queued_inputs: queued_inputs.clone(),
+                            busy_flag: busy_flag.clone(),
+                            exit_requested: exit_requested.clone(),
+                            active_abort: active_abort.clone(),
+                        },
                     );
                     cli_switch_message(Some(&runtime), "agent", &runtime.resolved_agent_name);
                 }
@@ -3780,9 +3837,10 @@ async fn process_message(runtime: &mut CliExecutionRuntime, input: &str) -> anyh
 fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style: &CliStyle) {
     // Helper to check if the event belongs to our session.
     let is_my_session = |event_session_id: &str| -> bool {
-        runtime.server_session_id.as_deref().map_or(true, |my_sid| {
-            event_session_id.is_empty() || event_session_id == my_sid
-        })
+        runtime
+            .server_session_id
+            .as_deref()
+            .is_none_or(|my_sid| event_session_id.is_empty() || event_session_id == my_sid)
     };
 
     match event {
@@ -4099,7 +4157,7 @@ async fn handle_session_updated_from_sse(
             if msg
                 .metadata
                 .as_ref()
-                .map_or(false, |m| m.contains_key("scheduler_stage_name"))
+                .is_some_and(|m| m.contains_key("scheduler_stage_name"))
             {
                 has_scheduler_stage = true;
             }
@@ -4428,12 +4486,15 @@ async fn process_message_with_mode(
     let observed_topology = runtime.observed_topology.clone();
     let frontend_projection = runtime.frontend_projection.clone();
     let surface = runtime.terminal_surface.clone();
+    let show_thinking = runtime.show_thinking;
     {
         let mut active_abort = runtime.active_abort.lock().await;
         *active_abort = Some(CliActiveAbortHandle::Agent(cancel_token.clone()));
     }
 
     let mut md_streamer = MarkdownStreamer::new(&style).with_continuation_prefix("  ");
+    let mut reasoning_buf = String::new();
+    let mut reasoning_notice_printed = false;
     let run_future = Box::pin(stream_prompt_to_blocks_with_cancel(
         &mut runtime.executor,
         input,
@@ -4471,6 +4532,43 @@ async fn process_message_with_mode(
                         }
                     }
                     print_block_on_surface(surface.as_deref(), block, &style)
+                }
+                OutputBlock::Reasoning(r) if r.phase == MessagePhase::Start => {
+                    reasoning_buf.clear();
+                    reasoning_notice_printed = false;
+                    Ok(())
+                }
+                OutputBlock::Reasoning(r) if r.phase == MessagePhase::Delta => {
+                    let cleaned = r
+                        .text
+                        .replace("<think>", "")
+                        .replace("</think>", "")
+                        .replace("<think/>", "");
+                    if !cleaned.is_empty() {
+                        reasoning_buf.push_str(&cleaned);
+                        if show_thinking && !reasoning_notice_printed {
+                            let notice = format!("  {}\n", style.dim("💭 Thinking..."));
+                            if let Some(surface) = surface.as_deref() {
+                                surface.print_text(&notice)?;
+                            } else {
+                                print!("{}", notice);
+                                io::stdout().flush()?;
+                            }
+                            reasoning_notice_printed = true;
+                        }
+                    }
+                    Ok(())
+                }
+                OutputBlock::Reasoning(r) if r.phase == MessagePhase::End => {
+                    if show_thinking {
+                        let cleaned = reasoning_buf.trim();
+                        if !cleaned.is_empty() {
+                            let block = OutputBlock::Reasoning(ReasoningBlock::full(cleaned));
+                            print_block_on_surface(surface.as_deref(), block, &style)?;
+                        }
+                    }
+                    reasoning_buf.clear();
+                    Ok(())
                 }
                 OutputBlock::Tool(_tool) => {
                     print_block_on_surface(surface.as_deref(), block, &style)
@@ -4685,392 +4783,6 @@ fn print_block_on_surface(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
-        cli_render_retained_layout, cli_render_startup_banner,
-        cli_should_emit_scheduler_stage_block, CliFrontendPhase, CliFrontendProjection,
-        CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
-        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
-    };
-    use crate::api_client::SessionInfo;
-    use chrono::Utc;
-    use rocode_command::cli_style::CliStyle;
-    use rocode_command::output_blocks::SchedulerStageBlock;
-    use rocode_tui::api::SessionTimeInfo;
-    use std::collections::HashMap;
-    use std::path::Path;
-    use std::sync::{Arc, Mutex};
-
-    fn stage_with_status(status: &str) -> SchedulerStageBlock {
-        SchedulerStageBlock {
-            stage_id: None,
-            profile: Some("prometheus".to_string()),
-            stage: "route".to_string(),
-            title: "Prometheus · Route".to_string(),
-            text: String::new(),
-            stage_index: Some(1),
-            stage_total: Some(5),
-            step: None,
-            status: Some(status.to_string()),
-            focus: None,
-            last_event: None,
-            waiting_on: None,
-            activity: None,
-            loop_budget: None,
-            available_skill_count: None,
-            available_agent_count: None,
-            available_category_count: None,
-            active_skills: Vec::new(),
-            active_agents: Vec::new(),
-            active_categories: Vec::new(),
-            done_agent_count: 0,
-            total_agent_count: 0,
-            prompt_tokens: None,
-            completion_tokens: None,
-            reasoning_tokens: None,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            decision: None,
-            child_session_id: None,
-        }
-    }
-
-    #[test]
-    fn cli_prints_scheduler_stage_snapshots_only_on_change() {
-        let snapshots = Arc::new(Mutex::new(HashMap::new()));
-        let running = stage_with_status("running");
-        let done = stage_with_status("done");
-
-        assert!(cli_should_emit_scheduler_stage_block(&snapshots, &running));
-        assert!(!cli_should_emit_scheduler_stage_block(&snapshots, &running));
-        assert!(cli_should_emit_scheduler_stage_block(&snapshots, &done));
-    }
-
-    #[test]
-    fn retained_transcript_merges_partial_lines() {
-        let mut transcript = CliRetainedTranscript::default();
-        transcript.append_rendered("● hello");
-        transcript.append_rendered(" world\n");
-        transcript.append_rendered("next line\n");
-
-        assert_eq!(
-            transcript.committed_lines,
-            vec!["● hello world", "next line"]
-        );
-        assert!(transcript.open_line.is_empty());
-    }
-
-    #[test]
-    fn cli_prompt_screen_lines_are_empty_for_transcript_first_mode() {
-        assert!(cli_prompt_screen_lines().is_empty());
-    }
-
-    #[test]
-    fn prompt_assist_completes_switch_command_names() {
-        let catalog = CliPromptCatalog {
-            models: vec!["openai/gpt-4.1".to_string()],
-            agents: vec!["build".to_string()],
-            presets: vec!["prometheus".to_string()],
-        };
-        let selection = CliPromptSelectionState {
-            model: "openai/gpt-4.1".to_string(),
-            agent: "build".to_string(),
-            preset: Some("prometheus".to_string()),
-        };
-
-        let assist = cli_prompt_assist_view(&catalog, &selection, "/mo", 3);
-
-        assert!(assist
-            .screen_lines
-            .iter()
-            .any(|line| line.contains("/model")));
-        assert_eq!(
-            assist.completion,
-            Some(rocode_command::cli_prompt::PromptCompletion {
-                line: "/model ".to_string(),
-                cursor_pos: 7,
-            })
-        );
-    }
-
-    #[test]
-    fn prompt_assist_filters_model_candidates() {
-        let catalog = CliPromptCatalog {
-            models: vec![
-                "anthropic/claude-3.7-sonnet".to_string(),
-                "dashscope/qwen-max".to_string(),
-                "dashscope/qwen-plus".to_string(),
-            ],
-            agents: vec!["build".to_string()],
-            presets: vec!["prometheus".to_string()],
-        };
-        let selection = CliPromptSelectionState {
-            model: "dashscope/qwen-plus".to_string(),
-            agent: "build".to_string(),
-            preset: Some("prometheus".to_string()),
-        };
-
-        let assist = cli_prompt_assist_view(&catalog, &selection, "/model qwen", 11);
-
-        assert!(assist
-            .screen_lines
-            .iter()
-            .any(|line| line.contains("dashscope/qwen-max")));
-        assert!(assist
-            .screen_lines
-            .iter()
-            .any(|line| line.contains("dashscope/qwen-plus [active]")));
-        assert_eq!(
-            assist.completion,
-            Some(rocode_command::cli_prompt::PromptCompletion {
-                line: "/model dashscope/qwen-max".to_string(),
-                cursor_pos: 25,
-            })
-        );
-    }
-
-    #[test]
-    fn prompt_assist_shows_preset_values_after_exact_command() {
-        let catalog = CliPromptCatalog {
-            models: vec!["openai/gpt-4.1".to_string()],
-            agents: vec!["build".to_string()],
-            presets: vec!["atlas".to_string(), "prometheus".to_string()],
-        };
-        let selection = CliPromptSelectionState {
-            model: "openai/gpt-4.1".to_string(),
-            agent: "build".to_string(),
-            preset: Some("atlas".to_string()),
-        };
-
-        let assist = cli_prompt_assist_view(&catalog, &selection, "/preset", 7);
-
-        assert!(assist
-            .screen_lines
-            .iter()
-            .any(|line| line.contains("/preset suggestions")));
-        assert_eq!(
-            assist.completion,
-            Some(rocode_command::cli_prompt::PromptCompletion {
-                line: "/preset ".to_string(),
-                cursor_pos: 8,
-            })
-        );
-    }
-
-    #[test]
-    fn startup_banner_uses_recent_session_metadata() {
-        let now = Utc::now().timestamp_millis();
-        let sessions = vec![SessionInfo {
-            id: "s1".to_string(),
-            slug: "s1".to_string(),
-            project_id: "p1".to_string(),
-            directory: "/tmp/project".to_string(),
-            parent_id: None,
-            title: "Research Session".to_string(),
-            version: "v1".to_string(),
-            time: SessionTimeInfo {
-                created: now,
-                updated: now,
-                compacting: None,
-                archived: None,
-            },
-            revert: None,
-            metadata: Some(HashMap::from([
-                ("model_provider".to_string(), serde_json::json!("zhipuai")),
-                ("model_id".to_string(), serde_json::json!("GLM-5")),
-                (
-                    "scheduler_profile".to_string(),
-                    serde_json::json!("prometheus"),
-                ),
-            ])),
-        }];
-        let info = cli_recent_session_info_for_directory(&sessions, Path::new("/tmp/project"))
-            .expect("recent session info");
-        assert_eq!(
-            info,
-            CliRecentSessionInfo {
-                title: Some("Research Session".to_string()),
-                model_label: Some("zhipuai/GLM-5".to_string()),
-                preset_label: Some("prometheus".to_string()),
-            }
-        );
-
-        let banner = cli_render_startup_banner(&CliStyle::plain(), Some(&info));
-        assert!(banner.contains("ROCode"));
-        assert!(banner.contains("Research Session"));
-        assert!(banner.contains("zhipuai/GLM-5"));
-        assert!(banner.contains("prometheus"));
-    }
-
-    #[test]
-    fn retained_layout_emits_session_messages_sidebar_and_active_boxes() {
-        let style = CliStyle::plain();
-        let mut projection = CliFrontendProjection {
-            phase: CliFrontendPhase::Busy,
-            active_label: Some("assistant response".to_string()),
-            queue_len: 2,
-            active_stage: Some(stage_with_status("running")),
-            transcript: CliRetainedTranscript::default(),
-            sidebar_collapsed: false,
-            active_collapsed: false,
-            session_title: Some("Test Session".to_string()),
-            scroll_offset: 0,
-            token_stats: CliSessionTokenStats::default(),
-            mcp_servers: Vec::new(),
-            lsp_servers: Vec::new(),
-        };
-        projection
-            .transcript
-            .append_rendered("● user prompt\n\n● assistant reply\n");
-        let mut topology = CliObservedExecutionTopology::default();
-        topology.active = true;
-
-        let lines = cli_render_retained_layout(
-            "Preset prometheus",
-            "Model auto",
-            "~/tests/rust/rocode",
-            &projection,
-            &topology,
-            &style,
-        );
-        let joined = lines.join("\n");
-
-        assert!(joined.contains("ROCode"));
-        assert!(joined.contains("Messages"));
-        assert!(joined.contains("Sidebar"));
-        assert!(joined.contains("Active"));
-        assert!(joined.contains("assistant reply"));
-        assert!(joined.contains("Test Session"));
-    }
-
-    #[test]
-    fn retained_layout_collapses_sidebar() {
-        let style = CliStyle::plain();
-        let projection = CliFrontendProjection {
-            phase: CliFrontendPhase::Idle,
-            sidebar_collapsed: true,
-            active_collapsed: false,
-            session_title: Some("Collapsed Test".to_string()),
-            ..Default::default()
-        };
-        let topology = CliObservedExecutionTopology::default();
-
-        let lines = cli_render_retained_layout(
-            "Agent build",
-            "Model auto",
-            "~/workspace",
-            &projection,
-            &topology,
-            &style,
-        );
-        let joined = lines.join("\n");
-
-        assert!(joined.contains("ROCode"));
-        assert!(joined.contains("Messages"));
-        // Sidebar box should NOT appear when collapsed
-        assert!(!joined.contains("╭ Sidebar"));
-        assert!(joined.contains("Active"));
-    }
-
-    #[test]
-    fn retained_layout_collapses_active() {
-        let style = CliStyle::plain();
-        let projection = CliFrontendProjection {
-            phase: CliFrontendPhase::Idle,
-            sidebar_collapsed: false,
-            active_collapsed: true,
-            session_title: None,
-            ..Default::default()
-        };
-        let topology = CliObservedExecutionTopology::default();
-
-        let lines = cli_render_retained_layout(
-            "Agent build",
-            "Model auto",
-            "~/workspace",
-            &projection,
-            &topology,
-            &style,
-        );
-        let joined = lines.join("\n");
-
-        assert!(joined.contains("Sidebar"));
-        assert!(joined.contains("Active"));
-        assert!(joined.contains("/active to expand"));
-    }
-
-    #[test]
-    fn retained_layout_active_panel_adapts_to_content() {
-        let style = CliStyle::plain();
-        let topology = CliObservedExecutionTopology::default();
-
-        // Minimal stage: only 2-3 content lines (stage header + status)
-        let minimal_stage = stage_with_status("running");
-
-        let proj_minimal = CliFrontendProjection {
-            phase: CliFrontendPhase::Busy,
-            active_stage: Some(minimal_stage),
-            sidebar_collapsed: true,
-            active_collapsed: false,
-            session_title: Some("Test".to_string()),
-            ..Default::default()
-        };
-        let lines_minimal = cli_render_retained_layout(
-            "Agent build",
-            "Model auto",
-            "~/test",
-            &proj_minimal,
-            &topology,
-            &style,
-        );
-
-        // Rich stage: many content lines (agents, skills, child session)
-        let mut rich_stage = stage_with_status("running");
-        rich_stage.focus = Some("analyzing codebase".to_string());
-        rich_stage.last_event = Some("tool_call: read_file".to_string());
-        rich_stage.activity = Some("Reviewing architecture".to_string());
-        rich_stage.available_skill_count = Some(12);
-        rich_stage.available_agent_count = Some(4);
-        rich_stage.active_skills = vec!["planner".to_string(), "reviewer".to_string()];
-        rich_stage.total_agent_count = 3;
-        rich_stage.done_agent_count = 1;
-        rich_stage.child_session_id = Some("child-abc".to_string());
-
-        let proj_rich = CliFrontendProjection {
-            phase: CliFrontendPhase::Busy,
-            active_stage: Some(rich_stage),
-            sidebar_collapsed: true,
-            active_collapsed: false,
-            session_title: Some("Test".to_string()),
-            ..Default::default()
-        };
-        let lines_rich = cli_render_retained_layout(
-            "Agent build",
-            "Model auto",
-            "~/test",
-            &proj_rich,
-            &topology,
-            &style,
-        );
-
-        // Rich layout should have more total lines (active panel grew)
-        assert!(
-            lines_rich.len() > lines_minimal.len(),
-            "Rich active panel ({} lines) should be taller than minimal ({} lines)",
-            lines_rich.len(),
-            lines_minimal.len(),
-        );
-
-        // Both should contain Active box
-        let joined_rich = lines_rich.join("\n");
-        assert!(joined_rich.contains("Active"));
-        assert!(joined_rich.contains("child-abc"));
-        assert!(joined_rich.contains("planner"));
-    }
-}
-
 // ── CLI interactive question handler ─────────────────────────────────
 
 async fn cli_ask_question(
@@ -5150,12 +4862,7 @@ async fn cli_ask_question(
             }
         })
         .await
-        .unwrap_or_else(|e| {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Selector task panicked: {}", e),
-            ))
-        });
+        .unwrap_or_else(|e| Err(io::Error::other(format!("Selector task panicked: {}", e))));
 
         match result {
             Ok(SelectResult::Selected(choices)) => {
@@ -5445,5 +5152,387 @@ fn format_session_time(timestamp: i64) -> String {
         format!("{}h ago", elapsed / 3600)
     } else {
         format!("{}d ago", elapsed / 86400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
+        cli_render_retained_layout, cli_render_startup_banner,
+        cli_should_emit_scheduler_stage_block, CliFrontendPhase, CliFrontendProjection,
+        CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
+        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
+    };
+    use crate::api_client::SessionInfo;
+    use chrono::Utc;
+    use rocode_command::cli_style::CliStyle;
+    use rocode_command::output_blocks::SchedulerStageBlock;
+    use rocode_tui::api::SessionTimeInfo;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    fn stage_with_status(status: &str) -> SchedulerStageBlock {
+        SchedulerStageBlock {
+            stage_id: None,
+            profile: Some("prometheus".to_string()),
+            stage: "route".to_string(),
+            title: "Prometheus · Route".to_string(),
+            text: String::new(),
+            stage_index: Some(1),
+            stage_total: Some(5),
+            step: None,
+            status: Some(status.to_string()),
+            focus: None,
+            last_event: None,
+            waiting_on: None,
+            activity: None,
+            loop_budget: None,
+            available_skill_count: None,
+            available_agent_count: None,
+            available_category_count: None,
+            active_skills: Vec::new(),
+            active_agents: Vec::new(),
+            active_categories: Vec::new(),
+            done_agent_count: 0,
+            total_agent_count: 0,
+            prompt_tokens: None,
+            completion_tokens: None,
+            reasoning_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            decision: None,
+            child_session_id: None,
+        }
+    }
+
+    #[test]
+    fn cli_prints_scheduler_stage_snapshots_only_on_change() {
+        let snapshots = Arc::new(Mutex::new(HashMap::new()));
+        let running = stage_with_status("running");
+        let done = stage_with_status("done");
+
+        assert!(cli_should_emit_scheduler_stage_block(&snapshots, &running));
+        assert!(!cli_should_emit_scheduler_stage_block(&snapshots, &running));
+        assert!(cli_should_emit_scheduler_stage_block(&snapshots, &done));
+    }
+
+    #[test]
+    fn retained_transcript_merges_partial_lines() {
+        let mut transcript = CliRetainedTranscript::default();
+        transcript.append_rendered("● hello");
+        transcript.append_rendered(" world\n");
+        transcript.append_rendered("next line\n");
+
+        assert_eq!(
+            transcript.committed_lines,
+            vec!["● hello world", "next line"]
+        );
+        assert!(transcript.open_line.is_empty());
+    }
+
+    #[test]
+    fn cli_prompt_screen_lines_are_empty_for_transcript_first_mode() {
+        assert!(cli_prompt_screen_lines().is_empty());
+    }
+
+    #[test]
+    fn prompt_assist_completes_switch_command_names() {
+        let catalog = CliPromptCatalog {
+            models: vec!["openai/gpt-4.1".to_string()],
+            agents: vec!["build".to_string()],
+            presets: vec!["prometheus".to_string()],
+        };
+        let selection = CliPromptSelectionState {
+            model: "openai/gpt-4.1".to_string(),
+            agent: "build".to_string(),
+            preset: Some("prometheus".to_string()),
+        };
+
+        let assist = cli_prompt_assist_view(&catalog, &selection, "/mo", 3);
+
+        assert!(assist
+            .screen_lines
+            .iter()
+            .any(|line| line.contains("/model")));
+        assert_eq!(
+            assist.completion,
+            Some(rocode_command::cli_prompt::PromptCompletion {
+                line: "/model ".to_string(),
+                cursor_pos: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_assist_filters_model_candidates() {
+        let catalog = CliPromptCatalog {
+            models: vec![
+                "anthropic/claude-3.7-sonnet".to_string(),
+                "dashscope/qwen-max".to_string(),
+                "dashscope/qwen-plus".to_string(),
+            ],
+            agents: vec!["build".to_string()],
+            presets: vec!["prometheus".to_string()],
+        };
+        let selection = CliPromptSelectionState {
+            model: "dashscope/qwen-plus".to_string(),
+            agent: "build".to_string(),
+            preset: Some("prometheus".to_string()),
+        };
+
+        let assist = cli_prompt_assist_view(&catalog, &selection, "/model qwen", 11);
+
+        assert!(assist
+            .screen_lines
+            .iter()
+            .any(|line| line.contains("dashscope/qwen-max")));
+        assert!(assist
+            .screen_lines
+            .iter()
+            .any(|line| line.contains("dashscope/qwen-plus [active]")));
+        assert_eq!(
+            assist.completion,
+            Some(rocode_command::cli_prompt::PromptCompletion {
+                line: "/model dashscope/qwen-max".to_string(),
+                cursor_pos: 25,
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_assist_shows_preset_values_after_exact_command() {
+        let catalog = CliPromptCatalog {
+            models: vec!["openai/gpt-4.1".to_string()],
+            agents: vec!["build".to_string()],
+            presets: vec!["atlas".to_string(), "prometheus".to_string()],
+        };
+        let selection = CliPromptSelectionState {
+            model: "openai/gpt-4.1".to_string(),
+            agent: "build".to_string(),
+            preset: Some("atlas".to_string()),
+        };
+
+        let assist = cli_prompt_assist_view(&catalog, &selection, "/preset", 7);
+
+        assert!(assist
+            .screen_lines
+            .iter()
+            .any(|line| line.contains("/preset suggestions")));
+        assert_eq!(
+            assist.completion,
+            Some(rocode_command::cli_prompt::PromptCompletion {
+                line: "/preset ".to_string(),
+                cursor_pos: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn startup_banner_uses_recent_session_metadata() {
+        let now = Utc::now().timestamp_millis();
+        let sessions = vec![SessionInfo {
+            id: "s1".to_string(),
+            slug: "s1".to_string(),
+            project_id: "p1".to_string(),
+            directory: "/tmp/project".to_string(),
+            parent_id: None,
+            title: "Research Session".to_string(),
+            version: "v1".to_string(),
+            time: SessionTimeInfo {
+                created: now,
+                updated: now,
+                compacting: None,
+                archived: None,
+            },
+            revert: None,
+            metadata: Some(HashMap::from([
+                ("model_provider".to_string(), serde_json::json!("zhipuai")),
+                ("model_id".to_string(), serde_json::json!("GLM-5")),
+                (
+                    "scheduler_profile".to_string(),
+                    serde_json::json!("prometheus"),
+                ),
+            ])),
+        }];
+        let info = cli_recent_session_info_for_directory(&sessions, Path::new("/tmp/project"))
+            .expect("recent session info");
+        assert_eq!(
+            info,
+            CliRecentSessionInfo {
+                title: Some("Research Session".to_string()),
+                model_label: Some("zhipuai/GLM-5".to_string()),
+                preset_label: Some("prometheus".to_string()),
+            }
+        );
+
+        let banner = cli_render_startup_banner(&CliStyle::plain(), Some(&info));
+        assert!(banner.contains("ROCode"));
+        assert!(banner.contains("Research Session"));
+        assert!(banner.contains("zhipuai/GLM-5"));
+        assert!(banner.contains("prometheus"));
+    }
+
+    #[test]
+    fn retained_layout_emits_session_messages_sidebar_and_active_boxes() {
+        let style = CliStyle::plain();
+        let mut projection = CliFrontendProjection {
+            phase: CliFrontendPhase::Busy,
+            active_label: Some("assistant response".to_string()),
+            queue_len: 2,
+            active_stage: Some(stage_with_status("running")),
+            transcript: CliRetainedTranscript::default(),
+            sidebar_collapsed: false,
+            active_collapsed: false,
+            session_title: Some("Test Session".to_string()),
+            scroll_offset: 0,
+            token_stats: CliSessionTokenStats::default(),
+            mcp_servers: Vec::new(),
+            lsp_servers: Vec::new(),
+        };
+        projection
+            .transcript
+            .append_rendered("● user prompt\n\n● assistant reply\n");
+        let topology = CliObservedExecutionTopology {
+            active: true,
+            ..Default::default()
+        };
+
+        let lines = cli_render_retained_layout(
+            "Preset prometheus",
+            "Model auto",
+            "~/tests/rust/rocode",
+            &projection,
+            &topology,
+            &style,
+        );
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("ROCode"));
+        assert!(joined.contains("Messages"));
+        assert!(joined.contains("Sidebar"));
+        assert!(joined.contains("Active"));
+        assert!(joined.contains("assistant reply"));
+        assert!(joined.contains("Test Session"));
+    }
+
+    #[test]
+    fn retained_layout_collapses_sidebar() {
+        let style = CliStyle::plain();
+        let projection = CliFrontendProjection {
+            phase: CliFrontendPhase::Idle,
+            sidebar_collapsed: true,
+            active_collapsed: false,
+            session_title: Some("Collapsed Test".to_string()),
+            ..Default::default()
+        };
+        let topology = CliObservedExecutionTopology::default();
+
+        let lines = cli_render_retained_layout(
+            "Agent build",
+            "Model auto",
+            "~/workspace",
+            &projection,
+            &topology,
+            &style,
+        );
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("ROCode"));
+        assert!(joined.contains("Messages"));
+        assert!(!joined.contains("╭ Sidebar"));
+        assert!(joined.contains("Active"));
+    }
+
+    #[test]
+    fn retained_layout_collapses_active() {
+        let style = CliStyle::plain();
+        let projection = CliFrontendProjection {
+            phase: CliFrontendPhase::Idle,
+            sidebar_collapsed: false,
+            active_collapsed: true,
+            session_title: None,
+            ..Default::default()
+        };
+        let topology = CliObservedExecutionTopology::default();
+
+        let lines = cli_render_retained_layout(
+            "Agent build",
+            "Model auto",
+            "~/workspace",
+            &projection,
+            &topology,
+            &style,
+        );
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("Sidebar"));
+        assert!(joined.contains("Active"));
+        assert!(joined.contains("/active to expand"));
+    }
+
+    #[test]
+    fn retained_layout_active_panel_adapts_to_content() {
+        let style = CliStyle::plain();
+        let topology = CliObservedExecutionTopology::default();
+        let minimal_stage = stage_with_status("running");
+
+        let proj_minimal = CliFrontendProjection {
+            phase: CliFrontendPhase::Busy,
+            active_stage: Some(minimal_stage),
+            sidebar_collapsed: true,
+            active_collapsed: false,
+            session_title: Some("Test".to_string()),
+            ..Default::default()
+        };
+        let lines_minimal = cli_render_retained_layout(
+            "Agent build",
+            "Model auto",
+            "~/test",
+            &proj_minimal,
+            &topology,
+            &style,
+        );
+
+        let mut rich_stage = stage_with_status("running");
+        rich_stage.focus = Some("analyzing codebase".to_string());
+        rich_stage.last_event = Some("tool_call: read_file".to_string());
+        rich_stage.activity = Some("Reviewing architecture".to_string());
+        rich_stage.available_skill_count = Some(12);
+        rich_stage.available_agent_count = Some(4);
+        rich_stage.active_skills = vec!["planner".to_string(), "reviewer".to_string()];
+        rich_stage.total_agent_count = 3;
+        rich_stage.done_agent_count = 1;
+        rich_stage.child_session_id = Some("child-abc".to_string());
+
+        let proj_rich = CliFrontendProjection {
+            phase: CliFrontendPhase::Busy,
+            active_stage: Some(rich_stage),
+            sidebar_collapsed: true,
+            active_collapsed: false,
+            session_title: Some("Test".to_string()),
+            ..Default::default()
+        };
+        let lines_rich = cli_render_retained_layout(
+            "Agent build",
+            "Model auto",
+            "~/test",
+            &proj_rich,
+            &topology,
+            &style,
+        );
+
+        assert!(
+            lines_rich.len() > lines_minimal.len(),
+            "Rich active panel ({} lines) should be taller than minimal ({} lines)",
+            lines_rich.len(),
+            lines_minimal.len(),
+        );
+
+        let joined_rich = lines_rich.join("\n");
+        assert!(joined_rich.contains("Active"));
+        assert!(joined_rich.contains("child-abc"));
+        assert!(joined_rich.contains("planner"));
     }
 }
