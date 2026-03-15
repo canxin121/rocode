@@ -1,0 +1,1757 @@
+#[path = "catalog.rs"]
+mod catalog;
+#[path = "commands.rs"]
+mod commands;
+#[path = "dialogs.rs"]
+mod dialogs;
+#[path = "mappers.rs"]
+mod mappers;
+#[path = "model_controls.rs"]
+mod model_controls;
+#[path = "prompt_flow.rs"]
+mod prompt_flow;
+#[path = "questions.rs"]
+mod questions;
+#[path = "server_events.rs"]
+mod server_events;
+#[path = "session_actions.rs"]
+mod session_actions;
+#[path = "status_panels.rs"]
+mod status_panels;
+#[path = "support.rs"]
+mod support;
+#[path = "sync.rs"]
+mod sync;
+
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use chrono::{TimeZone, Utc};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
+use rocode_command::output_blocks::{BlockTone, StatusBlock};
+use rocode_command::CommandRegistry;
+use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+
+use crate::api::{
+    ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
+    MessageInfo, QuestionInfo, RecoveryActionKind as ApiRecoveryActionKind,
+    RecoveryProtocolStatus as ApiRecoveryProtocolStatus, SessionExecutionNode, SessionInfo,
+    SessionRecoveryProtocol, SessionRevertInfo,
+};
+use crate::app::state::AppState;
+use crate::app::terminal;
+use crate::command::CommandAction;
+use crate::components::{
+    exit_logo_lines, Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry,
+    HelpDialog, HomeView, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PermissionAction,
+    PermissionPrompt, Prompt, PromptStashDialog, ProviderDialog, QuestionOption, QuestionPrompt,
+    QuestionRequest, QuestionType, RecoveryActionDialog, RecoveryActionItem, SessionDeleteState,
+    SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog, SessionView,
+    SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine, SubagentDialog,
+    TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, Toast,
+    ToastVariant, ToolCallCancelDialog, ToolCallItem, OTHER_OPTION_ID, OTHER_OPTION_LABEL,
+};
+use crate::context::keybind::{is_primary_key_event, normalize_key_event, LeaderKeyState};
+use crate::context::{
+    collect_child_sessions, AppContext, McpConnectionStatus, McpServerStatus, Message,
+    MessagePart as ContextMessagePart, MessageRole, RevertInfo, Session, SessionStatus, TokenUsage,
+};
+use crate::event::{CustomEvent, Event, StateChange};
+use crate::router::Route;
+use crate::ui::{line_from_cells, strip_session_gutter, truncate, Clipboard, Selection};
+
+use self::mappers::{
+    agent_color_from_name, apply_incremental_session_sync, infer_task_kind_from_message,
+    map_api_diff, map_api_message, map_api_revert, map_api_run_status, map_api_session,
+    map_api_todo, map_mcp_status, provider_from_model,
+};
+use self::server_events::{
+    env_var_enabled, env_var_with_fallback, resolve_tui_base_url, spawn_server_event_listener,
+};
+use self::support::{
+    append_execution_status_node, apply_selected_mode, current_mode_label, default_export_filename,
+    format_theme_option_label, map_execution_mode_to_dialog_option, parse_model_ref_selection,
+    recovery_action_items, recovery_status_blocks_from_protocol, resolve_command_execution_mode,
+    resolve_recovery_action_selection, selected_execution_mode, status_line_from_block,
+};
+
+// TS parity: renderer targetFps is 60, ~16ms frame budget.
+const TICK_RATE_MS: u64 = 16;
+const MAX_EVENTS_PER_FRAME: usize = 256;
+const SESSION_SYNC_DEBOUNCE_MS: u64 = 180;
+const SESSION_FULL_SYNC_INTERVAL_SECS: u64 = 10;
+const QUESTION_SYNC_FALLBACK_SECS: u64 = 5;
+const PERF_LOG_INTERVAL_SECS: u64 = 10;
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_DIM: &str = "\x1b[90m";
+const ANSI_BOLD: &str = "\x1b[1m";
+
+#[derive(Clone, Debug)]
+pub struct ToolCallInfo {
+    pub id: String,
+    pub tool_name: String,
+}
+
+pub struct App {
+    context: Arc<AppContext>,
+    state: AppState,
+    terminal: terminal::Tui,
+    event_tx: Sender<Event>,
+    event_rx: Receiver<Event>,
+    prompt: Prompt,
+    selection: Selection,
+    session_view: Option<SessionView>,
+    active_session_id: Option<String>,
+    active_tool_calls: HashMap<String, ToolCallInfo>,
+    command_palette: CommandPalette,
+    slash_popup: SlashCommandPopup,
+    leader_state: LeaderKeyState,
+    model_select: ModelSelectDialog,
+    agent_select: AgentSelectDialog,
+    alert_dialog: AlertDialog,
+    help_dialog: HelpDialog,
+    session_list_dialog: SessionListDialog,
+    session_rename_dialog: SessionRenameDialog,
+    session_export_dialog: SessionExportDialog,
+    prompt_stash_dialog: PromptStashDialog,
+    skill_list_dialog: SkillListDialog,
+    theme_list_dialog: ThemeListDialog,
+    status_dialog: StatusDialog,
+    mcp_dialog: McpDialog,
+    timeline_dialog: TimelineDialog,
+    fork_dialog: ForkDialog,
+    provider_dialog: ProviderDialog,
+    subagent_dialog: SubagentDialog,
+    tag_dialog: TagDialog,
+    tool_call_cancel_dialog: ToolCallCancelDialog,
+    recovery_action_dialog: RecoveryActionDialog,
+    permission_prompt: PermissionPrompt,
+    question_prompt: QuestionPrompt,
+    toast: Toast,
+    /// Snapshot of rendered screen lines for text selection copy.
+    screen_lines: Vec<String>,
+    available_models: HashSet<String>,
+    model_variants: HashMap<String, Vec<String>>,
+    model_variant_selection: HashMap<String, Option<String>>,
+    pending_prompt_queue: HashMap<String, VecDeque<QueuedPrompt>>,
+    pending_question_ids: HashSet<String>,
+    pending_question_queue: VecDeque<String>,
+    pending_questions: HashMap<String, QuestionInfo>,
+    pending_initial_submit: bool,
+    pending_session_sync: Option<String>,
+    pending_session_sync_due_at: Option<Instant>,
+    last_session_sync: Instant,
+    last_full_session_sync: Instant,
+    last_question_sync: Instant,
+    last_aux_sync: Instant,
+    last_process_refresh: Instant,
+    last_perf_log: Instant,
+    perf: PerfCounters,
+    perf_log_info: bool,
+    event_caused_change: bool,
+    /// Session IDs whose scheduler handoff metadata has been consumed.
+    consumed_handoffs: HashSet<String>,
+}
+
+#[derive(Clone, Debug)]
+struct QueuedPrompt {
+    input: String,
+    agent: Option<String>,
+    scheduler_profile: Option<String>,
+    display_mode: Option<String>,
+    model: Option<String>,
+    variant: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SelectedExecutionMode {
+    agent: Option<String>,
+    scheduler_profile: Option<String>,
+    display_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PerfCounters {
+    draws: u64,
+    screen_snapshots: u64,
+    session_sync_full: u64,
+    session_sync_incremental: u64,
+    question_sync: u64,
+    session_updated_events: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionSyncMode {
+    Full,
+    Incremental,
+}
+
+impl App {
+    pub fn new() -> anyhow::Result<Self> {
+        let (event_tx, event_rx) = mpsc::channel();
+        let event_tx_input = event_tx.clone();
+        let context = Arc::new(AppContext::new());
+        let terminal = terminal::init()?;
+        let mut prompt = Prompt::new(context.clone())
+            .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+        let mut pending_initial_submit = false;
+        let mut initial_session_id: Option<String> = None;
+
+        if let Ok(dir) = std::env::current_dir() {
+            *context.directory.write() = dir.display().to_string();
+        }
+
+        let base_url = resolve_tui_base_url();
+        let api_client = Arc::new(ApiClient::new(base_url.clone()));
+        context.set_api_client(api_client);
+        spawn_server_event_listener(event_tx.clone(), base_url);
+
+        if let Some(agent) = env_var_with_fallback("ROCODE_TUI_AGENT", "OPENCODE_TUI_AGENT") {
+            let agent = agent.trim();
+            if !agent.is_empty() {
+                context.set_agent(agent.to_string());
+            }
+        }
+        if let Some(model) = env_var_with_fallback("ROCODE_TUI_MODEL", "OPENCODE_TUI_MODEL") {
+            let model = model.trim();
+            if !model.is_empty() {
+                context.set_model_selection(model.to_string(), provider_from_model(model));
+                context.set_model_variant(None);
+            }
+        }
+        if let Some(session_id) =
+            env_var_with_fallback("ROCODE_TUI_SESSION", "OPENCODE_TUI_SESSION")
+        {
+            let session_id = session_id.trim();
+            if !session_id.is_empty() {
+                initial_session_id = Some(session_id.to_string());
+                context.navigate(Route::Session {
+                    session_id: session_id.to_string(),
+                });
+            }
+        }
+        if let Some(initial_prompt) =
+            env_var_with_fallback("ROCODE_TUI_PROMPT", "OPENCODE_TUI_PROMPT")
+        {
+            let initial_prompt = initial_prompt.trim();
+            if !initial_prompt.is_empty() {
+                prompt.set_input(initial_prompt.to_string());
+                pending_initial_submit = true;
+            }
+        }
+        {
+            let theme = context.theme.read().clone();
+            let mode_name = current_mode_label(&context).unwrap_or_default();
+            prompt.set_spinner_color(agent_color_from_name(&theme, &mode_name));
+        }
+
+        let tick_rate = Duration::from_millis(TICK_RATE_MS);
+        thread::spawn(move || {
+            let mut last_tick = Instant::now();
+
+            loop {
+                let timeout = tick_rate
+                    .checked_sub(last_tick.elapsed())
+                    .unwrap_or(tick_rate);
+
+                if crossterm::event::poll(timeout).unwrap_or(false) {
+                    let event = match crossterm::event::read() {
+                        Ok(crossterm::event::Event::Key(key)) if is_primary_key_event(key) => {
+                            Some(Event::Key(key))
+                        }
+                        Ok(crossterm::event::Event::Key(_)) => None,
+                        Ok(crossterm::event::Event::Mouse(mouse))
+                            if !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved) =>
+                        {
+                            Some(Event::Mouse(mouse))
+                        }
+                        Ok(crossterm::event::Event::Resize(w, h)) => Some(Event::Resize(w, h)),
+                        Ok(crossterm::event::Event::FocusGained) => Some(Event::FocusGained),
+                        Ok(crossterm::event::Event::FocusLost) => Some(Event::FocusLost),
+                        Ok(crossterm::event::Event::Paste(s)) => Some(Event::Paste(s)),
+                        _ => None,
+                    };
+
+                    if let Some(e) = event {
+                        if event_tx_input.send(e).is_err() {
+                            break;
+                        }
+                    }
+                }
+
+                if last_tick.elapsed() >= tick_rate {
+                    if event_tx_input.send(Event::Tick).is_err() {
+                        break;
+                    }
+                    last_tick = Instant::now();
+                }
+            }
+        });
+
+        let mut app = Self {
+            context,
+            state: AppState::default(),
+            terminal,
+            event_tx,
+            event_rx,
+            prompt,
+            selection: Selection::new(),
+            session_view: None,
+            active_session_id: None,
+            active_tool_calls: HashMap::new(),
+            command_palette: CommandPalette::new(),
+            slash_popup: SlashCommandPopup::new(),
+            leader_state: LeaderKeyState::new(),
+            model_select: ModelSelectDialog::new(),
+            agent_select: AgentSelectDialog::new(),
+            alert_dialog: AlertDialog::info(""),
+            help_dialog: HelpDialog::new(),
+            session_list_dialog: SessionListDialog::new(),
+            session_rename_dialog: SessionRenameDialog::new(),
+            session_export_dialog: SessionExportDialog::new(),
+            prompt_stash_dialog: PromptStashDialog::new(),
+            skill_list_dialog: SkillListDialog::new(),
+            theme_list_dialog: ThemeListDialog::new(),
+            status_dialog: StatusDialog::new(),
+            mcp_dialog: McpDialog::new(),
+            timeline_dialog: TimelineDialog::new(),
+            fork_dialog: ForkDialog::new(),
+            provider_dialog: ProviderDialog::new(),
+            subagent_dialog: SubagentDialog::new(),
+            tag_dialog: TagDialog::new(),
+            tool_call_cancel_dialog: ToolCallCancelDialog::new(),
+            recovery_action_dialog: RecoveryActionDialog::new(),
+            permission_prompt: PermissionPrompt::new(),
+            question_prompt: QuestionPrompt::new(),
+            toast: Toast::new(),
+            screen_lines: Vec::new(),
+            available_models: HashSet::new(),
+            model_variants: HashMap::new(),
+            model_variant_selection: HashMap::new(),
+            pending_prompt_queue: HashMap::new(),
+            pending_question_ids: HashSet::new(),
+            pending_question_queue: VecDeque::new(),
+            pending_questions: HashMap::new(),
+            pending_initial_submit,
+            pending_session_sync: None,
+            pending_session_sync_due_at: None,
+            last_session_sync: Instant::now(),
+            last_full_session_sync: Instant::now(),
+            last_question_sync: Instant::now(),
+            last_aux_sync: Instant::now(),
+            last_process_refresh: Instant::now(),
+            last_perf_log: Instant::now(),
+            perf: PerfCounters::default(),
+            perf_log_info: env_var_enabled("ROCODE_PERF_LOG"),
+            event_caused_change: true,
+            consumed_handoffs: HashSet::new(),
+        };
+
+        app.refresh_model_dialog();
+        app.refresh_agent_dialog();
+        let _ = app.refresh_skill_list_dialog();
+        app.refresh_session_list_dialog();
+        app.refresh_theme_list_dialog();
+        let _ = app.refresh_lsp_status();
+        let _ = app.refresh_mcp_dialog();
+        let _ = app.sync_question_requests();
+
+        if let Some(session_id) = initial_session_id {
+            let _ = app.sync_session_from_server(&session_id);
+            app.ensure_session_view(&session_id);
+        }
+        app.sync_prompt_spinner_style();
+        app.sync_prompt_spinner_state();
+
+        Ok(app)
+    }
+
+    pub fn run(&mut self) -> anyhow::Result<()> {
+        self.draw()?;
+
+        while self.state != AppState::Exiting {
+            let mut should_draw = false;
+
+            let first_event = match self
+                .event_rx
+                .recv_timeout(Duration::from_millis(TICK_RATE_MS))
+            {
+                Ok(event) => Some(event),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            if let Some(event) = first_event {
+                self.handle_event(&event)?;
+                should_draw |= self.event_caused_change;
+
+                let mut deferred_mouse_move: Option<Event> = None;
+                for _ in 0..MAX_EVENTS_PER_FRAME {
+                    let next = match self.event_rx.try_recv() {
+                        Ok(next) => next,
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            self.state = AppState::Exiting;
+                            break;
+                        }
+                    };
+
+                    let is_mouse_move = matches!(
+                        next,
+                        Event::Mouse(crossterm::event::MouseEvent {
+                            kind: crossterm::event::MouseEventKind::Moved,
+                            ..
+                        })
+                    );
+
+                    if is_mouse_move {
+                        deferred_mouse_move = Some(next);
+                        continue;
+                    }
+
+                    if let Some(moved) = deferred_mouse_move.take() {
+                        self.handle_event(&moved)?;
+                        should_draw |= self.event_caused_change;
+                    }
+
+                    self.handle_event(&next)?;
+                    should_draw |= self.event_caused_change;
+                }
+
+                if let Some(moved) = deferred_mouse_move {
+                    self.handle_event(&moved)?;
+                    should_draw |= self.event_caused_change;
+                }
+            }
+
+            if should_draw {
+                self.draw()?;
+            }
+        }
+
+        terminal::restore()?;
+        Ok(())
+    }
+
+    pub fn exit_summary(&self) -> Option<String> {
+        let Route::Session { session_id } = self.context.current_route() else {
+            return None;
+        };
+        let session_ctx = self.context.session.read();
+        let session = session_ctx.sessions.get(&session_id)?;
+        let title = truncate(&session.title.replace(['\r', '\n'], " "), 50);
+        let pad_label = |label: &str| format!("{ANSI_DIM}{:<10}{ANSI_RESET}", label);
+
+        let mut lines = Vec::new();
+        lines.push(String::new());
+        lines.extend(exit_logo_lines("  "));
+        lines.push(String::new());
+        lines.push(format!(
+            "  {}{ANSI_BOLD}{}{ANSI_RESET}",
+            pad_label("Session"),
+            title
+        ));
+        lines.push(format!(
+            "  {}{ANSI_BOLD}rocode -s {}{ANSI_RESET}",
+            pad_label("Continue"),
+            session.id
+        ));
+        lines.push(String::new());
+        Some(lines.join("\n"))
+    }
+
+    fn handle_event(&mut self, event: &Event) -> anyhow::Result<()> {
+        self.event_caused_change = true;
+
+        match event {
+            Event::Key(key) => {
+                if !is_primary_key_event(*key) {
+                    return Ok(());
+                }
+                let key = normalize_key_event(*key);
+
+                // Handle inline permission prompt before dialogs
+                if self.permission_prompt.is_open {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Enter => {
+                            if let Some(_request) = self.permission_prompt.approve() {
+                                // TODO: Call API when available
+                                // self.api_client.reply_permission(&request.id, "once");
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            let _ = self.permission_prompt.deny();
+                        }
+                        KeyCode::Char('a') => {
+                            let _ = self.permission_prompt.approve_always();
+                        }
+                        KeyCode::Esc => {
+                            self.permission_prompt.deny();
+                        }
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+
+                // Handle inline question prompt before dialogs
+                if self.question_prompt.is_open {
+                    match key.code {
+                        KeyCode::Up | KeyCode::BackTab => self.question_prompt.move_up(),
+                        KeyCode::Down | KeyCode::Tab => self.question_prompt.move_down(),
+                        KeyCode::Char(' ') => self.question_prompt.toggle_selected(),
+                        KeyCode::Enter => {
+                            if let Some((question, answers)) = self.question_prompt.confirm() {
+                                self.submit_question_reply(&question.id, answers);
+                            }
+                        }
+                        KeyCode::Esc => {
+                            if let Some(question) = self.question_prompt.current().cloned() {
+                                self.reject_question(&question.id);
+                            }
+                            self.question_prompt.close();
+                        }
+                        KeyCode::Char(c) => self.question_prompt.type_char(c),
+                        KeyCode::Backspace => self.question_prompt.backspace(),
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+
+                if self.handle_dialog_key(key)? {
+                    return Ok(());
+                }
+
+                // Leader key handling
+                if self.leader_state.active {
+                    if self.leader_state.check_timeout() {
+                        // Leader timed out, fall through to normal handling
+                    } else {
+                        let action = match key.code {
+                            KeyCode::Char('n') => Some(CommandAction::NewSession),
+                            KeyCode::Char('l') => Some(CommandAction::SwitchSession),
+                            KeyCode::Char('m') => Some(CommandAction::SwitchModel),
+                            KeyCode::Char('a') => Some(CommandAction::SwitchAgent),
+                            KeyCode::Char('t') => Some(CommandAction::SwitchTheme),
+                            KeyCode::Char('b') => Some(CommandAction::ToggleSidebar),
+                            KeyCode::Char('s') => Some(CommandAction::ViewStatus),
+                            KeyCode::Char('q') => Some(CommandAction::Exit),
+                            KeyCode::Char('u') => Some(CommandAction::Undo),
+                            KeyCode::Char('r') => Some(CommandAction::Redo),
+                            _ => None,
+                        };
+                        self.leader_state.reset();
+                        if let Some(action) = action {
+                            self.execute_command_action(action)?;
+                        }
+                        return Ok(());
+                    }
+                }
+
+                // Ctrl+X starts leader key sequence
+                if key.code == KeyCode::Char('x') && key.modifiers == KeyModifiers::CONTROL {
+                    self.leader_state.start(KeyCode::Char('x'));
+                    return Ok(());
+                }
+
+                // Ctrl+Shift+C (crossterm reports uppercase 'C' with SHIFT modifier)
+                if (key.code == KeyCode::Char('C') || key.code == KeyCode::Char('c'))
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    self.copy_selection();
+                    return Ok(());
+                }
+
+                if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+                    // If there's an active selection, copy it instead of exiting (TS parity)
+                    if self.selection.is_active() {
+                        self.copy_selection();
+                        return Ok(());
+                    }
+                    self.state = AppState::Exiting;
+                    return Ok(());
+                }
+
+                // Ctrl+K to cancel current running tool call or session
+                if key.code == KeyCode::Char('k') && key.modifiers == KeyModifiers::CONTROL {
+                    tracing::info!("Ctrl+K pressed");
+                    if let Some(session_id) = &self.active_session_id {
+                        let tool_call_count = self.active_tool_calls.len();
+                        tracing::info!(
+                            "Active session: {}, tool call count: {}",
+                            session_id,
+                            tool_call_count
+                        );
+
+                        if tool_call_count > 1 {
+                            // Multiple tool calls - show selection dialog
+                            let items: Vec<ToolCallItem> = self
+                                .active_tool_calls
+                                .values()
+                                .map(|info| ToolCallItem {
+                                    id: info.id.clone(),
+                                    tool_name: info.tool_name.clone(),
+                                })
+                                .collect();
+                            self.tool_call_cancel_dialog.open(items);
+                        } else if tool_call_count == 1 {
+                            // Single tool call - cancel directly
+                            if let Some(api) = self.context.get_api_client() {
+                                let tool_call_id =
+                                    self.active_tool_calls.keys().next().unwrap().clone();
+                                if let Err(e) = api.cancel_tool_call(session_id, &tool_call_id) {
+                                    self.toast.show(
+                                        ToastVariant::Error,
+                                        &format!("Failed to cancel tool: {}", e),
+                                        3000,
+                                    );
+                                } else {
+                                    self.toast.show(
+                                        ToastVariant::Info,
+                                        "Tool cancellation requested",
+                                        3000,
+                                    );
+                                }
+                            }
+                        } else {
+                            // No tool calls - cancel session
+                            if let Some(api) = self.context.get_api_client() {
+                                match api.abort_session(session_id) {
+                                    Err(e) => {
+                                        self.toast.show(
+                                            ToastVariant::Error,
+                                            &format!("Failed to cancel session: {}", e),
+                                            3000,
+                                        );
+                                    }
+                                    Ok(value) => {
+                                        let message = value
+                                            .get("target")
+                                            .and_then(|value| value.as_str())
+                                            .map(|target| match target {
+                                                "stage" => {
+                                                    let stage = value
+                                                        .get("stage")
+                                                        .and_then(|value| value.as_str())
+                                                        .unwrap_or("current stage");
+                                                    format!(
+                                                        "Stage cancellation requested: {}",
+                                                        stage
+                                                    )
+                                                }
+                                                _ => "Run cancellation requested".to_string(),
+                                            })
+                                            .unwrap_or_else(|| {
+                                                "Run cancellation requested".to_string()
+                                            });
+                                        self.toast.show(ToastVariant::Info, &message, 3000);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+
+                if key.code == KeyCode::Esc {
+                    if let Some(ref mut sv) = self.session_view {
+                        if sv.sidebar_state_mut().process_focus {
+                            sv.sidebar_state_mut().process_focus = false;
+                            return Ok(());
+                        }
+                        if sv.sidebar_state_mut().child_session_focus {
+                            sv.sidebar_state_mut().child_session_focus = false;
+                            return Ok(());
+                        }
+                    }
+                    if self.selection.is_active() {
+                        self.selection.clear();
+                        return Ok(());
+                    }
+                }
+
+                // Process panel keyboard handling (when focused)
+                if let Some(ref mut sv) = self.session_view {
+                    let ss = sv.sidebar_state_mut();
+                    if ss.process_focus {
+                        let proc_count = self.context.processes.read().len();
+                        match key.code {
+                            KeyCode::Up => {
+                                ss.process_select_up();
+                                return Ok(());
+                            }
+                            KeyCode::Down => {
+                                ss.process_select_down(proc_count);
+                                return Ok(());
+                            }
+                            KeyCode::Char('d') | KeyCode::Delete => {
+                                let procs = self.context.processes.read().clone();
+                                if let Some(proc) = procs.get(ss.process_selected) {
+                                    let _ = rocode_orchestrator::global_lifecycle()
+                                        .kill_process(proc.pid);
+                                    *self.context.processes.write() =
+                                        rocode_core::process_registry::global_registry().list();
+                                    ss.clamp_process_selected(self.context.processes.read().len());
+                                }
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Child session panel keyboard handling (when focused)
+                if let Some(ref mut sv) = self.session_view {
+                    let ss = sv.sidebar_state_mut();
+                    if ss.child_session_focus {
+                        match key.code {
+                            KeyCode::Up => {
+                                ss.child_session_select_up();
+                                return Ok(());
+                            }
+                            KeyCode::Down => {
+                                let count = self.context.child_sessions.read().len();
+                                ss.child_session_select_down(count);
+                                return Ok(());
+                            }
+                            KeyCode::Enter => {
+                                let sessions = self.context.child_sessions.read().clone();
+                                if let Some(child) = sessions.get(ss.child_session_selected) {
+                                    let child_id = child.session_id.clone();
+                                    drop(sessions);
+                                    self.context.navigate(Route::Session {
+                                        session_id: child_id.clone(),
+                                    });
+                                    self.ensure_session_view(&child_id);
+                                    let _ = self.sync_session_from_server(&child_id);
+                                }
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // 'p' toggles process panel focus when sidebar is visible
+                if key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
+                    let sidebar_visible = *self.context.show_sidebar.read();
+                    if sidebar_visible {
+                        if let Some(ref mut sv) = self.session_view {
+                            let ss = sv.sidebar_state_mut();
+                            ss.process_focus = !ss.process_focus;
+                            ss.child_session_focus = false;
+                            return Ok(());
+                        }
+                    }
+                }
+
+                if key.code == KeyCode::Char('q') && key.modifiers.is_empty() {
+                    self.state = AppState::Exiting;
+                    return Ok(());
+                }
+
+                if self.matches_keybind("session_interrupt", key) {
+                    if self.prompt.is_shell_mode() {
+                        self.prompt.exit_shell_mode();
+                        self.prompt.clear_interrupt_confirmation();
+                        return Ok(());
+                    }
+                    if let Route::Session { session_id } = self.context.current_route() {
+                        let status = {
+                            let session_ctx = self.context.session.read();
+                            session_ctx.status(&session_id).clone()
+                        };
+                        if !matches!(status, SessionStatus::Idle) {
+                            if !self.prompt.register_interrupt_keypress() {
+                                return Ok(());
+                            }
+                            if let Some(client) = self.context.get_api_client() {
+                                let _ = client.abort_session(&session_id);
+                            }
+                            self.prompt.clear_interrupt_confirmation();
+                            self.set_session_status(&session_id, SessionStatus::Idle);
+                            self.sync_prompt_spinner_state();
+                            return Ok(());
+                        }
+                    }
+                    self.prompt.clear_interrupt_confirmation();
+                    return Ok(());
+                }
+
+                if self.matches_keybind("input_paste", key) {
+                    self.paste_clipboard_to_prompt();
+                    return Ok(());
+                }
+                if self.matches_keybind("input_copy", key) {
+                    self.copy_prompt_to_clipboard();
+                    return Ok(());
+                }
+                if self.matches_keybind("input_cut", key) {
+                    self.cut_prompt_to_clipboard();
+                    return Ok(());
+                }
+                if self.matches_keybind("history_previous", key) {
+                    self.prompt.history_previous_entry();
+                    return Ok(());
+                }
+                if self.matches_keybind("history_next", key) {
+                    self.prompt.history_next_entry();
+                    return Ok(());
+                }
+                if self.matches_keybind("page_up", key) {
+                    if let Route::Session { .. } = self.context.current_route() {
+                        if let Some(ref mut sv) = self.session_view {
+                            sv.scroll_page_up();
+                            return Ok(());
+                        }
+                    }
+                }
+                if self.matches_keybind("page_down", key) {
+                    if let Route::Session { .. } = self.context.current_route() {
+                        if let Some(ref mut sv) = self.session_view {
+                            sv.scroll_page_down();
+                            return Ok(());
+                        }
+                    }
+                }
+
+                if self.matches_keybind("command_palette", key) {
+                    self.sync_command_palette_labels();
+                    self.command_palette.open();
+                    return Ok(());
+                }
+                if self.matches_keybind("model_cycle", key) {
+                    self.refresh_model_dialog();
+                    self.model_select.open();
+                    return Ok(());
+                }
+                if self.matches_keybind("agent_cycle", key) {
+                    self.cycle_agent(1);
+                    return Ok(());
+                }
+                if self.matches_keybind("agent_cycle_reverse", key) {
+                    self.cycle_agent(-1);
+                    return Ok(());
+                }
+                if self.matches_keybind("variant_cycle", key) {
+                    self.cycle_model_variant();
+                    return Ok(());
+                }
+                if self.matches_keybind("session_parent", key) {
+                    self.navigate_to_parent_session();
+                    return Ok(());
+                }
+                if self.matches_keybind("session_child_open", key) {
+                    self.navigate_to_child_session();
+                    return Ok(());
+                }
+                if self.matches_keybind("session_child_cycle", key) {
+                    let sidebar_visible = *self.context.show_sidebar.read();
+                    if sidebar_visible {
+                        if let Some(ref mut sv) = self.session_view {
+                            let ss = sv.sidebar_state_mut();
+                            ss.child_session_focus = !ss.child_session_focus;
+                            ss.process_focus = false;
+                        }
+                    }
+                    return Ok(());
+                }
+                if self.matches_keybind("sidebar_toggle", key) {
+                    self.context.toggle_sidebar();
+                    return Ok(());
+                }
+                if self.matches_keybind("display_thinking", key) {
+                    self.context.toggle_thinking();
+                    return Ok(());
+                }
+                if self.matches_keybind("tool_details", key) {
+                    self.context.toggle_tool_details();
+                    return Ok(());
+                }
+                if self.matches_keybind("input_clear", key) {
+                    self.prompt.clear();
+                    return Ok(());
+                }
+                if self.matches_keybind("input_newline", key) {
+                    let route = self.context.current_route();
+                    if matches!(route, Route::Home | Route::Session { .. }) {
+                        self.prompt.insert_text("\n");
+                        return Ok(());
+                    }
+                }
+                if self.matches_keybind("help_toggle", key) {
+                    self.help_dialog.open();
+                    return Ok(());
+                }
+
+                // Slash command popup: open when '/' is typed at position 0
+                if key.code == KeyCode::Char('/')
+                    && key.modifiers.is_empty()
+                    && self.prompt.cursor_position() == 0
+                    && self.prompt.get_input().is_empty()
+                {
+                    self.slash_popup.open();
+                    return Ok(());
+                }
+
+                let route = self.context.current_route();
+                match route {
+                    Route::Home | Route::Session { .. } => {
+                        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                            self.submit_prompt()?;
+                        } else if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT)
+                        {
+                            self.prompt.handle_key(key);
+                        }
+                    }
+                    _ => {
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT)
+                        {
+                            self.prompt.handle_key(key);
+                        }
+                    }
+                }
+            }
+            Event::Resize(_, _) => {
+                self.terminal.autoresize()?;
+            }
+            Event::Mouse(mouse_event) => {
+                use crossterm::event::{MouseButton, MouseEventKind};
+                match mouse_event.kind {
+                    MouseEventKind::Down(button) => {
+                        let col = mouse_event.column;
+                        let row = mouse_event.row;
+
+                        if button == MouseButton::Right {
+                            // Right-click copies selection (if any) then clears it
+                            if self.selection.is_active() {
+                                self.copy_selection();
+                            }
+                            return Ok(());
+                        }
+
+                        if self.permission_prompt.is_open {
+                            self.permission_prompt.handle_click(col, row);
+                            if let Some(action) = self.permission_prompt.take_pending_action() {
+                                match action {
+                                    PermissionAction::Approve => {
+                                        let _ = self.permission_prompt.approve();
+                                    }
+                                    PermissionAction::Deny => {
+                                        let _ = self.permission_prompt.deny();
+                                    }
+                                    PermissionAction::ApproveAlways => {
+                                        let _ = self.permission_prompt.approve_always();
+                                    }
+                                }
+                            }
+                            return Ok(());
+                        }
+
+                        // Question prompt click
+                        if self.question_prompt.is_open {
+                            self.question_prompt.handle_click(col, row);
+                            return Ok(());
+                        }
+
+                        if self.handle_dialog_mouse(mouse_event)? {
+                            return Ok(());
+                        }
+
+                        if button == MouseButton::Left {
+                            if let Route::Session { .. } = self.context.current_route() {
+                                if let Some(ref mut sv) = self.session_view {
+                                    if sv.handle_sidebar_click(col, row) {
+                                        // Check if the click triggered a child session navigation
+                                        if let Some(cs_idx) =
+                                            sv.sidebar_state_mut().take_pending_navigate_child()
+                                        {
+                                            let sessions =
+                                                self.context.child_sessions.read().clone();
+                                            if let Some(child) = sessions.get(cs_idx) {
+                                                let child_id = child.session_id.clone();
+                                                drop(sessions);
+                                                self.context.navigate(Route::Session {
+                                                    session_id: child_id.clone(),
+                                                });
+                                                self.ensure_session_view(&child_id);
+                                                let _ = self.sync_session_from_server(&child_id);
+                                            }
+                                        }
+                                        return Ok(());
+                                    }
+                                    if sv.is_point_in_sidebar(col, row) {
+                                        return Ok(());
+                                    }
+                                    if sv.handle_scrollbar_click(col, row) {
+                                        return Ok(());
+                                    }
+                                    if sv.handle_click(col, row) {
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            // Clear previous selection and start a new one
+                            self.selection.start(row, col);
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if self.handle_dialog_mouse(mouse_event)? {
+                            return Ok(());
+                        }
+                        if let Some(ref mut sv) = self.session_view {
+                            if !sv.scroll_sidebar_up_at(mouse_event.column, mouse_event.row) {
+                                sv.scroll_up_mouse();
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if self.handle_dialog_mouse(mouse_event)? {
+                            return Ok(());
+                        }
+                        if let Some(ref mut sv) = self.session_view {
+                            if !sv.scroll_sidebar_down_at(mouse_event.column, mouse_event.row) {
+                                sv.scroll_down_mouse();
+                            }
+                        }
+                    }
+                    MouseEventKind::Drag(_) => {
+                        let col = mouse_event.column;
+                        let row = mouse_event.row;
+                        if let Some(ref mut sv) = self.session_view {
+                            if sv.handle_scrollbar_drag(col, row) {
+                                return Ok(());
+                            }
+                        }
+                        self.selection.update(row, col);
+                    }
+                    MouseEventKind::Moved => {
+                        if self.handle_dialog_mouse(mouse_event)? {
+                            return Ok(());
+                        }
+                        self.event_caused_change = false;
+                    }
+                    MouseEventKind::Up(_) => {
+                        if let Some(ref mut sv) = self.session_view {
+                            if sv.stop_scrollbar_drag() {
+                                return Ok(());
+                            }
+                        }
+                        self.selection.finalize();
+                    }
+                    _ => {}
+                }
+            }
+            Event::Paste(text) => {
+                if !text.is_empty() {
+                    if self.provider_dialog.is_open() && self.provider_dialog.is_input_mode() {
+                        for c in text.chars() {
+                            self.provider_dialog.push_char(c);
+                        }
+                    } else {
+                        self.prompt.insert_text(text);
+                    }
+                }
+            }
+            Event::Custom(event) => match event.as_ref() {
+                CustomEvent::PromptDispatchHomeFinished {
+                    optimistic_session_id,
+                    optimistic_message_id,
+                    created_session,
+                    error,
+                } => {
+                    if let Some(session) = created_session.as_deref() {
+                        self.promote_optimistic_session(optimistic_session_id, session);
+
+                        if let Route::Session { session_id: active } = self.context.current_route()
+                        {
+                            if active == *optimistic_session_id {
+                                self.context.navigate(Route::Session {
+                                    session_id: session.id.clone(),
+                                });
+                            }
+                        }
+                        self.ensure_session_view(&session.id);
+
+                        if let Some(err) = error {
+                            self.remove_optimistic_message(&session.id, optimistic_message_id);
+                            self.set_session_status(&session.id, SessionStatus::Idle);
+                            self.sync_prompt_spinner_state();
+                            self.alert_dialog
+                                .set_message(&format!("Failed to send prompt:\n{}", err));
+                            self.alert_dialog.open();
+                        } else {
+                            self.set_session_status(&session.id, SessionStatus::Running);
+                            self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
+                            self.prompt.set_spinner_active(true);
+                        }
+                    } else {
+                        self.remove_optimistic_session(optimistic_session_id);
+                        if let Route::Session { session_id: active } = self.context.current_route()
+                        {
+                            if active == *optimistic_session_id {
+                                self.context.navigate(Route::Home);
+                                self.active_session_id = None;
+                                self.session_view = None;
+                            }
+                        }
+                        self.prompt.set_spinner_active(false);
+                        if let Some(err) = error {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to create session:\n{}", err));
+                            self.alert_dialog.open();
+                        }
+                    }
+                    self.event_caused_change = true;
+                }
+                CustomEvent::PromptDispatchSessionFinished {
+                    session_id,
+                    optimistic_message_id,
+                    error,
+                } => {
+                    if let Some(err) = error {
+                        self.remove_optimistic_message(session_id, optimistic_message_id);
+                        self.set_session_status(session_id, SessionStatus::Idle);
+                        let _ = self.dispatch_next_queued_prompt(session_id);
+                        self.sync_prompt_spinner_state();
+                        self.alert_dialog
+                            .set_message(&format!("Failed to send prompt:\n{}", err));
+                        self.alert_dialog.open();
+                    }
+                    self.event_caused_change = true;
+                }
+                CustomEvent::StateChanged(StateChange::SessionUpdated(session_id)) => {
+                    self.perf.session_updated_events =
+                        self.perf.session_updated_events.saturating_add(1);
+                    if let Route::Session { session_id: active } = self.context.current_route() {
+                        if active == *session_id {
+                            self.pending_session_sync = Some(session_id.to_string());
+                            self.pending_session_sync_due_at = Some(
+                                Instant::now() + Duration::from_millis(SESSION_SYNC_DEBOUNCE_MS),
+                            );
+                        }
+                    }
+                    self.sync_prompt_spinner_state();
+                }
+                CustomEvent::StateChanged(StateChange::SessionStatusBusy(session_id)) => {
+                    self.set_session_status(session_id, SessionStatus::Running);
+                    self.sync_prompt_spinner_state();
+                }
+                CustomEvent::StateChanged(StateChange::SessionStatusIdle(session_id)) => {
+                    self.set_session_status(session_id, SessionStatus::Idle);
+                    let _ = self.dispatch_next_queued_prompt(session_id);
+                    self.sync_prompt_spinner_state();
+                }
+                CustomEvent::StateChanged(StateChange::SessionStatusRetrying {
+                    session_id,
+                    attempt,
+                    message,
+                    next,
+                }) => {
+                    self.set_session_status(
+                        session_id,
+                        SessionStatus::Retrying {
+                            message: message.clone(),
+                            attempt: *attempt,
+                            next: *next,
+                        },
+                    );
+                    self.sync_prompt_spinner_state();
+                }
+                CustomEvent::StateChanged(StateChange::QuestionCreated { session_id, .. })
+                | CustomEvent::StateChanged(StateChange::QuestionResolved { session_id, .. }) => {
+                    let should_sync = match self.context.current_route() {
+                        Route::Session {
+                            session_id: active_session_id,
+                        } => active_session_id == *session_id,
+                        _ => true,
+                    };
+                    if should_sync {
+                        self.event_caused_change = self.sync_question_requests();
+                        self.last_question_sync = Instant::now();
+                    }
+                }
+                CustomEvent::StateChanged(StateChange::ToolCallStarted {
+                    tool_call_id,
+                    tool_name,
+                    ..
+                }) => {
+                    self.active_tool_calls.insert(
+                        tool_call_id.clone(),
+                        ToolCallInfo {
+                            id: tool_call_id.clone(),
+                            tool_name: tool_name.clone(),
+                        },
+                    );
+                }
+                CustomEvent::StateChanged(StateChange::ToolCallCompleted {
+                    tool_call_id, ..
+                }) => {
+                    self.active_tool_calls.remove(tool_call_id);
+                }
+                CustomEvent::StateChanged(StateChange::TopologyChanged { session_id }) => {
+                    self.handle_topology_changed(session_id);
+                }
+                CustomEvent::StateChanged(StateChange::DiffUpdated { session_id, diffs }) => {
+                    let mut session_ctx = self.context.session.write();
+                    session_ctx
+                        .session_diff
+                        .insert(session_id.clone(), diffs.clone());
+                    drop(session_ctx);
+                }
+                CustomEvent::StateChanged(StateChange::ReasoningUpdated {
+                    session_id,
+                    message_id,
+                    phase,
+                    text,
+                }) => {
+                    // Only process if this is the current session
+                    if let Route::Session { session_id: active } = self.context.current_route() {
+                        if active == *session_id {
+                            let mut session_ctx = self.context.session.write();
+                            session_ctx
+                                .update_reasoning_incremental(session_id, message_id, phase, text);
+                            self.event_caused_change = true;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::Tick => {
+                let mut tick_changed = false;
+                tick_changed |= self.toast.tick(TICK_RATE_MS);
+                tick_changed |= self.prompt.tick_spinner(TICK_RATE_MS);
+                tick_changed |= self.sync_prompt_spinner_state();
+
+                if self.pending_initial_submit && !self.prompt.get_input().trim().is_empty() {
+                    self.pending_initial_submit = false;
+                    self.submit_prompt()?;
+                    tick_changed = true;
+                }
+
+                let route = self.context.current_route();
+                if let Route::Session { session_id } = &route {
+                    let should_sync_pending = self.pending_session_sync.as_deref()
+                        == Some(session_id.as_str())
+                        && self
+                            .pending_session_sync_due_at
+                            .map(|due| Instant::now() >= due)
+                            .unwrap_or(false);
+                    if should_sync_pending {
+                        let sync_result = self
+                            .sync_session_from_server_with_mode(
+                                session_id,
+                                SessionSyncMode::Incremental,
+                            )
+                            .or_else(|_| {
+                                self.sync_session_from_server_with_mode(
+                                    session_id,
+                                    SessionSyncMode::Full,
+                                )
+                            });
+                        if sync_result.is_ok() {
+                            tick_changed = true;
+                            self.check_scheduler_handoff(session_id);
+                            self.refresh_child_sessions();
+                            if self.status_dialog.is_open() {
+                                self.refresh_status_dialog();
+                            }
+                        }
+                        self.pending_session_sync = None;
+                        self.pending_session_sync_due_at = None;
+                    }
+                    if self.last_full_session_sync.elapsed()
+                        >= Duration::from_secs(SESSION_FULL_SYNC_INTERVAL_SECS)
+                        && self
+                            .sync_session_from_server_with_mode(session_id, SessionSyncMode::Full)
+                            .is_ok()
+                    {
+                        tick_changed = true;
+                        self.refresh_child_sessions();
+                        if self.status_dialog.is_open() {
+                            self.refresh_status_dialog();
+                        }
+                    }
+                }
+                if self.last_question_sync.elapsed()
+                    >= Duration::from_secs(QUESTION_SYNC_FALLBACK_SECS)
+                {
+                    tick_changed |= self.sync_question_requests();
+                    self.last_question_sync = Instant::now();
+                }
+                if self.last_aux_sync.elapsed() >= Duration::from_secs(5) {
+                    self.refresh_session_list_dialog();
+                    let _ = self.refresh_skill_list_dialog();
+                    let _ = self.refresh_lsp_status();
+                    let _ = self.refresh_mcp_dialog();
+                    self.last_aux_sync = Instant::now();
+                    tick_changed = true;
+                }
+                if self.last_process_refresh.elapsed() >= Duration::from_secs(2) {
+                    let should_refresh_processes =
+                        matches!(route, Route::Session { .. }) && *self.context.show_sidebar.read();
+                    if should_refresh_processes {
+                        rocode_core::process_registry::global_registry().refresh_stats();
+                        *self.context.processes.write() =
+                            rocode_core::process_registry::global_registry().list();
+                        tick_changed = true;
+                    }
+                    self.last_process_refresh = Instant::now();
+                }
+                self.maybe_log_perf_snapshot();
+                self.event_caused_change = tick_changed;
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn draw(&mut self) -> anyhow::Result<()> {
+        self.perf.draws = self.perf.draws.saturating_add(1);
+        self.context
+            .set_pending_permissions(self.permission_prompt.pending_count());
+
+        let route = self.context.current_route();
+        if let Route::Session { session_id } = &route {
+            self.ensure_session_view(session_id);
+        } else {
+            self.active_session_id = None;
+            self.session_view = None;
+        }
+
+        let context = self.context.clone();
+        let prompt = &self.prompt;
+        let route_for_draw = route.clone();
+        let show_modal_overlay = self.has_open_dialog_layer()
+            || self.permission_prompt.is_open
+            || self.question_prompt.is_open;
+        let session_view = self.session_view.as_mut();
+        let theme = self.context.theme.read().clone();
+        let command_palette = &self.command_palette;
+        let model_select = &self.model_select;
+        let agent_select = &self.agent_select;
+        let session_list_dialog = &self.session_list_dialog;
+        let theme_list_dialog = &self.theme_list_dialog;
+        let status_dialog = &self.status_dialog;
+        let mcp_dialog = &self.mcp_dialog;
+        let help_dialog = &self.help_dialog;
+        let alert_dialog = &self.alert_dialog;
+        let session_rename_dialog = &self.session_rename_dialog;
+        let session_export_dialog = &self.session_export_dialog;
+        let prompt_stash_dialog = &self.prompt_stash_dialog;
+        let skill_list_dialog = &self.skill_list_dialog;
+        let timeline_dialog = &self.timeline_dialog;
+        let fork_dialog = &self.fork_dialog;
+        let provider_dialog = &self.provider_dialog;
+        let subagent_dialog = &self.subagent_dialog;
+        let tag_dialog = &self.tag_dialog;
+        let permission_prompt = &self.permission_prompt;
+        let question_prompt = &self.question_prompt;
+        let slash_popup = &self.slash_popup;
+        let toast = &self.toast;
+        let selection = &self.selection;
+        let capture_screen_lines = selection.is_active() || selection.is_selecting();
+
+        let mut captured_lines: Vec<String> = Vec::new();
+
+        self.terminal.draw(|frame| {
+            let area = frame.size();
+            if area.width < 10 || area.height < 10 {
+                return;
+            }
+
+            match route_for_draw {
+                Route::Home => {
+                    let home = HomeView::new(context.clone());
+                    home.render_with_prompt(frame, area, prompt);
+                }
+                Route::Session { .. } => {
+                    if let Some(view) = session_view {
+                        view.render(frame, area, prompt);
+                    } else {
+                        let home = HomeView::new(context.clone());
+                        home.render_with_prompt(frame, area, prompt);
+                    }
+                }
+                _ => {
+                    let home = HomeView::new(context.clone());
+                    home.render_with_prompt(frame, area, prompt);
+                }
+            }
+
+            if show_modal_overlay {
+                let modal_backdrop = ratatui::widgets::Block::default()
+                    .style(ratatui::style::Style::default().bg(theme.background_menu));
+                frame.render_widget(modal_backdrop, area);
+            }
+
+            slash_popup.render(frame, area, &theme);
+            command_palette.render(frame, area, &theme);
+            model_select.render(frame, area, &theme);
+            agent_select.render(frame, area, &theme);
+            session_list_dialog.render(frame, area, &theme);
+            theme_list_dialog.render(frame, area, &theme);
+            status_dialog.render(frame, area, &theme);
+            mcp_dialog.render(frame, area, &theme);
+            help_dialog.render(frame, area, &theme);
+            alert_dialog.render(frame, area, &theme);
+            session_rename_dialog.render(frame, area, &theme);
+            session_export_dialog.render(frame, area, &theme);
+            prompt_stash_dialog.render(frame, area, &theme);
+            skill_list_dialog.render(frame, area, &theme);
+            timeline_dialog.render(frame, area, &theme);
+            fork_dialog.render(frame, area, &theme);
+            provider_dialog.render(frame, area, &theme);
+            subagent_dialog.render(frame, area, &theme);
+            tag_dialog.render(frame, area, &theme);
+            self.tool_call_cancel_dialog.render(frame, &theme);
+            self.recovery_action_dialog.render(frame, &theme);
+            permission_prompt.render(frame, area, &theme);
+            question_prompt.render(frame, area, &theme);
+
+            // Render toast notification (top-right corner)
+            if toast.is_visible() {
+                let toast_width = 60u16.min(area.width.saturating_sub(4));
+                let toast_height = toast.desired_height(toast_width);
+                let base_x = area.x + area.width.saturating_sub(toast_width.saturating_add(2));
+                let max_x = area.x + area.width.saturating_sub(toast_width);
+                let toast_x = base_x.saturating_add(toast.slide_offset()).min(max_x);
+                let toast_area = ratatui::layout::Rect {
+                    x: toast_x,
+                    y: 2.min(area.height.saturating_sub(1)),
+                    width: toast_width,
+                    height: toast_height.min(area.height.saturating_sub(2)),
+                };
+                toast.render(frame, toast_area, &theme);
+            }
+
+            let buf = frame.buffer_mut();
+            if capture_screen_lines {
+                // Snapshot the rendered buffer for text selection (before highlight overlay)
+                captured_lines.clear();
+                for y in area.y..area.y + area.height {
+                    let line = line_from_cells(
+                        (area.x..area.x + area.width).map(|x| buf.get(x, y).symbol()),
+                    );
+                    let trimmed = line.trim_end().to_string();
+                    captured_lines.push(trimmed);
+                }
+            }
+
+            // Render selection highlight — invert colors on non-empty cells,
+            // matching standard terminal selection behavior (like opentui).
+            if selection.is_active() {
+                use ratatui::style::Color;
+                for y in area.y..area.y + area.height {
+                    for x in area.x..area.x + area.width {
+                        if !selection.is_selected(y, x) {
+                            continue;
+                        }
+                        let cell = buf.get(x, y);
+                        let sym = cell.symbol();
+                        // Only highlight cells with visible text content
+                        if sym.is_empty() || sym.chars().all(|c| c == ' ') {
+                            continue;
+                        }
+                        let cell = buf.get_mut(x, y);
+                        // Resolve Reset to concrete terminal defaults before swapping.
+                        // Reset fg = terminal default foreground (typically white/light).
+                        // Reset bg = terminal default background (typically black/dark).
+                        let fg = if cell.fg == Color::Reset {
+                            Color::White
+                        } else {
+                            cell.fg
+                        };
+                        let bg = if cell.bg == Color::Reset {
+                            Color::Black
+                        } else {
+                            cell.bg
+                        };
+                        cell.fg = bg;
+                        cell.bg = fg;
+                    }
+                }
+            }
+        })?;
+
+        if capture_screen_lines {
+            self.screen_lines = captured_lines;
+            self.perf.screen_snapshots = self.perf.screen_snapshots.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    fn maybe_log_perf_snapshot(&mut self) {
+        if self.last_perf_log.elapsed() < Duration::from_secs(PERF_LOG_INTERVAL_SECS) {
+            return;
+        }
+        self.last_perf_log = Instant::now();
+        if self.perf_log_info {
+            tracing::info!(
+                draws = self.perf.draws,
+                screen_snapshots = self.perf.screen_snapshots,
+                session_sync_full = self.perf.session_sync_full,
+                session_sync_incremental = self.perf.session_sync_incremental,
+                question_sync = self.perf.question_sync,
+                session_updated_events = self.perf.session_updated_events,
+                "tui perf snapshot"
+            );
+        } else {
+            tracing::debug!(
+                draws = self.perf.draws,
+                screen_snapshots = self.perf.screen_snapshots,
+                session_sync_full = self.perf.session_sync_full,
+                session_sync_incremental = self.perf.session_sync_incremental,
+                question_sync = self.perf.question_sync,
+                session_updated_events = self.perf.session_updated_events,
+                "tui perf snapshot"
+            );
+        }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        let _ = terminal::restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{MessageTokensInfo, SessionTimeInfo};
+    use chrono::Utc;
+
+    #[test]
+    fn incremental_session_sync_refreshes_title_and_revert_metadata() {
+        let now = Utc::now().timestamp_millis();
+        let session_id = "session-1";
+        let mut session_ctx = crate::context::SessionContext::new();
+        session_ctx.upsert_session(Session {
+            id: session_id.to_string(),
+            title: "New Session".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            parent_id: None,
+            share: None,
+            metadata: None,
+        });
+        session_ctx.set_messages(
+            session_id,
+            vec![Message {
+                id: "m1".to_string(),
+                role: MessageRole::User,
+                content: "hello".to_string(),
+                created_at: Utc::now(),
+                agent: None,
+                model: None,
+                mode: None,
+                finish: None,
+                error: None,
+                completed_at: None,
+                cost: 0.0,
+                tokens: TokenUsage::default(),
+                metadata: None,
+                parts: vec![ContextMessagePart::Text {
+                    text: "hello".to_string(),
+                }],
+            }],
+        );
+
+        let session = SessionInfo {
+            id: session_id.to_string(),
+            slug: "session-1".to_string(),
+            project_id: "project".to_string(),
+            directory: ".".to_string(),
+            parent_id: None,
+            title: "Greeting Session".to_string(),
+            version: "1".to_string(),
+            time: SessionTimeInfo {
+                created: now,
+                updated: now + 1000,
+                compacting: None,
+                archived: None,
+            },
+            revert: Some(SessionRevertInfo {
+                message_id: "m2".to_string(),
+                part_id: Some("p1".to_string()),
+                snapshot: Some("snapshot".to_string()),
+                diff: None,
+            }),
+            metadata: None,
+        };
+        let mapped_messages = vec![map_api_message(&MessageInfo {
+            id: "m2".to_string(),
+            session_id: session_id.to_string(),
+            role: "assistant".to_string(),
+            created_at: now + 500,
+            completed_at: None,
+            agent: None,
+            model: None,
+            mode: None,
+            finish: Some("stop".to_string()),
+            error: None,
+            cost: 0.0,
+            tokens: MessageTokensInfo::default(),
+            parts: vec![crate::api::MessagePart {
+                id: "p1".to_string(),
+                part_type: "text".to_string(),
+                text: Some("world".to_string()),
+                file: None,
+                tool_call: None,
+                tool_result: None,
+                synthetic: None,
+                ignored: None,
+            }],
+            metadata: None,
+        })];
+
+        apply_incremental_session_sync(&mut session_ctx, session_id, &session, mapped_messages);
+
+        assert_eq!(
+            session_ctx
+                .sessions
+                .get(session_id)
+                .map(|session| session.title.as_str()),
+            Some("Greeting Session")
+        );
+        assert_eq!(
+            session_ctx
+                .messages
+                .get(session_id)
+                .map(|messages| messages.len()),
+            Some(2)
+        );
+        assert_eq!(
+            session_ctx
+                .revert
+                .get(session_id)
+                .map(|revert| revert.message_id.as_str()),
+            Some("m2")
+        );
+    }
+
+    #[test]
+    fn question_info_to_prompt_appends_other_option_once() {
+        let prompt = App::question_info_to_prompt(&QuestionInfo {
+            id: "q1".to_string(),
+            session_id: "s1".to_string(),
+            questions: vec!["Pick one".to_string()],
+            options: Some(vec![vec!["Yes".to_string(), "No".to_string()]]),
+            items: Vec::new(),
+        })
+        .expect("prompt should exist");
+
+        assert_eq!(prompt.question_type, QuestionType::SingleChoice);
+        assert_eq!(
+            prompt.options.last().map(|option| option.id.as_str()),
+            Some(OTHER_OPTION_ID)
+        );
+        assert_eq!(
+            prompt.options.last().map(|option| option.label.as_str()),
+            Some(OTHER_OPTION_LABEL)
+        );
+        assert_eq!(
+            prompt
+                .options
+                .iter()
+                .filter(|option| option.id == OTHER_OPTION_ID)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn diff_updated_event_populates_session_diff() {
+        use crate::context::DiffEntry;
+
+        let session_id = "session-diff-test";
+        let mut session_ctx = crate::context::SessionContext::new();
+
+        // Simulate what the DiffUpdated event handler does in app.rs
+        let diffs = vec![
+            DiffEntry {
+                file: "src/main.rs".to_string(),
+                additions: 10,
+                deletions: 3,
+            },
+            DiffEntry {
+                file: "src/lib.rs".to_string(),
+                additions: 5,
+                deletions: 0,
+            },
+        ];
+        session_ctx
+            .session_diff
+            .insert(session_id.to_string(), diffs);
+
+        // Verify the data is stored correctly
+        let stored = session_ctx.session_diff.get(session_id).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].file, "src/main.rs");
+        assert_eq!(stored[0].additions, 10);
+        assert_eq!(stored[0].deletions, 3);
+        assert_eq!(stored[1].file, "src/lib.rs");
+        assert_eq!(stored[1].additions, 5);
+        assert_eq!(stored[1].deletions, 0);
+    }
+
+    #[test]
+    fn map_api_diff_converts_correctly() {
+        use crate::api::ApiDiffEntry;
+
+        let api_diff = ApiDiffEntry {
+            path: "src/foo.rs".to_string(),
+            additions: 42,
+            deletions: 7,
+        };
+        let mapped = map_api_diff(&api_diff);
+        assert_eq!(mapped.file, "src/foo.rs");
+        assert_eq!(mapped.additions, 42);
+        assert_eq!(mapped.deletions, 7);
+    }
+
+    #[test]
+    fn map_api_todo_converts_status_strings() {
+        use crate::api::ApiTodoItem;
+        use crate::context::TodoStatus;
+
+        let cases = vec![
+            ("pending", TodoStatus::Pending),
+            ("in_progress", TodoStatus::InProgress),
+            ("completed", TodoStatus::Completed),
+            ("done", TodoStatus::Completed),
+            ("cancelled", TodoStatus::Cancelled),
+            ("canceled", TodoStatus::Cancelled),
+            ("unknown_status", TodoStatus::Pending),
+        ];
+
+        for (status_str, expected) in cases {
+            let api_item = ApiTodoItem {
+                id: "t1".to_string(),
+                content: "Test".to_string(),
+                status: status_str.to_string(),
+                priority: "medium".to_string(),
+            };
+            let mapped = map_api_todo(&api_item);
+            assert_eq!(
+                std::mem::discriminant(&mapped.status),
+                std::mem::discriminant(&expected),
+                "Status '{}' should map to {:?}",
+                status_str,
+                expected
+            );
+        }
+    }
+}

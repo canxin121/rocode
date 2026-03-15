@@ -1,0 +1,9 @@
+# vibe coding part
+AGENT.md
+# Rust build output
+target/
+marscode/
+plans/
+docs/plans/
+# Cargo local config
+.cargo/config.toml

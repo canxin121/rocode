@@ -1,0 +1,274 @@
+use super::*;
+
+impl App {
+    pub(super) fn set_active_model_selection(
+        &mut self,
+        model_ref: String,
+        provider: Option<String>,
+    ) {
+        let (model_key, explicit_variant) =
+            parse_model_ref_selection(&model_ref, &self.available_models, &self.model_variants);
+        let resolved_provider = provider.or_else(|| provider_from_model(&model_key));
+        self.context
+            .set_model_selection(model_key.clone(), resolved_provider);
+        if let Some(variant) = explicit_variant {
+            self.model_variant_selection
+                .insert(model_key.clone(), Some(variant.clone()));
+            self.context.set_model_variant(Some(variant));
+            return;
+        }
+        let variant = self
+            .model_variant_selection
+            .get(&model_key)
+            .cloned()
+            .flatten();
+        self.context.set_model_variant(variant);
+    }
+
+    pub(super) fn sync_current_model_variant(&mut self) {
+        let Some(model_ref) = self.context.current_model.read().clone() else {
+            self.context.set_model_variant(None);
+            return;
+        };
+        let (model_key, explicit_variant) =
+            parse_model_ref_selection(&model_ref, &self.available_models, &self.model_variants);
+        if let Some(explicit) = explicit_variant {
+            self.model_variant_selection
+                .insert(model_key.clone(), Some(explicit.clone()));
+            self.context.set_model_variant(Some(explicit));
+            return;
+        }
+        let selected = self
+            .model_variant_selection
+            .get(&model_key)
+            .cloned()
+            .flatten();
+        let available = self.model_variants.get(&model_key);
+        let valid = selected.filter(|value| {
+            available
+                .map(|items| items.iter().any(|item| item == value))
+                .unwrap_or(false)
+        });
+        if valid.is_none() {
+            self.model_variant_selection.insert(model_key, None);
+        }
+        self.context.set_model_variant(valid);
+    }
+
+    pub(super) fn cycle_model_variant(&mut self) {
+        let Some(model_ref) = self.context.current_model.read().clone() else {
+            return;
+        };
+        let (model_key, explicit_variant) =
+            parse_model_ref_selection(&model_ref, &self.available_models, &self.model_variants);
+        let Some(variants) = self.model_variants.get(&model_key).cloned() else {
+            self.model_variant_selection.remove(&model_key);
+            self.context.set_model_variant(None);
+            return;
+        };
+        if variants.is_empty() {
+            self.model_variant_selection.insert(model_key, None);
+            self.context.set_model_variant(None);
+            return;
+        }
+
+        let current = self
+            .model_variant_selection
+            .get(&model_key)
+            .cloned()
+            .flatten()
+            .or(explicit_variant);
+        let next = match current {
+            None => Some(variants[0].clone()),
+            Some(current_value) => {
+                let index = variants.iter().position(|item| item == &current_value);
+                match index {
+                    Some(idx) if idx + 1 < variants.len() => Some(variants[idx + 1].clone()),
+                    _ => None,
+                }
+            }
+        };
+        self.model_variant_selection.insert(model_key, next.clone());
+        self.context.set_model_variant(next);
+    }
+
+    pub(super) fn current_model_label(&self) -> String {
+        let Some(model) = self.context.current_model.read().clone() else {
+            return "(not selected)".to_string();
+        };
+        let (base_model, _) =
+            parse_model_ref_selection(&model, &self.available_models, &self.model_variants);
+        if let Some(variant) = self.context.current_model_variant() {
+            return format!("{base_model} ({variant})");
+        }
+        base_model
+    }
+
+    pub(super) fn selected_model_for_prompt(&self) -> Option<String> {
+        let model = self.context.current_model.read().clone()?;
+        let (base, inline_variant) =
+            parse_model_ref_selection(&model, &self.available_models, &self.model_variants);
+        let variant = self.context.current_model_variant();
+
+        let resolved = if let Some(variant) = variant {
+            let candidate = format!("{base}/{variant}");
+            if self.available_models.contains(&candidate) {
+                candidate
+            } else {
+                model.clone()
+            }
+        } else if inline_variant.is_some() && self.available_models.contains(&base) {
+            base
+        } else {
+            model.clone()
+        };
+
+        Some(resolved)
+    }
+
+    /// Fetch the provider list from the server and populate the dialog.
+    pub(super) fn populate_provider_dialog(&mut self) {
+        let Some(client) = self.context.get_api_client() else {
+            return;
+        };
+        // Try the dynamic models.dev catalogue first
+        if let Ok(resp) = client.get_known_providers() {
+            self.provider_dialog.populate_from_known(resp.providers);
+            return;
+        }
+        // Fallback: use the connected-only list from /provider/
+        let connected: std::collections::HashSet<String> = match client.get_all_providers() {
+            Ok(resp) => resp.connected.into_iter().collect(),
+            Err(_) => match client.get_config_providers() {
+                Ok(resp) => resp.providers.iter().map(|p| p.id.clone()).collect(),
+                Err(_) => std::collections::HashSet::new(),
+            },
+        };
+        self.provider_dialog.populate(&connected);
+    }
+
+    /// Submit an API key for a provider and update the dialog state.
+    pub(super) fn submit_provider_auth(&mut self, provider_id: &str, api_key: &str) {
+        use crate::components::SubmitResult;
+        let Some(client) = self.context.get_api_client() else {
+            self.provider_dialog
+                .set_submit_result(SubmitResult::Failed("No API connection".to_string()));
+            return;
+        };
+        match client.set_auth(provider_id, api_key) {
+            Ok(()) => {
+                self.provider_dialog
+                    .set_submit_result(SubmitResult::Success);
+                self.toast.show(
+                    crate::components::ToastVariant::Success,
+                    &format!("Connected to {}", provider_id),
+                    3000,
+                );
+                // Refresh the provider list to update connected status
+                let connected: std::collections::HashSet<String> = match client.get_all_providers()
+                {
+                    Ok(resp) => resp.connected.into_iter().collect(),
+                    Err(_) => std::collections::HashSet::new(),
+                };
+                self.provider_dialog.populate(&connected);
+                // Also refresh the model list so the new provider's models appear
+                self.refresh_model_dialog();
+            }
+            Err(e) => {
+                self.provider_dialog
+                    .set_submit_result(SubmitResult::Failed(e.to_string()));
+            }
+        }
+    }
+
+    pub(super) fn sync_prompt_spinner_style(&mut self) {
+        let theme = self.context.theme.read().clone();
+        let mode_name = current_mode_label(&self.context).unwrap_or_default();
+        self.prompt
+            .set_spinner_color(agent_color_from_name(&theme, &mode_name));
+    }
+
+    pub(super) fn sync_prompt_spinner_state(&mut self) -> bool {
+        let before_active = self.prompt.spinner_active();
+        let before_kind = self.prompt.spinner_task_kind();
+
+        let Route::Session { session_id } = self.context.current_route() else {
+            self.prompt.set_spinner_active(false);
+            self.prompt.clear_interrupt_confirmation();
+            return before_active != self.prompt.spinner_active()
+                || before_kind != self.prompt.spinner_task_kind();
+        };
+
+        let status = {
+            let session_ctx = self.context.session.read();
+            session_ctx.status(&session_id).clone()
+        };
+        let is_active = !matches!(status, SessionStatus::Idle);
+        self.prompt.set_spinner_active(is_active);
+        if !is_active {
+            self.prompt.clear_interrupt_confirmation();
+            return before_active != self.prompt.spinner_active()
+                || before_kind != self.prompt.spinner_task_kind();
+        }
+
+        let task_kind = self.infer_spinner_task_kind(&session_id, &status);
+        if self.prompt.spinner_task_kind() != task_kind {
+            self.prompt.set_spinner_task_kind(task_kind);
+        }
+
+        before_active != self.prompt.spinner_active()
+            || before_kind != self.prompt.spinner_task_kind()
+    }
+
+    pub(super) fn infer_spinner_task_kind(
+        &self,
+        session_id: &str,
+        status: &SessionStatus,
+    ) -> TaskKind {
+        if matches!(status, SessionStatus::Retrying { .. }) {
+            return TaskKind::LlmResponse;
+        }
+
+        let session_ctx = self.context.session.read();
+        let Some(messages) = session_ctx.messages.get(session_id) else {
+            return TaskKind::LlmRequest;
+        };
+        let Some(last_message) = messages.last() else {
+            return TaskKind::LlmRequest;
+        };
+
+        match last_message.role {
+            MessageRole::User => TaskKind::LlmRequest,
+            MessageRole::Assistant => infer_task_kind_from_message(last_message),
+            MessageRole::System => TaskKind::LlmResponse,
+            MessageRole::Tool => TaskKind::ToolCall,
+        }
+    }
+
+    pub(super) fn matches_keybind(&self, keybind_name: &str, key: KeyEvent) -> bool {
+        self.context
+            .keybind
+            .read()
+            .match_key(keybind_name, key.code, key.modifiers)
+    }
+
+    pub(super) fn sync_command_palette_labels(&mut self) {
+        let show_thinking = *self.context.show_thinking.read();
+        let show_tool_details = *self.context.show_tool_details.read();
+        let density = *self.context.message_density.read();
+        let semantic_hl = *self.context.semantic_highlight.read();
+        let show_header = *self.context.show_header.read();
+        let show_scrollbar = *self.context.show_scrollbar.read();
+        let tips_hidden = *self.context.tips_hidden.read();
+        self.command_palette
+            .sync_visibility_labels(crate::components::VisibilityLabels {
+                show_thinking,
+                show_tool_details,
+                density,
+                semantic_highlight: semantic_hl,
+                show_header,
+                show_scrollbar,
+                tips_hidden,
+            });
+    }
+}

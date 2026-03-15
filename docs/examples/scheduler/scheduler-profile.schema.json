@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "title": "ROCode Scheduler Profile Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orchestrator": {
+          "type": "string",
+          "enum": [
+            "sisyphus",
+            "prometheus",
+            "atlas",
+            "hephaestus"
+          ],
+          "description": "Supported presets are sisyphus, prometheus, atlas, and hephaestus."
+        },
+        "description": {
+          "type": "string"
+        },
+        "model": {
+          "$ref": "#/$defs/modelRef"
+        },
+        "skillList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stages": {
+          "type": "array",
+          "description": "Ordered stage sequence. Each entry is either a plain stage-kind string or an object with per-stage overrides.",
+          "items": {
+            "$ref": "#/$defs/stageEntry"
+          }
+        },
+        "agentTree": {
+          "$ref": "#/$defs/agentTreeRef"
+        },
+        "skillGraph": {
+          "$ref": "#/$defs/skillGraph"
+        },
+        "skillTree": {
+          "$ref": "#/$defs/skillTree"
+        }
+      }
+    },
+    "stageEntry": {
+      "description": "Either a plain stage-kind string (\"plan\") or an object with per-stage overrides ({ \"kind\": \"plan\", \"toolPolicy\": \"allow-all\" }).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "request-analysis",
+            "route",
+            "interview",
+            "plan",
+            "delegation",
+            "review",
+            "execution-orchestration",
+            "handoff",
+            "synthesis"
+          ]
+        },
+        {
+          "$ref": "#/$defs/stageOverride"
+        }
+      ]
+    },
+    "stageOverride": {
+      "type": "object",
+      "description": "Per-stage policy override. Only 'kind' is required; omitted fields fall through to preset defaults.",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "request-analysis",
+            "route",
+            "interview",
+            "plan",
+            "delegation",
+            "review",
+            "execution-orchestration",
+            "handoff",
+            "synthesis"
+          ]
+        },
+        "toolPolicy": {
+          "type": "string",
+          "enum": ["allow-all", "allow-read-only", "disable-all"],
+          "description": "Tool access policy for this stage. Overrides the preset default."
+        },
+        "loopBudget": {
+          "type": "string",
+          "description": "Loop budget for this stage. Either 'unbounded' or 'step-limit:N' (e.g. 'step-limit:5').",
+          "pattern": "^(unbounded|step-limit:[1-9][0-9]*)$"
+        },
+        "sessionProjection": {
+          "type": "string",
+          "enum": ["hidden", "transcript"],
+          "description": "Whether stage output is visible in the transcript."
+        },
+        "childSession": {
+          "type": "boolean",
+          "description": "Whether this stage creates an isolated child session."
+        },
+        "agentTree": {
+          "$ref": "#/$defs/agentTreeRef",
+          "description": "Per-stage agent tree. Overrides the profile-level agentTree for this stage only. Can be an inline object or a file path string."
+        },
+        "agents": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Agent name filter for this stage."
+        },
+        "skillList": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Skills available to this stage."
+        }
+      }
+    },
+    "modelRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "modelId"],
+      "properties": {
+        "providerId": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        }
+      }
+    },
+    "agentDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "type": "string"
+        },
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "$ref": "#/$defs/modelRef"
+        }
+      }
+    },
+    "agentTreeRef": {
+      "description": "An agent tree definition: either an inline agentTreeNode object or a relative file path string pointing to an external JSON/JSONC file containing an agentTreeNode.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/agentTreeNode"
+        },
+        {
+          "type": "string",
+          "description": "Relative file path to an external agent tree JSON/JSONC file (resolved relative to this config file)."
+        }
+      ]
+    },
+    "agentTreeNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/agentDescriptor"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentTreeNode"
+          }
+        }
+      }
+    },
+    "skillGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeId", "nodes"],
+      "properties": {
+        "entryNodeId": {
+          "type": "string"
+        },
+        "maxHops": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skillGraphNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skillGraphEdge"
+          }
+        }
+      }
+    },
+    "skillGraphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "agent"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/agentDescriptor"
+        },
+        "prompt": {
+          "type": "string"
+        }
+      }
+    },
+    "skillGraphEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "condition": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["always"]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "outputContains": {
+                  "type": "string"
+                },
+                "outputNotContains": {
+                  "type": "string"
+                }
+              },
+              "minProperties": 1,
+              "maxProperties": 1
+            }
+          ]
+        }
+      }
+    },
+    "skillTree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contextMarkdown"],
+      "properties": {
+        "contextMarkdown": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
