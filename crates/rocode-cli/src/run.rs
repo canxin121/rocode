@@ -147,7 +147,7 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
     };
     let api_client = CliApiClient::new(base_url.clone());
     let remote_config = api_client.get_config().await.ok();
-    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), false);
+    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), true);
 
     run_non_interactive_attach(RemoteAttachOptions {
         base_url,
@@ -5698,7 +5698,7 @@ mod tests {
         cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
         cli_prompt_agent_override, cli_prompt_assist_view, cli_prompt_screen_lines,
         cli_recent_session_info_for_directory, cli_render_retained_layout,
-        cli_render_startup_banner, cli_resolve_registry_ui_action,
+        cli_render_startup_banner, cli_resolve_registry_ui_action, cli_resolve_show_thinking,
         cli_session_update_requires_refresh, cli_should_emit_scheduler_stage_block,
         CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection, CliObservedExecutionTopology,
         CliPromptCatalog, CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript,
@@ -5709,6 +5709,7 @@ mod tests {
     use rocode_command::cli_style::CliStyle;
     use rocode_command::output_blocks::SchedulerStageBlock;
     use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
+    use rocode_config::{Config, UiPreferencesConfig};
     use rocode_tui::api::SessionTimeInfo;
     use std::collections::{BTreeSet, HashMap, VecDeque};
     use std::path::Path;
@@ -5725,6 +5726,23 @@ mod tests {
             cli_prompt_agent_override("build", None),
             Some("build".to_string())
         );
+    }
+
+    #[test]
+    fn cli_show_thinking_defaults_match_tui_behavior() {
+        assert!(cli_resolve_show_thinking(false, None, true));
+        assert!(!cli_resolve_show_thinking(
+            false,
+            Some(&Config {
+                ui_preferences: Some(UiPreferencesConfig {
+                    show_thinking: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            true,
+        ));
+        assert!(cli_resolve_show_thinking(true, None, false));
     }
 
     fn stage_with_status(status: &str) -> SchedulerStageBlock {
