@@ -95,11 +95,14 @@ pub(crate) fn try_open_browser(url: &str) {
         if cmd.is_empty() {
             continue;
         }
-        let status = ProcessCommand::new(&cmd[0]).args(&cmd[1..]).status();
-        if let Ok(status) = status {
-            if status.success() {
-                return;
-            }
+        let launch_result = ProcessCommand::new(&cmd[0])
+            .args(&cmd[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if launch_result.is_ok() {
+            return;
         }
     }
     eprintln!(
