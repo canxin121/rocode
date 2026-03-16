@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use crate::loader::{resolve_configured_path, update_config};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use tokio::sync::RwLock;
 
 use crate::schema::Config;
 
@@ -14,7 +14,7 @@ use crate::schema::Config;
 /// and invalidates derived caches. Consumers hold `Arc<Config>` snapshots.
 pub struct ConfigStore {
     base: ArcSwap<Config>,
-    plugin_applied: RwLock<Option<Arc<Config>>>,
+    plugin_applied: tokio::sync::RwLock<Option<Arc<Config>>>,
     project_dir: RwLock<Option<PathBuf>>,
 }
 
@@ -23,7 +23,7 @@ impl ConfigStore {
     pub fn new(config: Config) -> Self {
         Self {
             base: ArcSwap::from_pointee(config),
-            plugin_applied: RwLock::new(None),
+            plugin_applied: tokio::sync::RwLock::new(None),
             project_dir: RwLock::new(None),
         }
     }
@@ -33,10 +33,7 @@ impl ConfigStore {
         let config = crate::load_config(project_dir)?;
         let store = Self::new(config);
         let dir = project_dir.to_path_buf();
-        // Use try_write since we're the only owner at construction time
-        if let Ok(mut guard) = store.project_dir.try_write() {
-            *guard = Some(dir);
-        }
+        *store.project_dir.write().expect("project_dir poisoned") = Some(dir);
         Ok(store)
     }
 
@@ -51,10 +48,13 @@ impl ConfigStore {
         let mut updated = (*current).clone();
 
         let patch_config: Config = serde_json::from_value(patch)?;
-        if let Ok(project_dir) = self.project_dir.try_read() {
-            if let Some(project_dir) = project_dir.as_deref() {
-                update_config(project_dir, &patch_config)?;
-            }
+        if let Some(project_dir) = self
+            .project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .as_deref()
+        {
+            update_config(project_dir, &patch_config)?;
         }
         updated.merge(patch_config);
 
@@ -98,7 +98,11 @@ impl ConfigStore {
             return Some(path);
         }
 
-        let project_dir = self.project_dir.read().await.clone();
+        let project_dir = self
+            .project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .clone();
         project_dir.map(|dir| resolve_configured_path(&dir, raw))
     }
 
@@ -115,13 +119,21 @@ impl ConfigStore {
             return Some(path);
         }
 
-        let project_dir = self.project_dir.read().await.clone();
+        let project_dir = self
+            .project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .clone();
         project_dir.map(|dir| resolve_configured_path(&dir, raw))
     }
 
     pub async fn reload(&self) -> anyhow::Result<Arc<Config>> {
-        let dir = self.project_dir.read().await;
-        let project_dir = dir
+        let project_dir = self
+            .project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .clone();
+        let project_dir = project_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no project directory set for config reload"))?;
         let config = crate::load_config(project_dir)?;
@@ -204,7 +216,8 @@ mod tests {
             ..Default::default()
         });
 
-        *store.project_dir.write().await = Some(PathBuf::from("/tmp/rocode-project"));
+        *store.project_dir.write().expect("project_dir poisoned") =
+            Some(PathBuf::from("/tmp/rocode-project"));
 
         assert_eq!(
             store.resolved_scheduler_path().await,
@@ -227,6 +240,33 @@ mod tests {
             .expect("patch");
 
         let reloaded = store.reload().await.expect("reload");
+        let ui = reloaded.ui_preferences.as_ref().expect("ui preferences");
+        assert_eq!(reloaded.model.as_deref(), Some("before"));
+        assert_eq!(ui.show_thinking, Some(true));
+    }
+
+    #[test]
+    fn patch_waits_for_project_dir_lock_instead_of_skipping_disk_persist() {
+        let temp = TestDir::new("rocode_config_store_patch_lock");
+        fs::write(temp.path.join("rocode.json"), r#"{ "model": "before" }"#).expect("seed config");
+
+        let store = Arc::new(ConfigStore::from_project_dir(&temp.path).expect("store"));
+        let write_guard = store.project_dir.write().expect("project_dir poisoned");
+        let store_clone = store.clone();
+
+        let worker = std::thread::spawn(move || {
+            store_clone
+                .patch(serde_json::json!({
+                    "uiPreferences": { "showThinking": true }
+                }))
+                .expect("patch");
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(write_guard);
+        worker.join().expect("worker join");
+
+        let reloaded = crate::load_config(&temp.path).expect("reload from disk");
         let ui = reloaded.ui_preferences.as_ref().expect("ui preferences");
         assert_eq!(reloaded.model.as_deref(), Some("before"));
         assert_eq!(ui.show_thinking, Some(true));
