@@ -4513,11 +4513,16 @@ async fn run_server_prompt(
         });
     }
 
+    let prompt_agent = cli_prompt_agent_override(
+        &runtime.resolved_agent_name,
+        runtime.resolved_scheduler_profile_name.as_deref(),
+    );
+
     if let Err(error) = api_client
         .send_prompt(
             &session_id,
             input.to_string(),
-            Some(runtime.resolved_agent_name.clone()),
+            prompt_agent,
             runtime.resolved_scheduler_profile_name.clone(),
             (runtime.resolved_model_label != "auto").then(|| runtime.resolved_model_label.clone()),
             None,
@@ -4626,6 +4631,17 @@ async fn run_server_prompt(
         *active_abort = None;
     }
     Ok(())
+}
+
+fn cli_prompt_agent_override(
+    resolved_agent_name: &str,
+    resolved_scheduler_profile_name: Option<&str>,
+) -> Option<String> {
+    if resolved_scheduler_profile_name.is_some() {
+        None
+    } else {
+        Some(resolved_agent_name.to_string())
+    }
 }
 
 async fn cli_handle_config_updated_from_sse(
@@ -5680,8 +5696,9 @@ fn format_session_time(timestamp: i64) -> String {
 mod tests {
     use super::{
         cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
-        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
-        cli_render_retained_layout, cli_render_startup_banner, cli_resolve_registry_ui_action,
+        cli_prompt_agent_override, cli_prompt_assist_view, cli_prompt_screen_lines,
+        cli_recent_session_info_for_directory, cli_render_retained_layout,
+        cli_render_startup_banner, cli_resolve_registry_ui_action,
         cli_session_update_requires_refresh, cli_should_emit_scheduler_stage_block,
         CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection, CliObservedExecutionTopology,
         CliPromptCatalog, CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript,
@@ -5700,6 +5717,15 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     use rocode_command::cli_spinner::SpinnerGuard;
+
+    #[test]
+    fn cli_prompt_omits_agent_when_scheduler_profile_is_active() {
+        assert_eq!(cli_prompt_agent_override("build", Some("atlas")), None);
+        assert_eq!(
+            cli_prompt_agent_override("build", None),
+            Some("build".to_string())
+        );
+    }
 
     fn stage_with_status(status: &str) -> SchedulerStageBlock {
         SchedulerStageBlock {

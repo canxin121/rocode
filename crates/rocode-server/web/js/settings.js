@@ -1,7 +1,6 @@
 // ── Settings Panel ─────────────────────────────────────────────────────────
 
-function renderModelOptions() {
-  nodes.modelSelect.innerHTML = "";
+function collectModelRefs() {
   const refs = [];
   for (const provider of state.providers) {
     for (const model of provider.models || []) {
@@ -9,6 +8,23 @@ function renderModelOptions() {
     }
   }
   refs.sort((a, b) => a.localeCompare(b));
+  return refs;
+}
+
+function repairSelectedModel(refs, preferredRefs = []) {
+  const available = new Set(refs);
+  if (state.selectedModel && available.has(state.selectedModel)) {
+    return;
+  }
+
+  const preferred = preferredRefs.find((ref) => available.has(ref));
+  state.selectedModel = preferred || refs[0] || null;
+}
+
+function renderModelOptions() {
+  nodes.modelSelect.innerHTML = "";
+  const refs = collectModelRefs();
+  repairSelectedModel(refs);
 
   for (const ref of refs) {
     const option = document.createElement("option");
@@ -17,11 +33,10 @@ function renderModelOptions() {
     nodes.modelSelect.appendChild(option);
   }
 
-  if (!state.selectedModel && refs.length > 0) {
-    state.selectedModel = refs[0];
-  }
-  if (state.selectedModel) {
+  if (state.selectedModel && refs.includes(state.selectedModel)) {
     nodes.modelSelect.value = state.selectedModel;
+  } else {
+    nodes.modelSelect.value = "";
   }
 }
 

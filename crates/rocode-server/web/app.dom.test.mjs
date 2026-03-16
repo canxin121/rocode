@@ -1142,6 +1142,28 @@ test("web shared parameter commands apply model and preset selections", async ()
   assert.equal(api.state.selectedModeKey, "preset:atlas");
 });
 
+test("web repairs stale selected model against current provider catalogue", () => {
+  const { api, context } = createHarness();
+  api.state.selectedModel = "minimax/text-01";
+  api.state.providers = [
+    {
+      id: "openai",
+      name: "OpenAI",
+      models: [{ id: "gpt-4.1", name: "GPT-4.1" }],
+    },
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],
+    },
+  ];
+
+  context.renderModelOptions();
+
+  assert.equal(api.state.selectedModel, "anthropic/claude-sonnet-4");
+  assert.equal(api.nodes.modelSelect.value, "anthropic/claude-sonnet-4");
+});
+
 test("web shared copy command writes current transcript to clipboard", async () => {
   const { api, context } = createHarness();
   api.state.uiCommands = [

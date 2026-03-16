@@ -55,14 +55,13 @@ async function loadProviders() {
     const response = await api("/provider");
     const data = await response.json();
     state.providers = data.all || [];
-
-    if (!state.selectedModel && data.default) {
-      const providers = Object.keys(data.default);
-      if (providers.length > 0) {
-        const p = providers[0];
-        state.selectedModel = `${p}/${data.default[p]}`;
+    const preferredRefs = [];
+    if (data.default) {
+      for (const [provider, model] of Object.entries(data.default)) {
+        preferredRefs.push(`${provider}/${model}`);
       }
     }
+    repairSelectedModel(collectModelRefs(), preferredRefs);
 
     renderModelOptions();
     updateComposerMeta();
