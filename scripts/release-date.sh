@@ -5,6 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_CARGO="$ROOT_DIR/Cargo.toml"
 SYNC_SCRIPT="$ROOT_DIR/scripts/sync_version.sh"
 
+if [[ ! -x "$SYNC_SCRIPT" ]]; then
+  echo "Missing sync script: $SYNC_SCRIPT" >&2
+  exit 1
+fi
+
 INPUT_DATE="${1:-}"
 if [[ -n "$INPUT_DATE" ]]; then
   if [[ ! "$INPUT_DATE" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]]; then
