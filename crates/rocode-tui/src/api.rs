@@ -1265,11 +1265,8 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        let body = response.json::<SuccessResponse>()?;
+        Ok(body.success.unwrap_or(true))
     }
 
     pub fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {
