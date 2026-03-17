@@ -2,6 +2,7 @@ pub(crate) mod events;
 pub(crate) mod state;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -13,8 +14,8 @@ use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
-    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
-    SchedulerStageBlock,
+    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
+    SchedulerDecisionSection, SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -26,6 +27,12 @@ use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
 use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
+use rocode_types::{
+    BatchToolInput, CommandToolInput, DisplayOverrideMetadata, FilePathToolInput, GlobToolInput,
+    GrepToolInput, LspToolInput, NotebookEditToolInput, QueryToolInput, QuestionToolInput,
+    SkillToolInput, TaskFlowToolInput, TaskToolInput, TodoListMetadata, TodoWriteToolInput,
+    UrlToolInput,
+};
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -384,50 +391,121 @@ where
 }
 
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
+    #[derive(Debug, Default, Deserialize)]
+    struct SchedulerStageStreamingMeta {
+        #[serde(default, deserialize_with = "deserialize_bool_lossy")]
+        scheduler_stage_emitted: bool,
+        #[serde(default, deserialize_with = "deserialize_bool_lossy")]
+        scheduler_stage_streaming: bool,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage_status: Option<String>,
+    }
+
+    fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Bool(value)) => value,
+            Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0) != 0,
+            Some(serde_json::Value::String(value)) => matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ),
+            _ => false,
+        })
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    fn parse_meta(
+        metadata: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> SchedulerStageStreamingMeta {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<SchedulerStageStreamingMeta>(value).ok())
+            .unwrap_or_default()
+    }
+
     session.messages.iter_mut().rev().find(|message| {
+        let meta = parse_meta(&message.metadata);
         message.role == MessageRole::Assistant
-            && message
-                .metadata
-                .get("scheduler_stage_emitted")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            && (message
-                .metadata
-                .get("scheduler_stage_streaming")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
+            && meta.scheduler_stage_emitted
+            && (meta.scheduler_stage_streaming
                 || matches!(
-                    message
-                        .metadata
-                        .get("scheduler_stage_status")
-                        .and_then(|value| value.as_str()),
+                    meta.scheduler_stage_status.as_deref(),
                     Some("running" | "waiting" | "cancelling")
                 ))
     })
 }
 
 fn scheduler_abort_info(message: &SessionMessage) -> SchedulerAbortInfo {
+    #[derive(Debug, Default, Deserialize)]
+    struct SchedulerAbortMeta {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage_id: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_profile: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+        scheduler_stage_index: Option<u32>,
+    }
+
+    fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(value)) => value.as_u64().map(|value| value as u32),
+            Some(serde_json::Value::String(value)) => value.trim().parse::<u32>().ok(),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    let meta = serde_json::to_value(&message.metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<SchedulerAbortMeta>(value).ok())
+        .unwrap_or_default();
     SchedulerAbortInfo {
-        execution_id: message
-            .metadata
-            .get("scheduler_stage_id")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        scheduler_profile: message
-            .metadata
-            .get("scheduler_profile")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        stage_name: message
-            .metadata
-            .get("scheduler_stage")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        stage_index: message
-            .metadata
-            .get("scheduler_stage_index")
-            .and_then(|value| value.as_u64())
-            .map(|value| value as u32),
+        execution_id: meta.scheduler_stage_id,
+        scheduler_profile: meta.scheduler_profile,
+        stage_name: meta.scheduler_stage,
+        stage_index: meta.scheduler_stage_index,
     }
 }
 
@@ -743,24 +821,33 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             let mut from_snapshot: Option<String> = None;
             let mut to_snapshot: Option<String> = None;
 
+            #[derive(Debug, Default, Deserialize)]
+            struct SnapshotHashesWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                step_start_snapshot: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                step_finish_snapshot: Option<String>,
+            }
+
             for msg in &session.messages {
+                let wire = serde_json::to_value(&msg.metadata)
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<SnapshotHashesWire>(value).ok())
+                    .unwrap_or_default();
+
                 if from_snapshot.is_none() {
-                    if let Some(s) = msg
-                        .metadata
-                        .get("step_start_snapshot")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                    {
-                        from_snapshot = Some(s.to_string());
+                    if let Some(s) = wire.step_start_snapshot {
+                        from_snapshot = Some(s);
                     }
                 }
-                if let Some(s) = msg
-                    .metadata
-                    .get("step_finish_snapshot")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
-                    to_snapshot = Some(s.to_string());
+                if let Some(s) = wire.step_finish_snapshot {
+                    to_snapshot = Some(s);
                 }
             }
 
@@ -1132,7 +1219,13 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             "on_scheduler_stage_reasoning called"
         );
 
-        let (message_id, child_session_id, child_message_id, start_child_reasoning, start_reasoning) = {
+        let (
+            message_id,
+            child_session_id,
+            child_message_id,
+            start_child_reasoning,
+            start_reasoning,
+        ) = {
             let mut guard = self.active_stage_messages.lock().await;
             match guard.last_mut() {
                 Some(active) => {
@@ -1143,7 +1236,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         active.child_reasoning_started = true;
                     }
                     // For main session (non-child), track reasoning started
-                    let start_reasoning = active.child_session_id.is_none() && !active.reasoning_started;
+                    let start_reasoning =
+                        active.child_session_id.is_none() && !active.reasoning_started;
                     if start_reasoning {
                         active.reasoning_started = true;
                     }
@@ -1417,23 +1511,44 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 }
 
 fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatch {
+    #[derive(Debug, Default, Deserialize)]
+    struct StageExecutionPatchWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_status: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_waiting_on: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_last_event: Option<String>,
+    }
+
+    let wire = serde_json::to_value(&message.metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<StageExecutionPatchWire>(value).ok())
+        .unwrap_or_default();
+
     ExecutionPatch {
-        status: message
-            .metadata
-            .get("scheduler_stage_status")
-            .and_then(|value| value.as_str())
+        status: wire
+            .scheduler_stage_status
+            .as_deref()
             .and_then(runtime_execution_status_from_stage_status),
-        waiting_on: message
-            .metadata
-            .get("scheduler_stage_waiting_on")
-            .and_then(|value| value.as_str())
+        waiting_on: wire
+            .scheduler_stage_waiting_on
+            .as_deref()
             .filter(|value| *value != "none" && !value.is_empty())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Clear),
-        recent_event: message
-            .metadata
-            .get("scheduler_stage_last_event")
-            .and_then(|value| value.as_str())
+        recent_event: wire
+            .scheduler_stage_last_event
+            .as_deref()
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Keep),
         metadata: FieldUpdate::Set(scheduler_stage_runtime_metadata(message)),
@@ -1560,21 +1675,14 @@ fn summarize_tool_result_activity(
 }
 
 fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
-    let questions = tool_args.get("questions")?.as_array()?;
-    if questions.is_empty() {
+    let input = QuestionToolInput::from_value(tool_args);
+    if input.questions.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Question ({})", questions.len())];
-    for question in questions.iter().take(3) {
-        let header = question
-            .get("header")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Prompt");
-        let text = question
-            .get("question")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
+    let mut lines = vec![format!("Question ({})", input.questions.len())];
+    for question in input.questions.iter().take(3) {
+        let header = question.header.as_deref().unwrap_or("Prompt");
+        let text = question.question.trim();
         if !text.is_empty() {
             lines.push(format!("- {header}: {}", collapse_text(text, 96)));
         }
@@ -1583,41 +1691,34 @@ fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
-    let todos = tool_args.get("todos")?.as_array()?;
-    if todos.is_empty() {
+    let input = TodoWriteToolInput::from_value(tool_args);
+    if input.todos.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Todo list ({})", todos.len())];
-    for todo in todos.iter().take(5) {
-        let content = todo.get("content").and_then(|value| value.as_str())?;
-        let status = todo
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pending");
+    let mut lines = vec![format!("Todo list ({})", input.todos.len())];
+    for todo in input.todos.iter().take(5) {
+        let content = todo.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let status = todo.status.as_deref().unwrap_or("pending");
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
             collapse_text(content, 88)
         ));
     }
+    if lines.len() == 1 {
+        return None;
+    }
     Some(lines.join("\n"))
 }
 
 fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
-    let agent = tool_args
-        .get("subagent_type")
-        .or_else(|| tool_args.get("subagentType"))
-        .or_else(|| tool_args.get("category"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("subagent");
-    let description = tool_args
-        .get("description")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let prompt = tool_args
-        .get("prompt")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
+    let input = TaskToolInput::from_value(tool_args);
+    let agent = input.dispatch_label().unwrap_or("subagent");
+    let description = input.description.as_deref().unwrap_or_default();
+    let prompt = input.prompt.as_deref().unwrap_or_default();
     let mut lines = vec![format!("Task → {}", prettify_token(agent))];
     if !description.is_empty() {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
@@ -1629,28 +1730,24 @@ fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_task_flow_args(tool_args: &serde_json::Value) -> Option<String> {
-    let operation = tool_args
-        .get("operation")
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
+    let input = TaskFlowToolInput::from_value(tool_args);
+    let operation = input.operation.as_deref().unwrap_or("unknown");
     let mut lines = vec![format!("TaskFlow → {}", prettify_token(operation))];
-    if let Some(agent) = tool_args.get("agent").and_then(|value| value.as_str()) {
+    if let Some(agent) = input.agent.as_deref() {
         lines.push(format!("- agent: {}", prettify_token(agent)));
     }
-    if let Some(description) = tool_args
-        .get("description")
-        .and_then(|value| value.as_str())
-    {
+    if let Some(description) = input.description.as_deref() {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
     }
-    if let Some(prompt) = tool_args.get("prompt").and_then(|value| value.as_str()) {
+    if let Some(prompt) = input.prompt.as_deref() {
         lines.push(format!("- prompt: {}", collapse_text(prompt, 88)));
     }
-    if let Some(todo_item) = tool_args
-        .get("todo_item")
-        .and_then(|value| value.as_object())
-    {
-        if let Some(content) = todo_item.get("content").and_then(|value| value.as_str()) {
+    if let Some(todo_item) = input.todo_item.as_ref() {
+        if let Some(content) = todo_item
+            .content
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
             lines.push(format!("- todo: {}", collapse_text(content, 88)));
         }
     }
@@ -1686,11 +1783,11 @@ impl StageCapabilityActivityEvidence {
         push_unique_trimmed(&mut self.categories, value);
     }
 
-    fn push_skills_from_array(&mut self, value: Option<&serde_json::Value>) {
-        let Some(values) = value.and_then(|value| value.as_array()) else {
+    fn push_skills(&mut self, values: Option<&[String]>) {
+        let Some(values) = values else {
             return;
         };
-        for skill in values.iter().filter_map(|value| value.as_str()) {
+        for skill in values {
             push_unique_trimmed(&mut self.skills, Some(skill));
         }
     }
@@ -1716,54 +1813,76 @@ fn extract_stage_capability_activity(
     source: StageCapabilityActivitySource<'_>,
 ) -> StageCapabilityActivityEvidence {
     let mut evidence = StageCapabilityActivityEvidence::default();
+    let tool_name = tool_name.trim().to_ascii_lowercase();
 
     match source {
         StageCapabilityActivitySource::ToolArgs(args) => {
-            if !tool_supports_stage_capability_activity_args(tool_name) {
+            if !tool_supports_stage_capability_activity_args(&tool_name) {
                 return evidence;
             }
 
-            evidence.push_agent(
-                args.get("subagent_type")
-                    .or_else(|| args.get("subagentType"))
-                    .or_else(|| args.get("agent"))
-                    .and_then(|value| value.as_str()),
-            );
-            evidence.push_category(args.get("category").and_then(|value| value.as_str()));
-            evidence.push_skills_from_array(
-                args.get("load_skills").or_else(|| args.get("loadedSkills")),
-            );
+            match tool_name.as_str() {
+                "task" => {
+                    let input = TaskToolInput::from_value(args);
+                    evidence.push_agent(input.subagent_type.as_deref());
+                    evidence.push_category(input.category.as_deref());
+                    evidence.push_skills(input.load_skills.as_deref());
+                }
+                "task_flow" => {
+                    let input = TaskFlowToolInput::from_value(args);
+                    evidence.push_agent(input.agent.as_deref());
+                    evidence.push_category(input.category.as_deref());
+                    evidence.push_skills(input.load_skills.as_deref());
+                }
+                _ => {}
+            }
         }
         StageCapabilityActivitySource::ToolOutput(tool_output) => {
             let Some(metadata) = tool_output.metadata.as_ref() else {
                 return evidence;
             };
-            if !tool_supports_stage_capability_activity_output(tool_name, metadata) {
+            if !tool_supports_stage_capability_activity_output(&tool_name, metadata) {
                 return evidence;
             }
 
+            #[derive(Debug, Default, Deserialize)]
+            struct StageCapabilityMetadataWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                agent: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                category: Option<String>,
+                #[serde(
+                    default,
+                    alias = "loadedSkills",
+                    alias = "load_skills",
+                    alias = "loadSkills",
+                    deserialize_with = "rocode_types::deserialize_opt_vec_string_lossy"
+                )]
+                loaded_skills: Option<Vec<String>>,
+                #[serde(default)]
+                task: Option<Box<StageCapabilityMetadataWire>>,
+            }
+
+            let wire = serde_json::from_value::<StageCapabilityMetadataWire>(metadata.clone())
+                .unwrap_or_default();
+
             evidence.push_agent(
-                metadata
-                    .get("agent")
-                    .and_then(|value| value.as_str())
-                    .or_else(|| {
-                        metadata
-                            .get("task")
-                            .and_then(|value| value.get("agent"))
-                            .and_then(|value| value.as_str())
-                    }),
+                wire.agent
+                    .as_deref()
+                    .or_else(|| wire.task.as_deref().and_then(|task| task.agent.as_deref())),
             );
-            evidence.push_category(metadata.get("category").and_then(|value| value.as_str()));
-            evidence.push_skills_from_array(
-                metadata
-                    .get("loadedSkills")
-                    .or_else(|| metadata.get("load_skills"))
-                    .or_else(|| {
-                        metadata
-                            .get("task")
-                            .and_then(|value| value.get("loadedSkills"))
-                    }),
-            );
+            evidence.push_category(wire.category.as_deref());
+            evidence.push_skills(wire.loaded_skills.as_deref().or_else(|| {
+                wire.task
+                    .as_deref()
+                    .and_then(|task| task.loaded_skills.as_deref())
+            }));
         }
     }
 
@@ -1778,13 +1897,29 @@ fn tool_supports_stage_capability_activity_output(
     tool_name: &str,
     metadata: &serde_json::Value,
 ) -> bool {
-    matches!(tool_name, "task" | "task_flow")
-        || metadata
-            .get("delegated")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-        || metadata.get("agentTaskId").is_some()
-        || metadata.get("task").is_some()
+    if matches!(tool_name, "task" | "task_flow") {
+        return true;
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct StageCapabilityOutputEvidenceWire {
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_bool_lossy")]
+        delegated: Option<bool>,
+        #[serde(
+            default,
+            alias = "agentTaskId",
+            alias = "agent_task_id",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        agent_task_id: Option<String>,
+        #[serde(default)]
+        task: Option<serde_json::Value>,
+    }
+
+    let wire = serde_json::from_value::<StageCapabilityOutputEvidenceWire>(metadata.clone())
+        .unwrap_or_default();
+
+    wire.delegated.unwrap_or(false) || wire.agent_task_id.is_some() || wire.task.is_some()
 }
 
 fn apply_stage_capability_activity_evidence(
@@ -1865,28 +2000,33 @@ fn summarize_generic_tool_args(tool_name: &str, tool_args: &serde_json::Value) -
 // ── Tool-specific activity summarizers ──────────────────────────────────
 
 fn summarize_bash_args(tool_args: &serde_json::Value) -> Option<String> {
-    let command = activity_extract_string(tool_args, &["command", "cmd", "script", "input"])?;
+    let input = CommandToolInput::from_value(tool_args);
+    let command = input.command?;
     Some(format!("Bash → $ {}", collapse_text(&command, 120)))
 }
 
 fn summarize_read_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let input = FilePathToolInput::from_value(tool_args);
+    let path = input.file_path?;
     Some(format!("Read → {path}"))
 }
 
 fn summarize_write_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let input = FilePathToolInput::from_value(tool_args);
+    let path = input.file_path?;
     Some(format!("Write ← {path}"))
 }
 
 fn summarize_edit_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let input = FilePathToolInput::from_value(tool_args);
+    let path = input.file_path?;
     Some(format!("Edit ← {path}"))
 }
 
 fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern"])?;
-    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    let input = GlobToolInput::from_value(tool_args);
+    let pattern = input.pattern?;
+    let target = input.path;
     let summary = match target {
         Some(path) => format!("Glob → \"{}\" in {}", pattern, path),
         None => format!("Glob → \"{}\"", pattern),
@@ -1895,8 +2035,9 @@ fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern", "query"])?;
-    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    let input = GrepToolInput::from_value(tool_args);
+    let pattern = input.pattern?;
+    let target = input.path;
     let summary = match target {
         Some(path) => format!("Grep → \"{}\" in {}", pattern, path),
         None => format!("Grep → \"{}\"", pattern),
@@ -1905,19 +2046,22 @@ fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_webfetch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let url = activity_extract_string(tool_args, &["url"])?;
+    let input = UrlToolInput::from_value(tool_args);
+    let url = input.url?;
     Some(format!("Web Fetch → {url}"))
 }
 
 fn summarize_search_args(tool_name: &str, tool_args: &serde_json::Value) -> Option<String> {
-    let query = activity_extract_string(tool_args, &["query"])?;
+    let input = QueryToolInput::from_value(tool_args);
+    let query = input.query?;
     let name = pretty_scheduler_stage_name(tool_name);
     Some(format!("{name} → \"{query}\""))
 }
 
 fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
-    let operation = activity_extract_string(tool_args, &["operation"])?;
-    let target = activity_extract_string(tool_args, &["filePath", "file_path", "path"]);
+    let input = LspToolInput::from_value(tool_args);
+    let operation = input.operation?;
+    let target = input.file_path;
     let summary = match target {
         Some(path) => format!("LSP → {} {}", operation, path),
         None => format!("LSP → {}", operation),
@@ -1926,49 +2070,54 @@ fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let calls = tool_args
-        .get("toolCalls")
-        .or_else(|| tool_args.get("tool_calls"))
-        .and_then(|v| v.as_array())?;
-    let count = calls.len();
-    let mut names: Vec<String> = calls
-        .iter()
-        .filter_map(|call| {
-            call.get("tool")
-                .or_else(|| call.get("name"))
-                .or_else(|| call.get("tool_name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .collect();
-    names.dedup();
-    if names.is_empty() {
+    let input = BatchToolInput::from_value(tool_args);
+    if input.tool_calls.is_empty() {
+        return None;
+    }
+
+    let count = input.tool_calls.len();
+    let mut seen = std::collections::HashSet::new();
+    let mut unique = Vec::new();
+    for call in &input.tool_calls {
+        let Some(name) = call
+            .tool_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        if seen.insert(name.to_string()) {
+            unique.push(name.to_string());
+        }
+    }
+
+    if unique.is_empty() {
         Some(format!("Batch → {} tools", count))
     } else {
-        Some(format!("Batch → {} tools ({})", count, names.join(", ")))
+        Some(format!("Batch → {} tools ({})", count, unique.join(", ")))
     }
 }
 
 fn summarize_skill_args(tool_args: &serde_json::Value) -> Option<String> {
-    let name = activity_extract_string(tool_args, &["name", "skill"])?;
+    let input = SkillToolInput::from_value(tool_args);
+    let name = input.name?;
     Some(format!("Skill → \"{}\"", name))
 }
 
 fn summarize_list_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
-    match path {
-        Some(path) => Some(format!("List → {path}")),
-        None => Some("List → .".to_string()),
-    }
+    let input = FilePathToolInput::from_value(tool_args);
+    input
+        .file_path
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|path| format!("List → {path}"))
+        .or_else(|| Some("List → .".to_string()))
 }
 
 fn summarize_notebook_edit_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(
-        tool_args,
-        &["notebook_path", "notebookPath", "path", "file_path"],
-    );
-    let mode = activity_extract_string(tool_args, &["edit_mode", "editMode"]);
-    let summary = match (path, mode) {
+    let input = NotebookEditToolInput::from_value(tool_args);
+    let summary = match (input.notebook_path, input.edit_mode) {
         (Some(path), Some(mode)) => format!("Notebook Edit → {} {}", mode, path),
         (Some(path), None) => format!("Notebook Edit → {}", path),
         (None, Some(mode)) => format!("Notebook Edit → {}", mode),
@@ -1978,20 +2127,6 @@ fn summarize_notebook_edit_args(tool_args: &serde_json::Value) -> Option<String>
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────
-
-/// Extract the first non-empty string value for any of the given keys.
-fn activity_extract_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
-    let object = value.as_object()?;
-    for key in keys {
-        if let Some(content) = object.get(*key).and_then(|v| v.as_str()) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
 
 /// Format an object's primitive fields as `key=value` pairs, omitting large
 /// text blobs to keep the summary readable.
@@ -2037,22 +2172,15 @@ fn format_activity_primitive_args(
 }
 
 fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    let fields = metadata?
-        .get("display.fields")
-        .and_then(|value| value.as_array())?;
-    if fields.is_empty() {
+    let display = DisplayOverrideMetadata::from_value(metadata?);
+    if display.fields.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Answered ({})", fields.len())];
-    for field in fields.iter().take(3) {
-        let key = field
-            .get("key")
-            .and_then(|value| value.as_str())
-            .unwrap_or("Question");
-        let value = field
-            .get("value")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
+    let mut lines = vec![format!("Answered ({})", display.fields.len())];
+    for field in display.fields.iter().take(3) {
+        let key = field.key.trim();
+        let key = if key.is_empty() { "Question" } else { key };
+        let value = field.value.as_deref().unwrap_or("");
         lines.push(format!(
             "- {}: {}",
             collapse_text(key, 48),
@@ -2063,22 +2191,25 @@ fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<Str
 }
 
 fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    let todos = metadata?.get("todos").and_then(|value| value.as_array())?;
-    if todos.is_empty() {
+    let list = TodoListMetadata::from_value(metadata?);
+    if list.todos.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Todo list ({})", todos.len())];
-    for todo in todos.iter().take(5) {
-        let content = todo.get("content").and_then(|value| value.as_str())?;
-        let status = todo
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pending");
+    let mut lines = vec![format!("Todo list ({})", list.todos.len())];
+    for todo in list.todos.iter().take(5) {
+        let content = todo.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let status = todo.status.as_deref().unwrap_or("pending");
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
             collapse_text(content, 88)
         ));
+    }
+    if lines.len() == 1 {
+        return None;
     }
     Some(lines.join("\n"))
 }
@@ -2101,28 +2232,22 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
 ) -> Option<Vec<rocode_session::TodoInfo>> {
-    let todos = tool_args.get("todos")?.as_array()?;
-    if todos.is_empty() {
+    let input = TodoWriteToolInput::from_value(tool_args);
+    if input.todos.is_empty() {
         return None;
     }
-    let items = todos
+    let items = input
+        .todos
         .iter()
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|v| v.as_str())?.to_string();
-            let status = todo
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("pending")
-                .to_string();
-            let priority = todo
-                .get("priority")
-                .and_then(|v| v.as_str())
-                .unwrap_or("medium")
-                .to_string();
+            let content = todo.content.trim();
+            if content.is_empty() {
+                return None;
+            }
             Some(rocode_session::TodoInfo {
-                content,
-                status,
-                priority,
+                content: content.to_string(),
+                status: todo.status.as_deref().unwrap_or("pending").to_string(),
+                priority: todo.priority.as_deref().unwrap_or("medium").to_string(),
             })
         })
         .collect::<Vec<_>>();
@@ -2575,7 +2700,7 @@ pub fn scheduler_stage_block_from_message(message: &SessionMessage) -> Option<Sc
 
     // Override title when from_metadata() produced an empty title (no ## heading).
     if block.title.is_empty() {
-        block.title = pretty_scheduler_stage_title(metadata, &block.stage);
+        block.title = pretty_scheduler_stage_title(block.profile.as_deref(), &block.stage);
     }
 
     // Enrich with decision block (requires full text + stage for contextual parsing).
@@ -2595,53 +2720,119 @@ fn scheduler_decision_block(
 fn decision_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionBlock> {
-    let kind = metadata
-        .get("scheduler_decision_kind")
-        .and_then(|value| value.as_str())?
-        .to_string();
-    let title = metadata
-        .get("scheduler_decision_title")
-        .and_then(|value| value.as_str())
-        .unwrap_or("Decision")
-        .to_string();
+    #[derive(Debug, Default, Deserialize)]
+    struct DecisionFieldWire {
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        tone: Option<String>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct DecisionSectionWire {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    fn deserialize_vec_lossy<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: serde::de::DeserializeOwned,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(serde_json::Value::Array(values)) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(values
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value::<T>(entry).ok())
+            .collect())
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct DecisionMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_decision_kind: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_decision_title: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
+        scheduler_decision_fields: Vec<DecisionFieldWire>,
+        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
+        scheduler_decision_sections: Vec<DecisionSectionWire>,
+        #[serde(default)]
+        scheduler_decision_spec: Option<serde_json::Value>,
+    }
+
+    let wire = serde_json::to_value(metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<DecisionMetadataWire>(value).ok())
+        .unwrap_or_default();
+
+    let kind = wire.scheduler_decision_kind?;
+    let title = wire
+        .scheduler_decision_title
+        .unwrap_or_else(|| "Decision".to_string());
+
+    let spec = wire
+        .scheduler_decision_spec
+        .and_then(|value| serde_json::from_value::<SchedulerDecisionRenderSpec>(value).ok())
+        .unwrap_or_else(default_decision_render_spec);
+
+    let fields = wire
+        .scheduler_decision_fields
+        .into_iter()
+        .filter_map(|field| {
+            Some(SchedulerDecisionField {
+                label: field.label?.trim().to_string(),
+                value: field.value?.trim().to_string(),
+                tone: field.tone.and_then(|value| {
+                    let trimmed = value.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                }),
+            })
+        })
+        .filter(|field| !field.label.is_empty() && !field.value.is_empty())
+        .collect::<Vec<_>>();
+
+    let sections = wire
+        .scheduler_decision_sections
+        .into_iter()
+        .filter_map(|section| {
+            Some(SchedulerDecisionSection {
+                title: section.title?.trim().to_string(),
+                body: section.body?.to_string(),
+            })
+        })
+        .filter(|section| !section.title.is_empty() && !section.body.is_empty())
+        .collect::<Vec<_>>();
+
     Some(SchedulerDecisionBlock {
         kind,
         title,
-        spec: decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec),
-        fields: metadata
-            .get("scheduler_decision_fields")
-            .and_then(|value| value.as_array())
-            .map(|fields| {
-                fields
-                    .iter()
-                    .filter_map(|field| {
-                        Some(SchedulerDecisionField {
-                            label: field.get("label")?.as_str()?.to_string(),
-                            value: field.get("value")?.as_str()?.to_string(),
-                            tone: field
-                                .get("tone")
-                                .and_then(|value| value.as_str())
-                                .map(|value| value.to_string()),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        sections: metadata
-            .get("scheduler_decision_sections")
-            .and_then(|value| value.as_array())
-            .map(|sections| {
-                sections
-                    .iter()
-                    .filter_map(|section| {
-                        Some(SchedulerDecisionSection {
-                            title: section.get("title")?.as_str()?.to_string(),
-                            body: section.get("body")?.as_str()?.to_string(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        spec,
+        fields,
+        sections,
     })
 }
 
@@ -2767,21 +2958,6 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
     }
 }
 
-fn decision_spec_from_metadata(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<SchedulerDecisionRenderSpec> {
-    let spec = metadata.get("scheduler_decision_spec")?;
-    Some(SchedulerDecisionRenderSpec {
-        version: spec.get("version")?.as_str()?.to_string(),
-        show_header_divider: spec.get("show_header_divider")?.as_bool()?,
-        field_order: spec.get("field_order")?.as_str()?.to_string(),
-        field_label_emphasis: spec.get("field_label_emphasis")?.as_str()?.to_string(),
-        status_palette: spec.get("status_palette")?.as_str()?.to_string(),
-        section_spacing: spec.get("section_spacing")?.as_str()?.to_string(),
-        update_policy: spec.get("update_policy")?.as_str()?.to_string(),
-    })
-}
-
 fn default_decision_render_spec() -> SchedulerDecisionRenderSpec {
     SchedulerDecisionRenderSpec {
         version: "decision-card/v1".to_string(),
@@ -2804,18 +2980,11 @@ fn scheduler_stage_body(text: &str) -> String {
     trimmed.to_string()
 }
 
-fn pretty_scheduler_stage_title(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-    stage: &str,
-) -> String {
+fn pretty_scheduler_stage_title(profile: Option<&str>, stage: &str) -> String {
     let stage_title = prettify_decision_value(stage);
-    match metadata
-        .get("resolved_scheduler_profile")
-        .or_else(|| metadata.get("scheduler_profile"))
-        .and_then(|value| value.as_str())
-    {
-        Some(profile) if !profile.is_empty() => format!("{profile} · {stage_title}"),
-        _ => stage_title,
+    match profile.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(profile) => format!("{profile} · {stage_title}"),
+        None => stage_title,
     }
 }
 
@@ -3630,15 +3799,15 @@ mod tests {
         let emitted_blocks = emitted.lock().expect("emitted blocks").clone();
 
         // Should emit reasoning start, delta, and end blocks
-        let reasoning_start = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::Start)
-        });
-        let reasoning_delta = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.text == "main session reasoning")
-        });
-        let reasoning_end = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::End)
-        });
+        let reasoning_start = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::Start),
+        );
+        let reasoning_delta = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.text == "main session reasoning"),
+        );
+        let reasoning_end = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::End),
+        );
 
         assert!(
             reasoning_start.is_some(),

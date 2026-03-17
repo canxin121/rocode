@@ -6,6 +6,11 @@ use crate::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
+use rocode_types::{
+    CommandToolInput, DisplayOverrideMetadata, FilePathToolInput, PatternToolInput,
+    QuestionToolInput, TodoListItem, TodoListMetadata, TodoStatus, TodoWriteItem,
+    TodoWriteToolInput,
+};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -267,43 +272,46 @@ fn apply_history_tool_call_display_override(
 ) {
     match tool_name {
         "question" => {
-            let Some(questions) = input.get("questions").and_then(|value| value.as_array()) else {
+            let input = QuestionToolInput::from_value(input);
+            if input.questions.is_empty() {
                 return;
             };
-            if questions.is_empty() {
-                return;
-            }
-            let summary = Some(if questions.len() == 1 {
+            let summary = Some(if input.questions.len() == 1 {
                 "1 question requested".to_string()
             } else {
-                format!("{} questions requested", questions.len())
+                format!("{} questions requested", input.questions.len())
             });
-            let fields = questions
+            let fields = input
+                .questions
                 .iter()
                 .enumerate()
                 .filter_map(|(index, item)| {
+                    let question = item.question.trim();
+                    if question.is_empty() {
+                        return None;
+                    }
                     let label = item
-                        .get("header")
-                        .and_then(|value| value.as_str())
+                        .header
+                        .as_deref()
                         .filter(|value| !value.trim().is_empty())
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("Question {}", index + 1));
-                    let question = item.get("question").and_then(|value| value.as_str())?;
                     Some(json!({
                         "label": label,
-                        "value": question,
+                        "value": question.to_string(),
                     }))
                 })
                 .collect::<Vec<_>>();
             apply_display_override(web, summary, fields, None);
         }
         "todowrite" | "todo_write" => {
-            let Some(todos) = input.get("todos").and_then(|value| value.as_array()) else {
+            let input = TodoWriteToolInput::from_value(input);
+            if input.todos.is_empty() {
                 return;
-            };
-            let summary = Some(format!("{} todo items proposed", todos.len()));
-            let fields = todo_summary_fields_from_array(todos);
-            let preview = todo_preview_from_array(todos);
+            }
+            let summary = Some(format!("{} todo items proposed", input.todos.len()));
+            let fields = todo_summary_fields_from_items(&input.todos);
+            let preview = todo_preview_from_items(&input.todos);
             apply_display_override(web, summary, fields, preview);
         }
         "todoread" | "todo_read" => {
@@ -326,42 +334,27 @@ fn apply_history_tool_result_display_override(
 ) {
     match tool_name {
         "question" => {
-            let summary = metadata
-                .get("display.summary")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-                .or_else(|| title.map(str::to_string));
-            let fields = metadata
-                .get("display.fields")
-                .and_then(|value| value.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|field| {
-                            Some(json!({
-                                "label": field.get("key")?.as_str()?,
-                                "value": field.get("value")?.as_str().unwrap_or(""),
-                            }))
-                        })
-                        .collect::<Vec<_>>()
+            let display = DisplayOverrideMetadata::from_map(metadata);
+            let summary = display.summary.or_else(|| title.map(str::to_string));
+            let fields = display
+                .fields
+                .iter()
+                .map(|field| {
+                    json!({
+                        "label": field.key.clone(),
+                        "value": field.value.clone().unwrap_or_default(),
+                    })
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             apply_display_override(web, summary, fields, None);
         }
         "todowrite" | "todo_write" | "todoread" | "todo_read" => {
-            let todos = metadata
-                .get("todos")
-                .and_then(|value| value.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let summary = title.map(str::to_string).or_else(|| {
-                metadata
-                    .get("count")
-                    .and_then(|value| value.as_u64())
-                    .map(|count| format!("{count} todo items"))
-            });
-            let fields = todo_summary_fields_from_array(&todos);
-            let preview = todo_preview_from_array(&todos);
+            let todo_meta = TodoListMetadata::from_map(metadata);
+            let summary = title
+                .map(str::to_string)
+                .or_else(|| todo_meta.count.map(|count| format!("{count} todo items")));
+            let fields = todo_summary_fields_from_items(&todo_meta.todos);
+            let preview = todo_preview_from_items(&todo_meta.todos);
             apply_display_override(web, summary, fields, preview);
         }
         _ => {}
@@ -435,7 +428,32 @@ fn apply_display_override(
     }
 }
 
-fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json::Value> {
+trait TodoItemLike {
+    fn content(&self) -> &str;
+    fn status(&self) -> Option<&str>;
+}
+
+impl TodoItemLike for TodoWriteItem {
+    fn content(&self) -> &str {
+        &self.content
+    }
+
+    fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+}
+
+impl TodoItemLike for TodoListItem {
+    fn content(&self) -> &str {
+        &self.content
+    }
+
+    fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+}
+
+fn todo_summary_fields_from_items<T: TodoItemLike>(todos: &[T]) -> Vec<serde_json::Value> {
     if todos.is_empty() {
         return Vec::new();
     }
@@ -443,14 +461,11 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
     let mut in_progress = 0_u64;
     let mut completed = 0_u64;
     for todo in todos {
-        match todo
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pending")
-        {
-            "completed" => completed += 1,
-            "in_progress" | "in-progress" | "in progress" => in_progress += 1,
-            _ => pending += 1,
+        match todo.status().map(rocode_types::parse_status) {
+            Some(TodoStatus::Completed) => completed += 1,
+            Some(TodoStatus::InProgress) => in_progress += 1,
+            Some(TodoStatus::Cancelled) => pending += 1,
+            Some(TodoStatus::Pending) | None => pending += 1,
         }
     }
     vec![
@@ -461,7 +476,7 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
     ]
 }
 
-fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Value> {
+fn todo_preview_from_items<T: TodoItemLike>(todos: &[T]) -> Option<serde_json::Value> {
     if todos.is_empty() {
         return None;
     }
@@ -469,11 +484,11 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         .iter()
         .take(8)
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|value| value.as_str())?;
-            let status = todo
-                .get("status")
-                .and_then(|value| value.as_str())
-                .unwrap_or("pending");
+            let content = todo.content().trim();
+            if content.is_empty() {
+                return None;
+            }
+            let status = todo.status().unwrap_or("pending");
             Some(format!("- [{}] {}", status, content))
         })
         .collect::<Vec<_>>();
@@ -497,24 +512,18 @@ fn extract_tool_input_structured(
 ) -> Option<ToolStructuredDetail> {
     match tool_name {
         "edit" | "multiedit" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = FilePathToolInput::from_value(input)
+                .file_path
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileEdit {
                 file_path,
                 diff_preview: None,
             })
         }
         "write" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = FilePathToolInput::from_value(input)
+                .file_path
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileWrite {
                 file_path,
                 bytes: None,
@@ -523,12 +532,9 @@ fn extract_tool_input_structured(
             })
         }
         "read" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = FilePathToolInput::from_value(input)
+                .file_path
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileRead {
                 file_path,
                 total_lines: None,
@@ -536,11 +542,9 @@ fn extract_tool_input_structured(
             })
         }
         "bash" => {
-            let command_preview = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let command_preview = CommandToolInput::from_value(input)
+                .command
+                .unwrap_or_default();
             Some(ToolStructuredDetail::BashExec {
                 command_preview,
                 exit_code: None,
@@ -549,11 +553,9 @@ fn extract_tool_input_structured(
             })
         }
         "grep" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let pattern = PatternToolInput::from_value(input)
+                .pattern
+                .unwrap_or_default();
             Some(ToolStructuredDetail::Search {
                 pattern,
                 matches: None,
@@ -561,11 +563,9 @@ fn extract_tool_input_structured(
             })
         }
         "glob" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let pattern = PatternToolInput::from_value(input)
+                .pattern
+                .unwrap_or_default();
             Some(ToolStructuredDetail::Search {
                 pattern,
                 matches: None,

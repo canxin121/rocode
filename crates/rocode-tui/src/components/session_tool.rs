@@ -4,6 +4,12 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use rocode_types::{
+    BatchToolInput, CommandToolInput, DisplayOverrideMetadata, FilePathToolInput, GlobToolInput,
+    GrepToolInput, LspToolInput, NotebookEditToolInput, QueryToolInput, QuestionToolInput,
+    QuestionToolResult, SkillToolInput, TaskToolInput, TodoWriteToolInput, UrlToolInput,
+};
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::markdown::MarkdownRenderer;
@@ -28,6 +34,168 @@ pub enum ToolState {
 
 /// Threshold: tool results longer than this are "block" tools with expandable output
 const BLOCK_RESULT_THRESHOLD: usize = 3;
+
+#[derive(Debug, Default, Deserialize)]
+struct DiffMetadataWire {
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl DiffMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EditResultMetadataWire {
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
+    replacements: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_vec_value_lossy"
+    )]
+    diagnostics: Vec<Value>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl EditResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PatchFileEntryWire {
+    Path(String),
+    Object(PatchFileObjectWire),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PatchFileObjectWire {
+    #[serde(
+        default,
+        alias = "relativePath",
+        alias = "path",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    relative_path: Option<String>,
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    change_type: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+fn deserialize_patch_files_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<PatchFileEntryWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(Value::Array(values)) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<PatchFileEntryWire>(value).ok())
+        .collect())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PatchResultMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_patch_files_lossy")]
+    files: Vec<PatchFileEntryWire>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_vec_value_lossy"
+    )]
+    diagnostics: Vec<Value>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl PatchResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskModelWire {
+    #[serde(
+        default,
+        alias = "providerID",
+        alias = "provider_id",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    provider_id: Option<String>,
+    #[serde(
+        default,
+        alias = "modelID",
+        alias = "model_id",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    model_id: Option<String>,
+}
+
+fn deserialize_opt_task_model_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<TaskModelWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value::<TaskModelWire>(value).ok()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskResultMetadataWire {
+    #[serde(
+        default,
+        alias = "hasTextOutput",
+        deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+    )]
+    has_text_output: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_task_model_lossy")]
+    model: Option<TaskModelWire>,
+}
+
+impl TaskResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 struct ReadSummary {
@@ -69,13 +237,11 @@ pub fn tool_glyph(name: &str) -> &'static str {
 fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
     // Check display.mode override from metadata
     if let Some(info) = result {
-        if let Some(mode) = info
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("display.mode"))
-            .and_then(|v| v.as_str())
-        {
-            return mode == "block";
+        if let Some(metadata) = info.metadata.as_ref() {
+            let display = DisplayOverrideMetadata::from_map(metadata);
+            if display.mode.as_deref() == Some("block") {
+                return true;
+            }
         }
     }
 
@@ -90,14 +256,10 @@ fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
     // edit/write tools with diff metadata are block-level
     if is_write_tool(&normalized) || is_edit_tool(&normalized) {
         if let Some(info) = result {
-            if info
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("diff"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|d| !d.is_empty())
-            {
-                return true;
+            if let Some(metadata) = info.metadata.as_ref() {
+                if DiffMetadataWire::from_map(metadata).diff.is_some() {
+                    return true;
+                }
             }
         }
     }
@@ -417,10 +579,10 @@ pub fn render_tool_call(
             let display_summary = info
                 .metadata
                 .as_ref()
-                .and_then(|m| m.get("display.summary"))
-                .and_then(|v| v.as_str());
+                .map(DisplayOverrideMetadata::from_map)
+                .and_then(|display| display.summary);
 
-            if let Some(summary) = display_summary {
+            if let Some(summary) = display_summary.as_deref() {
                 main_spans.push(Span::styled(
                     format!(" — {}", format_preview_line(summary, 80)),
                     Style::default().fg(theme.text_muted),
@@ -495,16 +657,13 @@ fn render_display_hints(
         Some(m) => m,
         None => return false,
     };
-
-    let has_fields = metadata.contains_key("display.fields");
-    let has_summary = metadata.contains_key("display.summary");
-
-    if !has_fields && !has_summary {
+    let display = DisplayOverrideMetadata::from_map(metadata);
+    if display.summary.is_none() && display.fields.is_empty() {
         return false;
     }
 
-    // Render display.summary as the summary line
-    if let Some(summary) = metadata.get("display.summary").and_then(|v| v.as_str()) {
+    // Render display.summary as the summary line.
+    if let Some(summary) = display.summary.as_deref() {
         lines.push(block_content_line(
             format_preview_line(summary, 96),
             Style::default().fg(theme.text_muted),
@@ -513,18 +672,19 @@ fn render_display_hints(
         ));
     }
 
-    // Render display.fields as key-value pairs
-    if let Some(fields) = metadata.get("display.fields").and_then(|v| v.as_array()) {
-        for field in fields {
-            let key = field.get("key").and_then(|v| v.as_str()).unwrap_or("?");
-            let value = field.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            lines.push(block_content_line(
-                format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
-                Style::default().fg(theme.text),
-                theme,
-                bg,
-            ));
+    // Render display.fields as key-value pairs.
+    for field in &display.fields {
+        let key = field.key.trim();
+        if key.is_empty() {
+            continue;
         }
+        let value = field.value.as_deref().unwrap_or("");
+        lines.push(block_content_line(
+            format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
+            Style::default().fg(theme.text),
+            theme,
+            bg,
+        ));
     }
 
     true
@@ -540,11 +700,11 @@ fn render_batch_result_block(
     lines: &mut Vec<Line<'static>>,
 ) {
     // Parse sub-tool names from arguments for labeling
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let calls = arg_parsed
+    let call_input = serde_json::from_str::<Value>(arguments)
+        .ok()
         .as_ref()
-        .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
-        .and_then(|v| v.as_array());
+        .map(BatchToolInput::from_value)
+        .unwrap_or_default();
 
     // Try to parse the result as JSON array.
     // The batch tool output is: "All N tools...\n\nResults:\n[{...}]"
@@ -553,18 +713,58 @@ fn render_batch_result_block(
         .find("Results:\n")
         .map(|pos| &result_text[pos + "Results:\n".len()..])
         .unwrap_or(result_text);
-    let result_parsed = serde_json::from_str::<Value>(json_text).ok();
-    let result_array = result_parsed.as_ref().and_then(|v| {
-        v.as_array()
-            .or_else(|| v.get("results").and_then(|r| r.as_array()))
-    });
+    #[derive(Debug, Default, Deserialize)]
+    struct BatchResultEntryWire {
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_bool_lossy")]
+        success: Option<bool>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        output: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        result: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        error: Option<String>,
+    }
 
-    if let Some(results) = result_array {
+    impl BatchResultEntryWire {
+        fn is_ok(&self) -> bool {
+            self.success.unwrap_or(true)
+        }
+
+        fn output_text(&self) -> &str {
+            self.output
+                .as_deref()
+                .or(self.result.as_deref())
+                .or(self.error.as_deref())
+                .unwrap_or("")
+        }
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct BatchResultWrapperWire {
+        #[serde(default)]
+        results: Vec<BatchResultEntryWire>,
+    }
+
+    let parsed_results = serde_json::from_str::<Vec<BatchResultEntryWire>>(json_text)
+        .ok()
+        .or_else(|| {
+            serde_json::from_str::<BatchResultWrapperWire>(json_text)
+                .ok()
+                .map(|wrapper| wrapper.results)
+        });
+
+    if let Some(results) = parsed_results.as_ref() {
         let total = results.len();
-        let ok_count = results
-            .iter()
-            .filter(|r| r.get("success").and_then(|v| v.as_bool()).unwrap_or(true))
-            .count();
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
         let fail_count = total - ok_count;
 
         // Summary line: "5 tools: 5 ok" or "5 tools: 3 ok, 2 failed"
@@ -591,21 +791,14 @@ fn render_batch_result_block(
 
         // Render each sub-tool as a mini entry
         for (i, result_entry) in results.iter().enumerate() {
-            let sub_name = calls
-                .and_then(|c| c.get(i))
-                .and_then(|c| {
-                    c.get("tool")
-                        .or_else(|| c.get("name"))
-                        .or_else(|| c.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                })
+            let sub_name = call_input
+                .tool_calls
+                .get(i)
+                .and_then(|call| call.tool_name.as_deref())
                 .unwrap_or("?");
             let sub_glyph = tool_glyph(sub_name);
 
-            let is_ok = result_entry
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let is_ok = result_entry.is_ok();
             let (icon, icon_color) = if is_ok {
                 ("●", theme.success)
             } else {
@@ -613,12 +806,7 @@ fn render_batch_result_block(
             };
 
             // Extract a short preview of the sub-tool result
-            let sub_result = result_entry
-                .get("output")
-                .or_else(|| result_entry.get("result"))
-                .or_else(|| result_entry.get("error"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let sub_result = result_entry.output_text();
             let first_line = sub_result
                 .lines()
                 .find(|l| !l.trim().is_empty())
@@ -643,18 +831,20 @@ fn render_batch_result_block(
             ];
 
             // Add sub-tool argument preview if available
-            if let Some(call_args) = calls.and_then(|c| c.get(i)) {
-                let sub_args_str = call_args.get("parameters").map(|v| v.to_string());
-                if let Some(ref args_json) = sub_args_str {
-                    let sub_normalized = normalize_tool_name(sub_name);
-                    if let Some(preview) = tool_argument_preview(&sub_normalized, args_json) {
-                        spans.push(Span::styled(
-                            format!("  {}", format_preview_line(&preview, 40)),
-                            Style::default().fg(theme.text_muted).bg(bg),
-                        ));
-                    }
+            if let Some(args_json) = call_input
+                .tool_calls
+                .get(i)
+                .and_then(|call| call.parameters.as_ref())
+                .map(ToString::to_string)
+            {
+                let sub_normalized = normalize_tool_name(sub_name);
+                if let Some(preview) = tool_argument_preview(&sub_normalized, &args_json) {
+                    spans.push(Span::styled(
+                        format!("  {}", format_preview_line(&preview, 40)),
+                        Style::default().fg(theme.text_muted).bg(bg),
+                    ));
                 }
-            }
+            };
 
             // Add result summary
             if !is_ok {
@@ -711,23 +901,13 @@ fn render_question_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Parse questions from arguments
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let questions = arg_parsed
-        .as_ref()
-        .and_then(|v| v.get("questions"))
-        .and_then(|v| v.as_array());
+    let args = QuestionToolInput::from_json_str(arguments);
+    let result = QuestionToolResult::from_json_str(result_text);
 
-    // Parse answers from result
-    let result_parsed = serde_json::from_str::<Value>(result_text).ok();
-    let answers = result_parsed
-        .as_ref()
-        .and_then(|v| v.get("answers"))
-        .and_then(|v| v.as_array());
-
-    if let Some(qs) = questions {
-        for (i, q) in qs.iter().enumerate() {
-            let q_text = q.get("question").and_then(|v| v.as_str()).unwrap_or("?");
+    if !args.questions.is_empty() {
+        for (i, q) in args.questions.iter().enumerate() {
+            let q_text = q.question.trim();
+            let q_text = if q_text.is_empty() { "?" } else { q_text };
             // Show question
             lines.push(block_content_line(
                 format!("Q: {}", format_preview_line(q_text, 88)),
@@ -736,11 +916,11 @@ fn render_question_result_block(
                 bg,
             ));
             // Show options if any
-            if let Some(opts) = q.get("options").and_then(|v| v.as_array()) {
-                for opt in opts.iter() {
-                    let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("?");
-                    let desc = opt.get("description").and_then(|v| v.as_str());
-                    let opt_text = match desc {
+            if !q.options.is_empty() {
+                for opt in &q.options {
+                    let label = opt.label.trim();
+                    let label = if label.is_empty() { "?" } else { label };
+                    let opt_text = match opt.description.as_deref() {
                         Some(d) => format!("  · {} — {}", label, format_preview_line(d, 64)),
                         None => format!("  · {}", label),
                     };
@@ -753,9 +933,11 @@ fn render_question_result_block(
                 }
             }
             // Show answer
-            let answer = answers
-                .and_then(|a| a.get(i))
-                .and_then(|v| v.as_str())
+            let answer = result
+                .answers
+                .get(i)
+                .map(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
                 .unwrap_or("(no answer)");
             lines.push(block_content_line(
                 format!("A: {}", format_preview_line(answer, 88)),
@@ -788,11 +970,15 @@ fn render_write_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let args_parsed = serde_json::from_str::<Value>(arguments).ok();
+    let raw_args = arguments.trim();
+    let args_parsed = serde_json::from_str::<Value>(raw_args)
+        .ok()
+        .or_else(|| rocode_util::json::try_parse_json_object_robust(raw_args));
     let write_summary = parse_write_summary(result_text);
     let write_path = args_parsed
         .as_ref()
-        .and_then(extract_path)
+        .map(FilePathToolInput::from_value)
+        .and_then(|input| input.file_path)
         .or_else(|| extract_jsonish_path_from_raw(arguments))
         .or_else(|| {
             write_summary
@@ -840,11 +1026,8 @@ fn render_write_result_block(
 
     if show_tool_details {
         // Render inline diff from metadata if available
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        let diff = metadata.and_then(|metadata| DiffMetadataWire::from_map(metadata).diff);
+        if let Some(diff_str) = diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -905,10 +1088,14 @@ fn render_edit_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let args_parsed = serde_json::from_str::<Value>(arguments).ok();
+    let raw_args = arguments.trim();
+    let args_parsed = serde_json::from_str::<Value>(raw_args)
+        .ok()
+        .or_else(|| rocode_util::json::try_parse_json_object_robust(raw_args));
     let edit_path = args_parsed
         .as_ref()
-        .and_then(extract_path)
+        .map(FilePathToolInput::from_value)
+        .and_then(|input| input.file_path)
         .or_else(|| extract_jsonish_path_from_raw(arguments));
 
     lines.push(block_content_line(
@@ -931,11 +1118,12 @@ fn render_edit_result_block(
         ));
     }
 
+    let wire = metadata
+        .map(EditResultMetadataWire::from_map)
+        .unwrap_or_default();
+
     // Show replacement count from metadata if available
-    if let Some(replacements) = metadata
-        .and_then(|m| m.get("replacements"))
-        .and_then(|v| v.as_u64())
-    {
+    if let Some(replacements) = wire.replacements {
         lines.push(block_content_line(
             format!("{} replacement(s)", replacements),
             Style::default().fg(theme.text_muted),
@@ -945,26 +1133,17 @@ fn render_edit_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get("diagnostics"))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !wire.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", wire.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        if let Some(diff_str) = wire.diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -987,21 +1166,22 @@ fn render_patch_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Extract file list from metadata
-    let files: Vec<String> = metadata
-        .and_then(|m| m.get("files"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|f| {
-                    // files metadata is array of objects with "path" key, or strings
-                    f.as_str()
-                        .map(String::from)
-                        .or_else(|| f.get("path").and_then(|p| p.as_str()).map(String::from))
-                })
-                .collect()
-        })
+    let wire = metadata
+        .map(PatchResultMetadataWire::from_map)
         .unwrap_or_default();
+
+    // Extract file list from metadata
+    let files: Vec<String> = wire
+        .files
+        .iter()
+        .filter_map(|file| match file {
+            PatchFileEntryWire::Path(path) => {
+                let trimmed = path.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            PatchFileEntryWire::Object(object) => object.relative_path.clone(),
+        })
+        .collect();
 
     lines.push(block_content_line(
         format!("✦ Patch Applied — {} file(s)", files.len().max(1)),
@@ -1031,49 +1211,38 @@ fn render_patch_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get("diagnostics"))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !wire.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", wire.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
         // Try per-file diffs first (richer display with headers)
-        let per_file_diffs: Vec<(String, String, String)> = metadata
-            .and_then(|m| m.get("files"))
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|f| {
-                        let path = f
-                            .get("relativePath")
-                            .or_else(|| f.get("path"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        let change_type = f
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("update")
-                            .to_string();
-                        let diff = f.get("diff").and_then(|v| v.as_str()).unwrap_or("");
-                        if diff.is_empty() {
-                            None
-                        } else {
-                            Some((path, change_type, diff.to_string()))
-                        }
-                    })
-                    .collect()
+        let per_file_diffs: Vec<(String, String, String)> = wire
+            .files
+            .iter()
+            .filter_map(|file| match file {
+                PatchFileEntryWire::Object(object) => {
+                    let path = object.relative_path.as_deref().unwrap_or("?").to_string();
+                    let change_type = object
+                        .change_type
+                        .as_deref()
+                        .unwrap_or("update")
+                        .to_string();
+                    let diff = object.diff.as_deref().unwrap_or("");
+                    if diff.is_empty() {
+                        None
+                    } else {
+                        Some((path, change_type, diff.to_string()))
+                    }
+                }
+                _ => None,
             })
-            .unwrap_or_default();
+            .collect();
 
         if !per_file_diffs.is_empty() {
             for (path, change_type, diff_str) in &per_file_diffs {
@@ -1091,11 +1260,7 @@ fn render_patch_result_block(
                 ));
                 render_inline_diff(diff_str, theme, bg, lines);
             }
-        } else if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        } else if let Some(diff_str) = wire.diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -1209,10 +1374,11 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
         return summary;
     };
 
-    summary.category = extract_string_key(value, &["category"]);
-    summary.subagent_type = extract_string_key(value, &["subagent_type", "subagentType"]);
-    summary.description = extract_string_key(value, &["description"]);
-    let prompt = extract_string_key(value, &["prompt"]);
+    let input = TaskToolInput::from_value(value);
+    summary.category = input.category;
+    summary.subagent_type = input.subagent_type;
+    summary.description = input.description;
+    let prompt = input.prompt;
     if let Some(prompt_text) = prompt.as_deref() {
         summary.checklist = parse_markdown_checklist(prompt_text)
             .into_iter()
@@ -1227,11 +1393,7 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
             .or_else(|| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
             .map(|line| format_preview_line(line, 88))
     });
-    summary.skill_count = value
-        .get("load_skills")
-        .or_else(|| value.get("loadSkills"))
-        .and_then(|v| v.as_array())
-        .map(Vec::len);
+    summary.skill_count = input.load_skills.as_ref().map(|skills| skills.len());
 
     summary
 }
@@ -1377,7 +1539,9 @@ fn render_task_result_block(
         ));
     }
     if let Some(meta) = metadata {
-        if let Some(has_text_output) = meta.get("hasTextOutput").and_then(|v| v.as_bool()) {
+        let wire = TaskResultMetadataWire::from_map(meta);
+
+        if let Some(has_text_output) = wire.has_text_output {
             lines.push(block_content_line(
                 format!(
                     "Text Output: {}",
@@ -1388,17 +1552,9 @@ fn render_task_result_block(
                 bg,
             ));
         }
-        if let Some(model) = meta.get("model").and_then(|v| v.as_object()) {
-            let provider = model
-                .get("providerID")
-                .or_else(|| model.get("provider_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let model_id = model
-                .get("modelID")
-                .or_else(|| model.get("model_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+        if let Some(model) = wire.model {
+            let provider = model.provider_id.unwrap_or_default();
+            let model_id = model.model_id.unwrap_or_default();
             if !provider.is_empty() || !model_id.is_empty() {
                 let rendered = if !provider.is_empty() && !model_id.is_empty() {
                     format!("{provider}:{model_id}")
@@ -1851,15 +2007,21 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     let object = parsed.as_ref().and_then(|v| v.as_object());
 
     if normalized_name == "bash" || normalized_name == "shell" {
-        let command = parsed
-            .as_ref()
-            .and_then(extract_shell_command)
-            .or_else(|| (!raw.is_empty()).then_some(raw.to_string()))?;
-        return Some(format!("$ {}", command.trim()));
+        if let Some(value) = parsed.as_ref() {
+            let input = CommandToolInput::from_value(value);
+            if let Some(command) = input.command {
+                return Some(format!("$ {}", command.trim()));
+            }
+        }
+        return (!raw.is_empty()).then(|| format!("$ {}", raw));
     }
 
     if matches!(normalized_name, "read" | "readfile" | "read_file") {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("→ {}", path));
         }
     }
@@ -1868,7 +2030,11 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         normalized_name,
         "list" | "ls" | "listdir" | "list_dir" | "list_directory"
     ) {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("→ {}", path));
         }
         return Some("→ .".to_string());
@@ -1878,7 +2044,11 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         normalized_name,
         "write" | "writefile" | "write_file" | "edit" | "editfile" | "edit_file"
     ) {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("← {}", path));
         }
         if let Some(path) = extract_jsonish_path_from_raw(raw) {
@@ -1887,37 +2057,35 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "glob" {
-        if let Some(pattern) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["pattern"]))
-        {
-            let target = parsed.as_ref().and_then(extract_path);
-            return Some(match target {
-                Some(path) => format!("\"{}\" in {}", pattern, path),
-                None => format!("\"{}\"", pattern),
-            });
+        if let Some(value) = parsed.as_ref() {
+            let input = GlobToolInput::from_value(value);
+            if let Some(pattern) = input.pattern {
+                return Some(match input.path {
+                    Some(path) => format!("\"{}\" in {}", pattern, path),
+                    None => format!("\"{}\"", pattern),
+                });
+            }
         }
     }
 
     if normalized_name == "grep" {
-        if let Some(pattern) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["pattern", "query"]))
-        {
-            let target = parsed.as_ref().and_then(extract_path);
-            return Some(match target {
-                Some(path) => format!("\"{}\" in {}", pattern, path),
-                None => format!("\"{}\"", pattern),
-            });
+        if let Some(value) = parsed.as_ref() {
+            let input = GrepToolInput::from_value(value);
+            if let Some(pattern) = input.pattern {
+                return Some(match input.path {
+                    Some(path) => format!("\"{}\" in {}", pattern, path),
+                    None => format!("\"{}\"", pattern),
+                });
+            }
         }
     }
 
     if matches!(normalized_name, "webfetch" | "web_fetch") {
-        if let Some(url) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["url"]))
-        {
-            return Some(url);
+        if let Some(value) = parsed.as_ref() {
+            let input = UrlToolInput::from_value(value);
+            if let Some(url) = input.url {
+                return Some(url);
+            }
         }
     }
 
@@ -1925,11 +2093,11 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         normalized_name,
         "codesearch" | "code_search" | "websearch" | "web_search"
     ) {
-        if let Some(query) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["query"]))
-        {
-            return Some(format!("\"{}\"", query));
+        if let Some(value) = parsed.as_ref() {
+            let input = QueryToolInput::from_value(value);
+            if let Some(query) = input.query {
+                return Some(format!("\"{}\"", query));
+            }
         }
     }
 
@@ -1956,29 +2124,29 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "batch" {
-        if let Some(calls) = parsed
-            .as_ref()
-            .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
-            .and_then(|v| v.as_array())
-        {
-            let count = calls.len();
-            let names: Vec<String> = calls
-                .iter()
-                .filter_map(|call| {
-                    call.get("tool")
-                        .or_else(|| call.get("name"))
-                        .or_else(|| call.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            // Deduplicate while preserving order
+        if let Some(value) = parsed.as_ref() {
+            let input = BatchToolInput::from_value(value);
+            let count = input.tool_calls.len();
+            if count == 0 {
+                return None;
+            }
+
             let mut seen = std::collections::HashSet::new();
-            let unique: Vec<&str> = names
-                .iter()
-                .filter(|n| seen.insert(n.as_str()))
-                .map(|n| n.as_str())
-                .collect();
+            let mut unique = Vec::new();
+            for call in &input.tool_calls {
+                let Some(name) = call
+                    .tool_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                else {
+                    continue;
+                };
+                if seen.insert(name.to_string()) {
+                    unique.push(name.to_string());
+                }
+            }
+
             return if unique.is_empty() {
                 Some(format!("{} tools", count))
             } else {
@@ -1988,37 +2156,37 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "question" {
-        if let Some(questions) = object
-            .and_then(|value| value.get("questions"))
-            .and_then(|value| value.as_array())
-        {
-            let count = questions.len();
-            // Show the first question text as preview
-            let first_q = questions
-                .first()
-                .and_then(|q| q.get("question").and_then(|v| v.as_str()));
-            return match first_q {
-                Some(text) if count == 1 => Some(format_preview_line(text, 72)),
-                Some(text) => Some(format!(
-                    "{} (+{} more)",
-                    format_preview_line(text, 52),
-                    count - 1
-                )),
-                None => Some(format!(
-                    "{} question{}",
-                    count,
-                    if count == 1 { "" } else { "s" }
-                )),
-            };
+        let args = parsed
+            .as_ref()
+            .map(QuestionToolInput::from_value)
+            .unwrap_or_default();
+        if args.questions.is_empty() {
+            return None;
         }
+        let count = args.questions.len();
+        let first = args.questions.first().map(|q| q.question.trim());
+        return match first {
+            Some(text) if !text.is_empty() && count == 1 => Some(format_preview_line(text, 72)),
+            Some(text) if !text.is_empty() => Some(format!(
+                "{} (+{} more)",
+                format_preview_line(text, 52),
+                count - 1
+            )),
+            _ => Some(format!(
+                "{} question{}",
+                count,
+                if count == 1 { "" } else { "s" }
+            )),
+        };
     }
 
     if matches!(normalized_name, "todowrite" | "todo_write") {
-        if let Some(count) = object
-            .and_then(|value| value.get("todos"))
-            .and_then(|value| value.as_array())
-            .map(Vec::len)
-        {
+        let args = parsed
+            .as_ref()
+            .map(TodoWriteToolInput::from_value)
+            .unwrap_or_default();
+        if !args.todos.is_empty() {
+            let count = args.todos.len();
             return Some(format!(
                 "Update {} todo{}",
                 count,
@@ -2029,11 +2197,11 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "skill" {
-        if let Some(name) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["name"]))
-        {
-            return Some(format!("\"{}\"", name));
+        if let Some(value) = parsed.as_ref() {
+            let input = SkillToolInput::from_value(value);
+            if let Some(name) = input.name {
+                return Some(format!("\"{}\"", name));
+            }
         }
     }
 
@@ -2042,17 +2210,29 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "lsp" {
-        if let Some(operation) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["operation"]))
-        {
-            let target = parsed
-                .as_ref()
-                .and_then(|value| extract_string_key(value, &["filePath", "file_path", "path"]));
-            return Some(match target {
-                Some(path) => format!("{} {}", operation, path),
-                None => operation,
-            });
+        if let Some(value) = parsed.as_ref() {
+            let input = LspToolInput::from_value(value);
+            if let Some(operation) = input.operation {
+                return Some(match input.file_path {
+                    Some(path) => format!("{} {}", operation, path),
+                    None => operation,
+                });
+            }
+        }
+    }
+
+    if matches!(normalized_name, "notebook_edit" | "notebookedit") {
+        if let Some(value) = parsed.as_ref() {
+            let input = NotebookEditToolInput::from_value(value);
+            let summary = match (input.notebook_path, input.edit_mode) {
+                (Some(path), Some(mode)) => format!("{} {}", mode, path),
+                (Some(path), None) => path,
+                (None, Some(mode)) => mode,
+                (None, None) => String::new(),
+            };
+            if !summary.trim().is_empty() {
+                return Some(summary);
+            }
         }
     }
 
@@ -2083,58 +2263,6 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     } else {
         Some(format_preview_line(first, 84))
     }
-}
-
-fn extract_shell_command(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    for key in ["command", "cmd", "script", "input", "text"] {
-        if let Some(command) = object.get(key).and_then(|v| v.as_str()) {
-            let trimmed = command.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn extract_path(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    for key in [
-        "path",
-        "file_path",
-        "filePath",
-        "file",
-        "filename",
-        "filepath",
-        "absolute_path",
-        "absolutePath",
-        "target",
-        "destination",
-        "to",
-        "from",
-    ] {
-        if let Some(path) = object.get(key).and_then(|v| v.as_str()) {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn extract_string_key(value: &Value, keys: &[&str]) -> Option<String> {
-    let object = value.as_object()?;
-    for key in keys {
-        if let Some(content) = object.get(*key).and_then(|value| value.as_str()) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn format_primitive_arguments(

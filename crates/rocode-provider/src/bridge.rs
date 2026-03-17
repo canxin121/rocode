@@ -22,6 +22,7 @@ use crate::provider::ProviderError;
 use crate::stream::{StreamEvent, StreamResult, StreamUsage};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use serde::Deserialize;
 use std::pin::Pin;
 
 /// Convert a single `StreamingEvent` into zero or more rocode `StreamEvent`s.
@@ -173,19 +174,17 @@ pub fn bridge_streaming_events(
 /// The `id` and `model` fields are populated from the raw response JSON
 /// if available (OpenAI format), or default to empty strings.
 pub fn driver_response_to_chat_response(resp: DriverResponse) -> ChatResponse {
-    let id = resp
-        .raw
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    #[derive(Debug, Default, Deserialize)]
+    struct DriverResponseRawWire {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+    }
 
-    let model = resp
-        .raw
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let raw = serde_json::from_value::<DriverResponseRawWire>(resp.raw.clone()).unwrap_or_default();
+    let id = raw.id.unwrap_or_default();
+    let model = raw.model.unwrap_or_default();
 
     let content = resp.content.unwrap_or_default();
 
@@ -514,41 +513,28 @@ fn chat_request_to_driver_messages(request: &crate::ChatRequest) -> Vec<DriverMe
 /// Handles both OpenAI format (`prompt_tokens`/`completion_tokens`)
 /// and Anthropic format (`input_tokens`/`output_tokens`).
 fn extract_usage(value: &serde_json::Value) -> StreamUsage {
-    let prompt = value
-        .get("prompt_tokens")
-        .or_else(|| value.get("input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    #[derive(Debug, Default, Deserialize)]
+    struct UsageWire {
+        #[serde(default, alias = "input_tokens")]
+        prompt_tokens: Option<u64>,
+        #[serde(default, alias = "output_tokens")]
+        completion_tokens: Option<u64>,
+        #[serde(default)]
+        reasoning_tokens: Option<u64>,
+        #[serde(default, alias = "cache_read_input_tokens")]
+        cache_read_tokens: Option<u64>,
+        #[serde(default, alias = "cache_creation_input_tokens")]
+        cache_write_tokens: Option<u64>,
+    }
 
-    let completion = value
-        .get("completion_tokens")
-        .or_else(|| value.get("output_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let reasoning = value
-        .get("reasoning_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let cache_read = value
-        .get("cache_read_input_tokens")
-        .or_else(|| value.get("cache_read_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let cache_write = value
-        .get("cache_creation_input_tokens")
-        .or_else(|| value.get("cache_write_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let wire = serde_json::from_value::<UsageWire>(value.clone()).unwrap_or_default();
 
     StreamUsage {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        reasoning_tokens: reasoning,
-        cache_read_tokens: cache_read,
-        cache_write_tokens: cache_write,
+        prompt_tokens: wire.prompt_tokens.unwrap_or(0),
+        completion_tokens: wire.completion_tokens.unwrap_or(0),
+        reasoning_tokens: wire.reasoning_tokens.unwrap_or(0),
+        cache_read_tokens: wire.cache_read_tokens.unwrap_or(0),
+        cache_write_tokens: wire.cache_write_tokens.unwrap_or(0),
     }
 }
 

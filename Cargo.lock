@@ -2973,6 +2973,7 @@ dependencies = [
  "rocode-content",
  "rocode-plugin",
  "rocode-tool",
+ "rocode-types",
  "serde",
  "serde_json",
  "tokio",

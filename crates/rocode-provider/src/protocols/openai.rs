@@ -823,6 +823,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
         crate::Content::Parts(parts) => {
             let mut text = String::new();
             let mut tool_calls = Vec::new();
+            let mut ids = Vec::new();
 
             for part in parts {
                 match part.content_type.as_str() {
@@ -838,6 +839,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                                 &tool_use.id,
                                 &tool_use.input,
                             );
+                            ids.push(tool_use.id.clone());
                             tool_calls.push(json!({
                                 "id": tool_use.id,
                                 "type": "function",
@@ -871,17 +873,6 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                 );
                 message.insert("tool_calls".to_string(), Value::Array(tool_calls));
             }
-            let ids = message
-                .get("tool_calls")
-                .and_then(|value| value.as_array())
-                .map(|calls| {
-                    calls
-                        .iter()
-                        .filter_map(|call| call.get("id").and_then(Value::as_str))
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
 
             (Value::Object(message), ids)
         }
@@ -1291,6 +1282,22 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
     // tool_calls keyed by index: (id, name, arguments)
     let mut tool_calls: HashMap<u32, (Option<String>, Option<String>, String)> = HashMap::new();
 
+    fn deserialize_opt_usage_lossy<'de, D>(deserializer: D) -> Result<Option<RawUsage>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(value.and_then(|value| serde_json::from_value::<RawUsage>(value).ok()))
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct OpenAiSseChunkWire {
+        #[serde(default)]
+        choices: Vec<crate::stream::OpenAIChoice>,
+        #[serde(default, deserialize_with = "deserialize_opt_usage_lossy")]
+        usage: Option<RawUsage>,
+    }
+
     for line in body.lines() {
         let line = line.trim();
         if !line.starts_with("data:") {
@@ -1300,50 +1307,64 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
         if data == "[DONE]" {
             break;
         }
-        let chunk: Value = match serde_json::from_str(data) {
+        let chunk: OpenAiSseChunkWire = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-            for choice in choices {
-                if let Some(delta) = choice.get("delta") {
-                    if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                        content.push_str(text);
-                    }
-                    // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
-                    let reasoning_val = delta
-                        .get("reasoning_content")
-                        .or_else(|| delta.get("reasoning_text"))
-                        .and_then(|v| v.as_str());
-                    if let Some(r) = reasoning_val {
-                        reasoning.push_str(r);
-                    }
-                    if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                        for tc in tcs {
-                            let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let entry =
-                                tool_calls.entry(idx).or_insert((None, None, String::new()));
-                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                entry.0 = Some(id.to_string());
+
+        for choice in chunk.choices {
+            if let Some(delta) = choice.delta {
+                if let Some(text) = delta.content.as_deref() {
+                    content.push_str(text);
+                }
+
+                // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
+                let reasoning_val = delta
+                    .reasoning_content
+                    .as_deref()
+                    .or(delta.reasoning_text.as_deref());
+                if let Some(text) = reasoning_val {
+                    reasoning.push_str(text);
+                }
+
+                if let Some(tool_calls_delta) = delta.tool_calls {
+                    for tc in tool_calls_delta {
+                        let idx = tc.index;
+                        let entry = tool_calls
+                            .entry(idx)
+                            .or_insert_with(|| (None, None, String::new()));
+
+                        if let Some(id) = tc.id {
+                            if !id.is_empty() {
+                                entry.0 = Some(id);
                             }
-                            if let Some(func) = tc.get("function") {
-                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                                    entry.1 = Some(name.to_string());
+                        }
+
+                        if let Some(function) = tc.function {
+                            if let Some(name) = function.name {
+                                if !name.is_empty() {
+                                    entry.1 = Some(name);
                                 }
-                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                                    entry.2.push_str(args);
+                            }
+                            if let Some(args) = function.arguments {
+                                if !args.is_empty() {
+                                    entry.2.push_str(&args);
                                 }
                             }
                         }
                     }
                 }
-                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                    finish_reason = Some(fr.to_string());
+            }
+
+            if let Some(fr) = choice.finish_reason {
+                if !fr.is_empty() {
+                    finish_reason = Some(fr);
                 }
             }
         }
-        if let Some(u) = chunk.get("usage") {
-            usage = serde_json::from_value(u.clone()).ok();
+
+        if chunk.usage.is_some() {
+            usage = chunk.usage;
         }
     }
 

@@ -404,105 +404,143 @@ impl SchedulerStageBlock {
         text: &str,
         metadata: &HashMap<String, serde_json::Value>,
     ) -> Option<Self> {
-        let stage = metadata.get("scheduler_stage")?.as_str()?.to_string();
-        let stage_id = metadata
-            .get("scheduler_stage_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let profile = metadata
-            .get("resolved_scheduler_profile")
-            .or_else(|| metadata.get("scheduler_profile"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let stage_index = metadata
-            .get("scheduler_stage_index")
-            .and_then(|v| v.as_u64());
-        let stage_total = metadata
-            .get("scheduler_stage_total")
-            .and_then(|v| v.as_u64());
-        let step = metadata
-            .get("scheduler_stage_step")
-            .and_then(|v| v.as_u64());
-        let status = metadata
-            .get("scheduler_stage_status")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let focus = metadata
-            .get("scheduler_stage_focus")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from);
-        let last_event = metadata
-            .get("scheduler_stage_last_event")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from);
-        let waiting_on = metadata
-            .get("scheduler_stage_waiting_on")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let activity = metadata
-            .get("scheduler_stage_activity")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from);
-        let loop_budget = metadata
-            .get("scheduler_stage_loop_budget")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let prompt_tokens = metadata
-            .get("scheduler_stage_prompt_tokens")
-            .and_then(|v| v.as_u64());
-        let completion_tokens = metadata
-            .get("scheduler_stage_completion_tokens")
-            .and_then(|v| v.as_u64());
-        let reasoning_tokens = metadata
-            .get("scheduler_stage_reasoning_tokens")
-            .and_then(|v| v.as_u64());
-        let cache_read_tokens = metadata
-            .get("scheduler_stage_cache_read_tokens")
-            .and_then(|v| v.as_u64());
-        let cache_write_tokens = metadata
-            .get("scheduler_stage_cache_write_tokens")
-            .and_then(|v| v.as_u64());
-        let child_session_id = metadata
-            .get("scheduler_stage_child_session_id")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from);
+        #[derive(Debug, Default, Deserialize)]
+        struct SchedulerStageMetadataWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            resolved_scheduler_profile: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_profile: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_index: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_total: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_step: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_status: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_focus: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_last_event: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_waiting_on: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_activity: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_loop_budget: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_prompt_tokens: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_completion_tokens: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_reasoning_tokens: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_cache_read_tokens: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_cache_write_tokens: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            scheduler_stage_child_session_id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            scheduler_stage_active_skills: Vec<String>,
+            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            scheduler_stage_active_agents: Vec<String>,
+            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            scheduler_stage_active_categories: Vec<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_available_skill_count: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_available_agent_count: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_available_category_count: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_done_agent_count: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            scheduler_stage_total_agent_count: Option<u64>,
+        }
 
-        let extract_string_array = |key: &str| -> Vec<String> {
-            metadata
-                .get(key)
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let active_skills = extract_string_array("scheduler_stage_active_skills");
-        let active_agents = extract_string_array("scheduler_stage_active_agents");
-        let active_categories = extract_string_array("scheduler_stage_active_categories");
+        fn deserialize_opt_string_trimmed<'de, D>(
+            deserializer: D,
+        ) -> Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(value)) => {
+                    let trimmed = value.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                }
+                Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+                Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+                _ => None,
+            })
+        }
 
-        let available_skill_count = metadata
-            .get("scheduler_stage_available_skill_count")
-            .and_then(|v| v.as_u64());
-        let available_agent_count = metadata
-            .get("scheduler_stage_available_agent_count")
-            .and_then(|v| v.as_u64());
-        let available_category_count = metadata
-            .get("scheduler_stage_available_category_count")
-            .and_then(|v| v.as_u64());
-        let done_agent_count = metadata
-            .get("scheduler_stage_done_agent_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        let total_agent_count = metadata
-            .get("scheduler_stage_total_agent_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Number(value)) => value.as_u64(),
+                Some(serde_json::Value::String(value)) => value.trim().parse().ok(),
+                _ => None,
+            })
+        }
+
+        fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(serde_json::Value::Array(values)) = value else {
+                return Ok(Vec::new());
+            };
+            Ok(values
+                .into_iter()
+                .filter_map(|value| value.as_str().map(String::from))
+                .collect())
+        }
+
+        let wire = serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<SchedulerStageMetadataWire>(value).ok())
+            .unwrap_or_default();
+
+        let stage = wire.scheduler_stage?;
+        let stage_id = wire.scheduler_stage_id;
+        let profile = wire.resolved_scheduler_profile.or(wire.scheduler_profile);
+        let stage_index = wire.scheduler_stage_index;
+        let stage_total = wire.scheduler_stage_total;
+        let step = wire.scheduler_stage_step;
+        let status = wire.scheduler_stage_status;
+        let focus = wire.scheduler_stage_focus;
+        let last_event = wire.scheduler_stage_last_event;
+        let waiting_on = wire.scheduler_stage_waiting_on;
+        let activity = wire.scheduler_stage_activity;
+        let loop_budget = wire.scheduler_stage_loop_budget;
+        let prompt_tokens = wire.scheduler_stage_prompt_tokens;
+        let completion_tokens = wire.scheduler_stage_completion_tokens;
+        let reasoning_tokens = wire.scheduler_stage_reasoning_tokens;
+        let cache_read_tokens = wire.scheduler_stage_cache_read_tokens;
+        let cache_write_tokens = wire.scheduler_stage_cache_write_tokens;
+        let child_session_id = wire.scheduler_stage_child_session_id;
+
+        let active_skills = wire.scheduler_stage_active_skills;
+        let active_agents = wire.scheduler_stage_active_agents;
+        let active_categories = wire.scheduler_stage_active_categories;
+
+        let available_skill_count = wire.scheduler_stage_available_skill_count;
+        let available_agent_count = wire.scheduler_stage_available_agent_count;
+        let available_category_count = wire.scheduler_stage_available_category_count;
+        let done_agent_count = wire.scheduler_stage_done_agent_count.unwrap_or(0) as u32;
+        let total_agent_count = wire.scheduler_stage_total_agent_count.unwrap_or(0) as u32;
 
         let (title, body) = if let Some(rest) = text.trim().strip_prefix("## ") {
             if let Some((heading, after)) = rest.split_once('\n') {
