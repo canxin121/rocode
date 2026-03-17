@@ -137,6 +137,17 @@ struct SessionEventFieldWire {
     tone: Option<String>,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
 fn deserialize_session_event_fields_lossy<'de, D>(
     deserializer: D,
 ) -> Result<Vec<SessionEventFieldWire>, D::Error>
@@ -160,6 +171,18 @@ struct QueueItemWire {
     position: usize,
     #[serde(default)]
     text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RemoteSseEnvelope {
+    #[serde(default, rename = "type")]
+    event_type: Option<String>,
+    #[serde(default)]
+    block: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    error: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
 }
 
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
@@ -406,13 +429,16 @@ async fn dispatch_remote_sse_event(
 
     let parsed: serde_json::Value =
         serde_json::from_str(&data).unwrap_or_else(|_| serde_json::json!({ "raw": data }));
+    let envelope = serde_json::from_value::<RemoteSseEnvelope>(parsed.clone()).unwrap_or_default();
+    let RemoteSseEnvelope {
+        event_type: envelope_type,
+        block,
+        error,
+        message,
+    } = envelope;
     let event_type = event_name
-        .or_else(|| {
-            parsed
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+        .filter(|name| !name.trim().is_empty())
+        .or(envelope_type)
         .unwrap_or_else(|| "message".to_string());
 
     if event_type == "config.updated" {
@@ -452,7 +478,7 @@ async fn dispatch_remote_sse_event(
     }
 
     if event_type == "output_block" {
-        let payload = parsed.get("block").unwrap_or(&parsed);
+        let payload = block.as_ref().unwrap_or(&parsed);
         if let Some(block) = parse_output_block(payload) {
             if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking.load(Ordering::SeqCst) {
                 return Ok(());
@@ -465,12 +491,10 @@ async fn dispatch_remote_sse_event(
     }
 
     if event_type.as_str() == "error" {
-        let message = parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
-            .unwrap_or("unknown remote stream error");
-        eprintln!("\nError: {}", message);
+        let message = error
+            .or(message)
+            .unwrap_or_else(|| "unknown remote stream error".to_string());
+        eprintln!("\nError: {message}");
     }
     Ok(())
 }
