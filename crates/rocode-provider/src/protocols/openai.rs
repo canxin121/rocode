@@ -488,104 +488,97 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
         return events;
     }
 
-    let chunk: Value = match serde_json::from_str(data) {
+    let chunk: crate::stream::OpenAISSEvent = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(_) => return events,
     };
 
-    let usage = chunk.get("usage");
-    let prompt_tokens = usage
-        .and_then(|u| u.get("prompt_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let completion_tokens = usage
-        .and_then(|u| u.get("completion_tokens"))
-        .and_then(Value::as_u64)
+    let prompt_tokens = chunk.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+    let completion_tokens = chunk
+        .usage
+        .as_ref()
+        .map(|u| u.completion_tokens)
         .unwrap_or(0);
 
-    if usage.is_some() {
+    if chunk.usage.is_some() {
         events.push(StreamEvent::Usage {
             prompt_tokens,
             completion_tokens,
         });
     }
 
-    if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-        for choice in choices {
-            if let Some(delta) = choice.get("delta") {
-                let reasoning = delta
-                    .get("reasoning_content")
-                    .or_else(|| delta.get("reasoning_text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+    for choice in chunk.choices {
+        if let Some(delta) = choice.delta {
+            let reasoning = delta
+                .reasoning_content
+                .as_deref()
+                .or(delta.reasoning_text.as_deref())
+                .unwrap_or_default();
 
-                if !reasoning.is_empty() {
-                    if !state.reasoning_open {
-                        state.reasoning_open = true;
-                        events.push(StreamEvent::ReasoningStart {
-                            id: "reasoning-0".to_string(),
-                        });
-                    }
-                    events.push(StreamEvent::ReasoningDelta {
+            if !reasoning.is_empty() {
+                if !state.reasoning_open {
+                    state.reasoning_open = true;
+                    events.push(StreamEvent::ReasoningStart {
                         id: "reasoning-0".to_string(),
-                        text: reasoning.to_string(),
                     });
                 }
+                events.push(StreamEvent::ReasoningDelta {
+                    id: "reasoning-0".to_string(),
+                    text: reasoning.to_string(),
+                });
+            }
 
-                if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                    if !text.is_empty() {
-                        if state.reasoning_open {
-                            state.reasoning_open = false;
-                            events.push(StreamEvent::ReasoningEnd {
-                                id: "reasoning-0".to_string(),
-                            });
-                        }
-                        events.push(StreamEvent::TextDelta(text.to_string()));
-                    }
-                }
-
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-                    if !tool_calls.is_empty() && state.reasoning_open {
+            if let Some(text) = delta.content.as_deref() {
+                if !text.is_empty() {
+                    if state.reasoning_open {
                         state.reasoning_open = false;
                         events.push(StreamEvent::ReasoningEnd {
                             id: "reasoning-0".to_string(),
                         });
                     }
-                    for tc in tool_calls {
-                        let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
-                        let id = if let Some(id) = tc
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                        {
-                            let id = id.to_string();
-                            state.tool_call_ids.insert(index, id.clone());
-                            id
-                        } else {
-                            state
-                                .tool_call_ids
-                                .entry(index)
-                                .or_insert_with(|| format!("tool-call-{}", index))
-                                .clone()
-                        };
+                    events.push(StreamEvent::TextDelta(text.to_string()));
+                }
+            }
 
-                        if let Some(func) = tc.get("function") {
-                            if let Some(name) = func.get("name").and_then(Value::as_str) {
-                                let should_emit_start = state
-                                    .tool_call_names
-                                    .get(&index)
-                                    .map(|existing| existing != name)
-                                    .unwrap_or(true);
-                                state.tool_call_names.insert(index, name.to_string());
-                                if should_emit_start {
-                                    events.push(StreamEvent::ToolCallStart {
-                                        id: id.clone(),
-                                        name: name.to_string(),
-                                    });
-                                }
+            if let Some(tool_calls) = delta.tool_calls {
+                if !tool_calls.is_empty() && state.reasoning_open {
+                    state.reasoning_open = false;
+                    events.push(StreamEvent::ReasoningEnd {
+                        id: "reasoning-0".to_string(),
+                    });
+                }
+                for tc in tool_calls {
+                    let index = tc.index;
+                    let id = if let Some(id) = tc.id.as_deref().filter(|s| !s.is_empty()) {
+                        let id = id.to_string();
+                        state.tool_call_ids.insert(index, id.clone());
+                        id
+                    } else {
+                        state
+                            .tool_call_ids
+                            .entry(index)
+                            .or_insert_with(|| format!("tool-call-{}", index))
+                            .clone()
+                    };
+
+                    if let Some(func) = tc.function {
+                        if let Some(name) = func.name.as_deref() {
+                            let should_emit_start = state
+                                .tool_call_names
+                                .get(&index)
+                                .map(|existing| existing != name)
+                                .unwrap_or(true);
+                            state.tool_call_names.insert(index, name.to_string());
+                            if should_emit_start {
+                                events.push(StreamEvent::ToolCallStart {
+                                    id: id.clone(),
+                                    name: name.to_string(),
+                                });
                             }
+                        }
 
-                            if let Some(arguments) = func.get("arguments").and_then(Value::as_str) {
+                        match &func.arguments {
+                            Some(Value::String(arguments)) => {
                                 if !arguments.is_empty() {
                                     tracing::info!(
                                         tool_call_id = %id,
@@ -598,7 +591,8 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                         input: arguments.to_string(),
                                     });
                                 }
-                            } else if let Some(arguments_value) = func.get("arguments") {
+                            }
+                            Some(arguments_value @ Value::Object(_)) => {
                                 // LiteLLM or other proxies may send arguments as a JSON
                                 // object instead of a string. Handle this case.
                                 tracing::info!(
@@ -607,9 +601,7 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                     arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
                                     "[DIAG-SSE] arguments field is NOT a string"
                                 );
-                                if arguments_value.is_object()
-                                    && !arguments_value.as_object().is_none_or(|o| o.is_empty())
-                                {
+                                if !arguments_value.as_object().is_none_or(|o| o.is_empty()) {
                                     let serialized = arguments_value.to_string();
                                     events.push(StreamEvent::ToolCallDelta {
                                         id,
@@ -617,33 +609,42 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                     });
                                 }
                             }
+                            Some(arguments_value) => {
+                                tracing::info!(
+                                    tool_call_id = %id,
+                                    arguments_type = %if arguments_value.is_object() { "object" } else if arguments_value.is_null() { "null" } else { "other" },
+                                    arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
+                                    "[DIAG-SSE] arguments field is NOT a string"
+                                );
+                            }
+                            None => {}
                         }
                     }
                 }
             }
+        }
 
-            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-                if state.reasoning_open {
-                    state.reasoning_open = false;
-                    events.push(StreamEvent::ReasoningEnd {
-                        id: "reasoning-0".to_string(),
-                    });
-                }
-                let normalized_reason = if reason == "tool_calls" {
-                    "tool-calls".to_string()
-                } else {
-                    reason.to_string()
-                };
-                events.push(StreamEvent::FinishStep {
-                    finish_reason: Some(normalized_reason),
-                    usage: crate::stream::StreamUsage {
-                        prompt_tokens,
-                        completion_tokens,
-                        ..Default::default()
-                    },
-                    provider_metadata: None,
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            if state.reasoning_open {
+                state.reasoning_open = false;
+                events.push(StreamEvent::ReasoningEnd {
+                    id: "reasoning-0".to_string(),
                 });
             }
+            let normalized_reason = if reason == "tool_calls" {
+                "tool-calls".to_string()
+            } else {
+                reason.to_string()
+            };
+            events.push(StreamEvent::FinishStep {
+                finish_reason: Some(normalized_reason),
+                usage: crate::stream::StreamUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    ..Default::default()
+                },
+                provider_metadata: None,
+            });
         }
     }
 
@@ -1347,8 +1348,27 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
                                 }
                             }
                             if let Some(args) = function.arguments {
-                                if !args.is_empty() {
-                                    entry.2.push_str(&args);
+                                match args {
+                                    Value::String(raw) => {
+                                        if !raw.is_empty() {
+                                            entry.2.push_str(&raw);
+                                        }
+                                    }
+                                    Value::Object(obj) => {
+                                        if !obj.is_empty() {
+                                            entry.2.push_str(&Value::Object(obj).to_string());
+                                        }
+                                    }
+                                    Value::Array(arr) => {
+                                        if !arr.is_empty() {
+                                            entry.2.push_str(&Value::Array(arr).to_string());
+                                        }
+                                    }
+                                    other => {
+                                        if !other.is_null() {
+                                            entry.2.push_str(&other.to_string());
+                                        }
+                                    }
                                 }
                             }
                         }

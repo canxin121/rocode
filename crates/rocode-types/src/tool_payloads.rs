@@ -23,6 +23,25 @@ where
     })
 }
 
+/// Deserialize an optional string from a JSON value, preserving whitespace and empties.
+///
+/// - Does **not** trim.
+/// - Returns `Some("")` for empty strings.
+/// - Coerces number/bool to string (for robustness).
+pub fn deserialize_opt_string_preserve<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
 /// Deserialize an optional boolean from a JSON value, accepting bool/number/string.
 ///
 /// Accepted string values (case-insensitive): true/false, 1/0, yes/no, on/off.
@@ -466,7 +485,8 @@ pub struct FilePathToolInput {
         alias = "target",
         alias = "destination",
         alias = "to",
-        alias = "from"
+        alias = "from",
+        deserialize_with = "deserialize_opt_string_lossy"
     )]
     pub file_path: Option<String>,
 }
@@ -628,9 +648,127 @@ pub struct GrepToolInput {
         deserialize_with = "deserialize_opt_string_lossy"
     )]
     pub path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    pub glob: Option<String>,
+    #[serde(
+        default,
+        alias = "ignoreCase",
+        alias = "ignore_case",
+        deserialize_with = "deserialize_opt_bool_lossy"
+    )]
+    pub ignore_case: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    pub hidden: Option<bool>,
 }
 
 impl GrepToolInput {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReadToolInput {
+    #[serde(
+        default,
+        alias = "filePath",
+        alias = "file_path",
+        alias = "filepath",
+        alias = "path",
+        deserialize_with = "deserialize_opt_string_preserve"
+    )]
+    pub file_path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    pub offset: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    pub limit: Option<u64>,
+}
+
+impl ReadToolInput {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WriteToolInput {
+    #[serde(
+        default,
+        alias = "filePath",
+        alias = "file_path",
+        alias = "filepath",
+        alias = "path",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    pub file_path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
+    pub content: Option<String>,
+}
+
+impl WriteToolInput {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EditToolInput {
+    #[serde(
+        default,
+        alias = "filePath",
+        alias = "file_path",
+        alias = "filepath",
+        alias = "path",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    pub file_path: Option<String>,
+    #[serde(
+        default,
+        alias = "oldString",
+        alias = "old_string",
+        deserialize_with = "deserialize_opt_string_preserve"
+    )]
+    pub old_string: Option<String>,
+    #[serde(
+        default,
+        alias = "newString",
+        alias = "new_string",
+        deserialize_with = "deserialize_opt_string_preserve"
+    )]
+    pub new_string: Option<String>,
+    #[serde(
+        default,
+        alias = "replaceAll",
+        alias = "replace_all",
+        deserialize_with = "deserialize_opt_bool_lossy"
+    )]
+    pub replace_all: Option<bool>,
+}
+
+impl EditToolInput {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BashToolInput {
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
+    pub command: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    pub timeout: Option<u64>,
+    #[serde(
+        default,
+        alias = "cwd",
+        alias = "dir",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    pub workdir: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
+    pub description: Option<String>,
+}
+
+impl BashToolInput {
     pub fn from_value(value: &Value) -> Self {
         serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
     }

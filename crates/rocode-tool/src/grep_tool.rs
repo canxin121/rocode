@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::GrepToolInput;
 
 const MAX_LINE_LENGTH: usize = 2000;
 
@@ -79,25 +80,15 @@ impl Tool for GrepTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args["pattern"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
-            .to_string();
+        let input = GrepToolInput::from_value(&args);
+        let pattern = input
+            .pattern
+            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?;
 
-        let search_path: String = args["path"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
-
-        let glob_filter: Option<String> = args["glob"].as_str().map(|s| s.to_string());
-
-        let ignore_case: bool = args
-            .get("ignore_case")
-            .or_else(|| args.get("ignoreCase"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let include_hidden: bool = args["hidden"].as_bool().unwrap_or(false);
+        let search_path = input.path.unwrap_or_else(|| ctx.directory.clone());
+        let glob_filter = input.glob;
+        let ignore_case = input.ignore_case.unwrap_or(false);
+        let include_hidden = input.hidden.unwrap_or(false);
 
         let base_dir = if search_path.is_empty() {
             &self.directory

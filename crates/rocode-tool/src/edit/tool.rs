@@ -5,6 +5,7 @@ use tokio::fs;
 use super::replacers::CompositeReplacer;
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{with_file_lock, Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::EditToolInput;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -67,39 +68,21 @@ impl Tool for EditTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("file_path (or filePath) is required".into())
-            })?
-            .trim()
-            .to_string();
+        let input = EditToolInput::from_value(&args);
 
-        let old_string: String = args
-            .get("old_string")
-            .or_else(|| args.get("oldString"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("old_string (or oldString) is required".into())
-            })?
-            .to_string();
+        let file_path = input.file_path.ok_or_else(|| {
+            ToolError::InvalidArguments("file_path (or filePath) is required".into())
+        })?;
 
-        let new_string: String = args
-            .get("new_string")
-            .or_else(|| args.get("newString"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("new_string (or newString) is required".into())
-            })?
-            .to_string();
+        let old_string = input.old_string.ok_or_else(|| {
+            ToolError::InvalidArguments("old_string (or oldString) is required".into())
+        })?;
 
-        let replace_all = args
-            .get("replace_all")
-            .or_else(|| args.get("replaceAll"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let new_string = input.new_string.ok_or_else(|| {
+            ToolError::InvalidArguments("new_string (or newString) is required".into())
+        })?;
+
+        let replace_all = input.replace_all.unwrap_or(false);
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory

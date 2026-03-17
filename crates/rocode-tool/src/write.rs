@@ -4,6 +4,7 @@ use tokio::fs;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::WriteToolInput;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -60,20 +61,13 @@ impl Tool for WriteTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("file_path (or filePath) is required".into())
-            })?
-            .trim()
-            .to_string();
-
-        let content: String = args["content"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?
-            .to_string();
+        let input = WriteToolInput::from_value(&args);
+        let file_path = input.file_path.ok_or_else(|| {
+            ToolError::InvalidArguments("file_path (or filePath) is required".into())
+        })?;
+        let content = input
+            .content
+            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory

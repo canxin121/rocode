@@ -5,6 +5,7 @@ use walkdir::WalkDir;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::ReadToolInput;
 
 const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
@@ -82,19 +83,13 @@ impl Tool for ReadTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .or_else(|| args.get("filepath"))
-            .or_else(|| args.get("path"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(format!(
-                    "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
-                    serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
-                ))
-            })?
-            .to_string();
+        let input = ReadToolInput::from_value(&args);
+        let file_path = input
+            .file_path
+            .ok_or_else(|| ToolError::InvalidArguments(format!(
+                "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
+                serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
+            )))?;
         let file_path = file_path.trim().to_string();
         if file_path.is_empty() {
             return Err(ToolError::InvalidArguments(
@@ -103,9 +98,9 @@ impl Tool for ReadTool {
             ));
         }
 
-        let offset: usize = args["offset"].as_u64().unwrap_or(1) as usize;
+        let offset: usize = input.offset.unwrap_or(1) as usize;
 
-        let limit: usize = args["limit"].as_u64().unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
+        let limit: usize = input.limit.unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
 
         if offset < 1 {
             return Err(ToolError::InvalidArguments("offset must be >= 1".into()));

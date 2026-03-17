@@ -3293,6 +3293,7 @@ dependencies = [
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
+ "rocode-types",
  "rocode-util",
  "serde",
  "serde_json",

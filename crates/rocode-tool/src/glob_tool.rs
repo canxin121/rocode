@@ -4,6 +4,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::GlobToolInput;
 
 pub struct GlobTool {
     directory: PathBuf,
@@ -55,15 +56,11 @@ impl Tool for GlobTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args["pattern"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
-            .to_string();
-
-        let search_path: String = args["path"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
+        let input = GlobToolInput::from_value(&args);
+        let pattern = input
+            .pattern
+            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?;
+        let search_path = input.path.unwrap_or_else(|| ctx.directory.clone());
 
         let base_dir = if search_path.is_empty() {
             &self.directory

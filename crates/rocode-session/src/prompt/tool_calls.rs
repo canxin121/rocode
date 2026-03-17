@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{PartType, Session, SessionMessage};
+use serde::Deserialize;
 
 use super::SessionPrompt;
 
@@ -163,44 +164,64 @@ impl SessionPrompt {
         Option<Vec<serde_json::Value>>,
         Option<Vec<crate::message_v2::FilePart>>,
     ) {
+        #[derive(Debug, Deserialize, Default)]
+        struct AttachmentWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            mime: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            url: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            filename: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            id: Option<String>,
+            #[serde(
+                default,
+                alias = "sessionID",
+                alias = "session_id",
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            session_id: Option<String>,
+            #[serde(
+                default,
+                alias = "messageID",
+                alias = "message_id",
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            message_id: Option<String>,
+        }
+
         let mut normalized_json = Vec::new();
         let mut normalized_files = Vec::new();
 
         for value in raw_attachments.unwrap_or_default() {
-            let Some(obj) = value.as_object() else {
+            let Ok(wire) = serde_json::from_value::<AttachmentWire>(value) else {
+                continue;
+            };
+            let Some(mime) = wire.mime.as_deref() else {
+                continue;
+            };
+            let Some(url) = wire.url.as_deref() else {
                 continue;
             };
 
-            let Some(mime) = obj.get("mime").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let Some(url) = obj.get("url").and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            let filename = obj
-                .get("filename")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string);
-            let id = obj
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string)
-                .unwrap_or_else(|| {
-                    rocode_core::id::create(rocode_core::id::Prefix::Part, true, None)
-                });
-            let normalized_session_id = obj
-                .get("sessionID")
-                .or_else(|| obj.get("session_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(session_id)
-                .to_string();
-            let normalized_message_id = obj
-                .get("messageID")
-                .or_else(|| obj.get("message_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(message_id)
-                .to_string();
+            let filename = wire.filename.clone();
+            let id = wire.id.unwrap_or_else(|| {
+                rocode_core::id::create(rocode_core::id::Prefix::Part, true, None)
+            });
+            let normalized_session_id = wire.session_id.unwrap_or_else(|| session_id.to_string());
+            let normalized_message_id = wire.message_id.unwrap_or_else(|| message_id.to_string());
 
             let mut normalized = serde_json::Map::new();
             normalized.insert("type".to_string(), serde_json::json!("file"));
@@ -316,19 +337,18 @@ impl SessionPrompt {
         }
 
         if let Some(obj) = input.as_object() {
-            let file_path = obj
-                .get("file_path")
-                .or_else(|| obj.get("filePath"))
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let content = obj.get("content").and_then(|v| v.as_str());
-            if file_path.is_some() && content.is_some() {
+            let wire = rocode_types::WriteToolInput::from_value(input);
+            let has_file_path = wire
+                .file_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty());
+            let has_content = wire.content.is_some();
+            if has_file_path && has_content {
                 return None;
             }
 
             let keys = obj.keys().cloned().collect::<Vec<_>>();
-            let mut payload = if file_path.is_none() {
+            let mut payload = if !has_file_path {
                 Self::invalid_tool_payload(
                     "write",
                     "The write tool was called without file_path/filePath. Provide both file_path and content.",
