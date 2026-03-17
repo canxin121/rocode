@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 use crate::{PartType, Session, SessionMessage};
 
 use super::SessionPrompt;
@@ -163,42 +165,64 @@ impl SessionPrompt {
         Option<Vec<serde_json::Value>>,
         Option<Vec<crate::message_v2::FilePart>>,
     ) {
+        #[derive(Debug, Deserialize)]
+        struct AttachmentWire {
+            mime: String,
+            url: String,
+            #[serde(default)]
+            filename: Option<String>,
+            #[serde(default)]
+            id: Option<String>,
+            #[serde(
+                default,
+                rename = "sessionID",
+                alias = "sessionId",
+                alias = "session_id"
+            )]
+            session_id: Option<String>,
+            #[serde(
+                default,
+                rename = "messageID",
+                alias = "messageId",
+                alias = "message_id"
+            )]
+            message_id: Option<String>,
+        }
+
         let mut normalized_json = Vec::new();
         let mut normalized_files = Vec::new();
 
         for value in raw_attachments.unwrap_or_default() {
-            let Some(obj) = value.as_object() else {
+            let Ok(value) = serde_json::from_value::<AttachmentWire>(value) else {
                 continue;
             };
 
-            let Some(mime) = obj.get("mime").and_then(|v| v.as_str()) else {
+            if value.mime.trim().is_empty() || value.url.trim().is_empty() {
                 continue;
-            };
-            let Some(url) = obj.get("url").and_then(|v| v.as_str()) else {
-                continue;
-            };
+            }
 
-            let filename = obj
-                .get("filename")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string);
-            let id = obj
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string)
-                .unwrap_or_else(|| {
-                    rocode_core::id::create(rocode_core::id::Prefix::Part, true, None)
-                });
-            let normalized_session_id = obj
-                .get("sessionID")
-                .or_else(|| obj.get("session_id"))
-                .and_then(|v| v.as_str())
+            let AttachmentWire {
+                mime,
+                url,
+                filename,
+                id,
+                session_id: attachment_session_id,
+                message_id: attachment_message_id,
+            } = value;
+
+            let id = id.unwrap_or_else(|| {
+                rocode_core::id::create(rocode_core::id::Prefix::Part, true, None)
+            });
+            let normalized_session_id = attachment_session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .unwrap_or(session_id)
                 .to_string();
-            let normalized_message_id = obj
-                .get("messageID")
-                .or_else(|| obj.get("message_id"))
-                .and_then(|v| v.as_str())
+            let normalized_message_id = attachment_message_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .unwrap_or(message_id)
                 .to_string();
 
@@ -213,8 +237,8 @@ impl SessionPrompt {
                 "messageID".to_string(),
                 serde_json::json!(normalized_message_id.clone()),
             );
-            normalized.insert("mime".to_string(), serde_json::json!(mime));
-            normalized.insert("url".to_string(), serde_json::json!(url));
+            normalized.insert("mime".to_string(), serde_json::json!(&mime));
+            normalized.insert("url".to_string(), serde_json::json!(&url));
             if let Some(name) = filename.clone() {
                 normalized.insert("filename".to_string(), serde_json::json!(name));
             }
@@ -224,8 +248,8 @@ impl SessionPrompt {
                 id,
                 session_id: normalized_session_id,
                 message_id: normalized_message_id,
-                mime: mime.to_string(),
-                url: url.to_string(),
+                mime,
+                url,
                 filename,
                 source: None,
             });
@@ -316,13 +340,22 @@ impl SessionPrompt {
         }
 
         if let Some(obj) = input.as_object() {
-            let file_path = obj
-                .get("file_path")
-                .or_else(|| obj.get("filePath"))
-                .and_then(|v| v.as_str())
+            #[derive(Debug, Deserialize, Default)]
+            struct WriteArgumentsWire {
+                #[serde(default, rename = "file_path", alias = "filePath")]
+                file_path: Option<String>,
+                #[serde(default)]
+                content: Option<String>,
+            }
+
+            let args =
+                serde_json::from_value::<WriteArgumentsWire>(input.clone()).unwrap_or_default();
+            let file_path = args
+                .file_path
+                .as_deref()
                 .map(str::trim)
-                .filter(|s| !s.is_empty());
-            let content = obj.get("content").and_then(|v| v.as_str());
+                .filter(|value| !value.is_empty());
+            let content = args.content.as_deref();
             if file_path.is_some() && content.is_some() {
                 return None;
             }

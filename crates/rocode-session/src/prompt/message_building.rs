@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rocode_provider::{
     get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider, Role,
 };
+use serde::Deserialize;
 
 use crate::compaction::{
     CompactionConfig, CompactionEngine, MessageForPrune, ModelLimits, PruneToolPart, TokenUsage,
@@ -360,23 +361,48 @@ impl SessionPrompt {
             }
 
             // Fallback to metadata for backward compatibility with legacy snapshots.
-            let read_metadata_u64 = |key: &str, usage_key: &str| -> u64 {
-                msg.metadata
-                    .get(key)
-                    .and_then(|v| v.as_u64())
-                    .or_else(|| {
-                        msg.metadata
-                            .get("usage")
-                            .and_then(|v| v.get(usage_key))
-                            .and_then(|v| v.as_u64())
-                    })
-                    .unwrap_or(0)
-            };
+            #[derive(Debug, Deserialize, Default)]
+            struct LegacyUsageWire {
+                #[serde(default)]
+                prompt_tokens: Option<u64>,
+                #[serde(default)]
+                completion_tokens: Option<u64>,
+                #[serde(default)]
+                cache_read_tokens: Option<u64>,
+                #[serde(default)]
+                cache_write_tokens: Option<u64>,
+            }
 
-            usage.input += read_metadata_u64("tokens_input", "prompt_tokens");
-            usage.output += read_metadata_u64("tokens_output", "completion_tokens");
-            usage.cache_read += read_metadata_u64("tokens_cache_read", "cache_read_tokens");
-            usage.cache_write += read_metadata_u64("tokens_cache_write", "cache_write_tokens");
+            let legacy_usage = msg
+                .metadata
+                .get("usage")
+                .and_then(|value| serde_json::from_value::<LegacyUsageWire>(value.clone()).ok())
+                .unwrap_or_default();
+
+            usage.input += msg
+                .metadata
+                .get("tokens_input")
+                .and_then(|v| v.as_u64())
+                .or(legacy_usage.prompt_tokens)
+                .unwrap_or(0);
+            usage.output += msg
+                .metadata
+                .get("tokens_output")
+                .and_then(|v| v.as_u64())
+                .or(legacy_usage.completion_tokens)
+                .unwrap_or(0);
+            usage.cache_read += msg
+                .metadata
+                .get("tokens_cache_read")
+                .and_then(|v| v.as_u64())
+                .or(legacy_usage.cache_read_tokens)
+                .unwrap_or(0);
+            usage.cache_write += msg
+                .metadata
+                .get("tokens_cache_write")
+                .and_then(|v| v.as_u64())
+                .or(legacy_usage.cache_write_tokens)
+                .unwrap_or(0);
         }
         usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
         usage
