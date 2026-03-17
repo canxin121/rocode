@@ -1,4 +1,5 @@
 use super::*;
+use rocode_types::{DiffEntry, ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
 use std::sync::{Arc, Mutex as StdMutex};
 
 pub(super) fn env_var_enabled(name: &str) -> bool {
@@ -75,10 +76,7 @@ pub(super) fn spawn_server_event_listener(
         let base_event_url = format!("{}/event", base_url.trim_end_matches('/'));
         loop {
             // Read current session filter and build the SSE URL.
-            let current_filter = session_filter
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone());
+            let current_filter = session_filter.lock().ok().and_then(|guard| guard.clone());
             let event_url = match &current_filter {
                 Some(sid) => format!("{}?session={}", base_event_url, sid),
                 None => base_event_url.clone(),
@@ -146,10 +144,7 @@ fn consume_server_event_stream(
                     // After each complete event frame, check whether the
                     // session filter has changed. If so, break out to
                     // trigger a reconnect with the updated URL.
-                    let current = session_filter
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.clone());
+                    let current = session_filter.lock().ok().and_then(|guard| guard.clone());
                     if current != *connected_filter {
                         tracing::debug!(
                             old = ?connected_filter,
@@ -181,322 +176,182 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
         return;
     }
     let payload = data_lines.join("\n");
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+    let Ok(event) = serde_json::from_str::<ServerEvent>(&payload) else {
         return;
     };
-    let event_type = value.get("type").and_then(|item| item.as_str());
-    let session_id = value
-        .get("sessionID")
-        .and_then(|item| item.as_str())
-        .or_else(|| value.get("sessionId").and_then(|item| item.as_str()));
-    match event_type {
-        Some("session.updated") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let source = value
-                .get("source")
-                .and_then(|item| item.as_str())
-                .map(str::to_string);
+
+    match event {
+        ServerEvent::SessionUpdated { session_id, source } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::SessionUpdated {
-                    session_id: session_id.to_string(),
-                    source,
+                    session_id,
+                    source: Some(source),
                 },
             ))));
         }
-        Some("config.updated") => {
+        ServerEvent::ConfigUpdated => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::ConfigUpdated,
             ))));
         }
-        Some("session.status") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let status_type = value
-                .get("status")
-                .and_then(|status| status.get("type"))
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("status").and_then(|item| item.as_str()));
-            match status_type {
-                Some("busy") => {
+        ServerEvent::SessionStatus { session_id, status } => match status {
+            SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusBusy(session_id),
+                ))));
+            }
+            SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusIdle(session_id),
+                ))));
+            }
+            SessionRunStatusWire::Tagged(SessionRunStatus::Retry {
+                attempt,
+                message,
+                next,
+            }) => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusRetrying {
+                        session_id,
+                        attempt,
+                        message,
+                        next,
+                    },
+                ))));
+            }
+            SessionRunStatusWire::String(kind) => match kind.as_str() {
+                "busy" => {
                     let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::SessionStatusBusy(session_id.to_string()),
+                        StateChange::SessionStatusBusy(session_id),
                     ))));
                 }
-                Some("idle") => {
+                "idle" => {
                     let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::SessionStatusIdle(session_id.to_string()),
+                        StateChange::SessionStatusIdle(session_id),
                     ))));
                 }
-                Some("retry") => {
-                    let attempt = value
-                        .get("status")
-                        .and_then(|status| status.get("attempt"))
-                        .and_then(|item| item.as_u64())
-                        .and_then(|v| u32::try_from(v).ok())
-                        .unwrap_or(0);
-                    let message = value
-                        .get("status")
-                        .and_then(|status| status.get("message"))
-                        .and_then(|item| item.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let next = value
-                        .get("status")
-                        .and_then(|status| status.get("next"))
-                        .and_then(|item| item.as_i64())
-                        .unwrap_or_default();
+                "retry" => {
                     let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                         StateChange::SessionStatusRetrying {
-                            session_id: session_id.to_string(),
-                            attempt,
-                            message,
-                            next,
+                            session_id,
+                            attempt: 0,
+                            message: String::new(),
+                            next: 0,
                         },
                     ))));
                 }
                 _ => {}
-            }
-        }
-        Some("question.created") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(request_id) = value
-                .get("requestID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
-            else {
-                return;
-            };
+            },
+        },
+        ServerEvent::QuestionCreated {
+            session_id,
+            request_id,
+            ..
+        } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::QuestionCreated {
-                    session_id: session_id.to_string(),
-                    request_id: request_id.to_string(),
+                    session_id,
+                    request_id,
                 },
             ))));
         }
-        Some("question.resolved") | Some("question.replied") | Some("question.rejected") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(request_id) = value
-                .get("requestID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
-            else {
-                return;
-            };
+        ServerEvent::QuestionResolved {
+            session_id,
+            request_id,
+            ..
+        } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::QuestionResolved {
-                    session_id: session_id.to_string(),
-                    request_id: request_id.to_string(),
+                    session_id,
+                    request_id,
                 },
             ))));
         }
-        Some("permission.requested") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(info) = value.get("info").cloned() else {
-                return;
-            };
+        ServerEvent::PermissionRequested {
+            session_id, info, ..
+        } => {
             let Ok(permission) = serde_json::from_value::<crate::api::PermissionRequestInfo>(info)
             else {
                 return;
             };
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::PermissionRequested {
-                    session_id: session_id.to_string(),
+                    session_id,
                     permission,
                 },
             ))));
         }
-        Some("permission.resolved") | Some("permission.replied") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(permission_id) = value
-                .get("permissionID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("permissionId").and_then(|item| item.as_str()))
-                .or_else(|| value.get("requestID").and_then(|item| item.as_str()))
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
-            else {
-                return;
-            };
+        ServerEvent::PermissionResolved {
+            session_id,
+            permission_id,
+            ..
+        } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::PermissionResolved {
-                    session_id: session_id.to_string(),
-                    permission_id: permission_id.to_string(),
+                    session_id,
+                    permission_id,
                 },
             ))));
         }
-        Some("tool_call.lifecycle") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(tool_call_id) = value.get("toolCallId").and_then(|item| item.as_str()) else {
-                tracing::warn!("tool_call.lifecycle missing toolCallId");
-                return;
-            };
-            match value.get("phase").and_then(|item| item.as_str()) {
-                Some("start") => {
-                    let Some(tool_name) = value.get("toolName").and_then(|item| item.as_str())
-                    else {
-                        tracing::warn!("tool_call.lifecycle start missing toolName");
-                        return;
-                    };
-                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::ToolCallStarted {
-                            session_id: session_id.to_string(),
-                            tool_call_id: tool_call_id.to_string(),
-                            tool_name: tool_name.to_string(),
-                        },
-                    ))));
-                }
-                Some("complete") => {
-                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::ToolCallCompleted {
-                            session_id: session_id.to_string(),
-                            tool_call_id: tool_call_id.to_string(),
-                        },
-                    ))));
-                }
-                Some(other) => {
-                    tracing::debug!(phase = other, "ignoring unknown tool_call.lifecycle phase");
-                }
-                None => {
-                    tracing::warn!("tool_call.lifecycle missing phase");
-                }
+        ServerEvent::ToolCallLifecycle {
+            session_id,
+            tool_call_id,
+            phase,
+            tool_name,
+        } => match phase {
+            ToolCallPhase::Start => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::ToolCallStarted {
+                        session_id,
+                        tool_call_id,
+                        tool_name: tool_name.unwrap_or_default(),
+                    },
+                ))));
             }
-        }
-        Some("tool_call.start") => {
-            tracing::info!("Received tool_call.start event");
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(tool_call_id) = value.get("toolCallId").and_then(|item| item.as_str()) else {
-                tracing::warn!("tool_call.start missing toolCallId");
-                return;
-            };
-            let Some(tool_name) = value.get("toolName").and_then(|item| item.as_str()) else {
-                tracing::warn!("tool_call.start missing toolName");
-                return;
-            };
-            tracing::info!(
-                "Sending ToolCallStarted: id={}, name={}",
-                tool_call_id,
-                tool_name
-            );
+            ToolCallPhase::Complete => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::ToolCallCompleted {
+                        session_id,
+                        tool_call_id,
+                    },
+                ))));
+            }
+        },
+        ServerEvent::TopologyChanged { session_id, .. } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::ToolCallStarted {
-                    session_id: session_id.to_string(),
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                },
+                StateChange::TopologyChanged { session_id },
             ))));
         }
-        Some("tool_call.complete") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(tool_call_id) = value.get("toolCallId").and_then(|item| item.as_str()) else {
-                return;
-            };
+        ServerEvent::DiffUpdated { session_id, diff } => {
+            let diffs = diff
+                .into_iter()
+                .map(
+                    |DiffEntry {
+                         path,
+                         additions,
+                         deletions,
+                     }| crate::context::DiffEntry {
+                        file: path,
+                        additions: additions as u32,
+                        deletions: deletions as u32,
+                    },
+                )
+                .collect::<Vec<_>>();
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::ToolCallCompleted {
-                    session_id: session_id.to_string(),
-                    tool_call_id: tool_call_id.to_string(),
-                },
+                StateChange::DiffUpdated { session_id, diffs },
             ))));
         }
-        Some("execution.topology.changed") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::TopologyChanged {
-                    session_id: session_id.to_string(),
-                },
-            ))));
-        }
-        Some("diff.updated") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let diffs = value
-                .get("diff")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            let path = entry.get("path")?.as_str()?;
-                            let additions = entry.get("additions")?.as_u64().unwrap_or(0);
-                            let deletions = entry.get("deletions")?.as_u64().unwrap_or(0);
-                            Some(crate::context::DiffEntry {
-                                file: path.to_string(),
-                                additions: additions as u32,
-                                deletions: deletions as u32,
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::DiffUpdated {
-                    session_id: session_id.to_string(),
-                    diffs,
-                },
-            ))));
-        }
-        Some("session.diff") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let diffs = value
-                .get("diff")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            let path = entry.get("path")?.as_str()?;
-                            let additions = entry.get("additions")?.as_u64().unwrap_or(0);
-                            let deletions = entry.get("deletions")?.as_u64().unwrap_or(0);
-                            Some(crate::context::DiffEntry {
-                                file: path.to_string(),
-                                additions: additions as u32,
-                                deletions: deletions as u32,
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::DiffUpdated {
-                    session_id: session_id.to_string(),
-                    diffs,
-                },
-            ))));
-        }
-        Some("output_block") => {
-            let Some(session_id) = session_id else {
-                return;
-            };
-            let Some(block) = value.get("block") else {
-                return;
-            };
-            let id = value
-                .get("id")
-                .and_then(|item| item.as_str())
-                .map(str::to_string);
+        ServerEvent::OutputBlock {
+            session_id,
+            block,
+            id,
+            ..
+        } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::OutputBlock {
-                    session_id: session_id.to_string(),
                     id,
-                    payload: block.clone(),
+                    session_id,
+                    payload: block,
                 },
             ))));
         }

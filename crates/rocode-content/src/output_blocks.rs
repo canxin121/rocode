@@ -2,19 +2,24 @@ use crate::stage_protocol::{parse_step_limit_from_budget, StageStatus, StageSumm
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum BlockTone {
     Title,
-    Normal,
     Muted,
     Success,
     Warning,
     Error,
+    #[default]
+    #[serde(other)]
+    Normal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusBlock {
+    #[serde(default)]
     pub tone: BlockTone,
+    #[serde(default)]
     pub text: String,
 }
 
@@ -62,24 +67,32 @@ impl StatusBlock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     User,
-    Assistant,
     System,
+    #[default]
+    #[serde(other)]
+    Assistant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum MessagePhase {
     Start,
-    Delta,
     End,
     Full,
+    #[default]
+    #[serde(other)]
+    Delta,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReasoningBlock {
+    #[serde(default)]
     pub phase: MessagePhase,
+    #[serde(default)]
     pub text: String,
 }
 
@@ -113,10 +126,13 @@ impl ReasoningBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageBlock {
+    #[serde(default)]
     pub role: MessageRole,
+    #[serde(default)]
     pub phase: MessagePhase,
+    #[serde(default)]
     pub text: String,
 }
 
@@ -154,15 +170,20 @@ impl MessageBlock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum ToolPhase {
     Start,
-    Running,
+    #[serde(alias = "result")]
     Done,
     Error,
+    #[default]
+    #[serde(other)]
+    Running,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolStructuredDetail {
     FileEdit {
         file_path: String,
@@ -190,14 +211,23 @@ pub enum ToolStructuredDetail {
         matches: Option<u64>,
         truncated: bool,
     },
+    #[serde(other)]
     Generic,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+fn default_tool_block_name() -> String {
+    "tool".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolBlock {
+    #[serde(default = "default_tool_block_name")]
     pub name: String,
+    #[serde(default)]
     pub phase: ToolPhase,
+    #[serde(default)]
     pub detail: Option<String>,
+    #[serde(default)]
     pub structured: Option<ToolStructuredDetail>,
 }
 
@@ -277,20 +307,37 @@ pub struct SchedulerDecisionBlock {
     pub sections: Vec<SchedulerDecisionSection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEventField {
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub value: String,
+    #[serde(default)]
     pub tone: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+fn default_session_event_name() -> String {
+    "event".to_string()
+}
+
+fn default_session_event_title() -> String {
+    "Session Event".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEventBlock {
+    #[serde(default = "default_session_event_name")]
     pub event: String,
+    #[serde(default = "default_session_event_title")]
     pub title: String,
+    #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
     pub summary: Option<String>,
+    #[serde(default)]
     pub fields: Vec<SessionEventField>,
+    #[serde(default)]
     pub body: Option<String>,
 }
 
@@ -333,8 +380,11 @@ pub struct SchedulerStageBlock {
     pub available_skill_count: Option<u64>,
     pub available_agent_count: Option<u64>,
     pub available_category_count: Option<u64>,
+    #[serde(default)]
     pub active_skills: Vec<String>,
+    #[serde(default)]
     pub active_agents: Vec<String>,
+    #[serde(default)]
     pub active_categories: Vec<String>,
     #[serde(default)]
     pub done_agent_count: u32,
@@ -525,14 +575,17 @@ impl SchedulerStageBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InspectBlock {
+    #[serde(default)]
     pub stage_ids: Vec<String>,
+    #[serde(default)]
     pub events: Vec<InspectEventRow>,
+    #[serde(default)]
     pub filter_stage_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InspectEventRow {
     pub ts: i64,
     pub event_type: String,
@@ -550,4 +603,60 @@ pub enum OutputBlock {
     QueueItem(QueueItemBlock),
     SchedulerStage(Box<SchedulerStageBlock>),
     Inspect(InspectBlock),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum OutputBlockWire {
+    Status {
+        #[serde(flatten)]
+        block: StatusBlock,
+    },
+    Message {
+        #[serde(flatten)]
+        block: MessageBlock,
+    },
+    Reasoning {
+        #[serde(flatten)]
+        block: ReasoningBlock,
+    },
+    Tool {
+        #[serde(flatten)]
+        block: ToolBlock,
+    },
+    SessionEvent {
+        #[serde(flatten)]
+        block: SessionEventBlock,
+    },
+    QueueItem {
+        #[serde(flatten)]
+        block: QueueItemBlock,
+    },
+    SchedulerStage {
+        #[serde(flatten)]
+        block: SchedulerStageBlock,
+    },
+    Inspect {
+        #[serde(flatten)]
+        block: InspectBlock,
+    },
+}
+
+impl<'de> Deserialize<'de> for OutputBlock {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = OutputBlockWire::deserialize(deserializer)?;
+        Ok(match wire {
+            OutputBlockWire::Status { block } => Self::Status(block),
+            OutputBlockWire::Message { block } => Self::Message(block),
+            OutputBlockWire::Reasoning { block } => Self::Reasoning(block),
+            OutputBlockWire::Tool { block } => Self::Tool(block),
+            OutputBlockWire::SessionEvent { block } => Self::SessionEvent(block),
+            OutputBlockWire::QueueItem { block } => Self::QueueItem(block),
+            OutputBlockWire::SchedulerStage { block } => Self::SchedulerStage(Box::new(block)),
+            OutputBlockWire::Inspect { block } => Self::Inspect(block),
+        })
+    }
 }

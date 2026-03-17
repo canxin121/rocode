@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use rocode_types::{ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
 use tokio::sync::mpsc;
 
 use crate::util::server_url;
@@ -143,11 +144,7 @@ async fn connect_and_consume(
     // relevant to our session (plus global events like config.updated).
     // This replaces most client-side is_my_session filtering, though we
     // keep the client-side checks as a defense-in-depth measure.
-    let url = format!(
-        "{}?session={}",
-        server_url(base_url, "/event"),
-        session_id,
-    );
+    let url = format!("{}?session={}", server_url(base_url, "/event"), session_id,);
     let client = reqwest::Client::new();
 
     let resp = client
@@ -235,285 +232,178 @@ fn parse_event(
     json: &serde_json::Value,
     my_session_id: &str,
 ) -> Option<CliServerEvent> {
-    // Helper to extract session_id from various field names.
-    let event_session_id = json
-        .get("sessionID")
-        .or_else(|| json.get("sessionId"))
-        .or_else(|| json.get("session_id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    fn parse_server_event(event_name: &str, json: &serde_json::Value) -> Option<ServerEvent> {
+        if let Ok(event) = serde_json::from_value::<ServerEvent>(json.clone()) {
+            return Some(event);
+        }
 
-    // Determine event type from SSE event name or payload's "type" field.
-    let event_type = if !event_name.is_empty() {
-        event_name.to_string()
-    } else {
-        json.get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
+        // If the server used the SSE `event:` channel name but the payload is
+        // missing `"type"`, patch it in and try again.
+        if !event_name.is_empty() {
+            let Some(obj) = json.as_object() else {
+                return None;
+            };
+            if obj.contains_key("type") {
+                return None;
+            }
 
-    // Global events (no session filter).
-    if event_type.as_str() == "config.updated" {
-        return Some(CliServerEvent::ConfigUpdated);
+            let mut patched = obj.clone();
+            patched.insert(
+                "type".to_string(),
+                serde_json::Value::String(event_name.to_string()),
+            );
+            return serde_json::from_value::<ServerEvent>(serde_json::Value::Object(patched)).ok();
+        }
+
+        None
     }
 
-    // Session-scoped events — filter by session_id.
-    let is_my_session = event_session_id.is_empty() || event_session_id == my_session_id;
+    let Some(event) = parse_server_event(event_name, json) else {
+        #[derive(Debug, serde::Deserialize)]
+        struct EventTypeOnly {
+            #[serde(rename = "type")]
+            event_type: Option<String>,
+        }
 
-    match event_type.as_str() {
-        "session.updated" => {
-            if !is_my_session {
+        let event_type = if !event_name.is_empty() {
+            event_name.to_string()
+        } else {
+            serde_json::from_value::<EventTypeOnly>(json.clone())
+                .ok()
+                .and_then(|v| v.event_type)
+                .unwrap_or_default()
+        };
+
+        tracing::trace!("Unknown SSE event: {}", event_type);
+        return Some(CliServerEvent::Unknown {
+            event: event_type,
+            data: json.clone(),
+        });
+    };
+
+    match event {
+        ServerEvent::ConfigUpdated => Some(CliServerEvent::ConfigUpdated),
+        ServerEvent::SessionUpdated { session_id, source } => {
+            if session_id != my_session_id {
                 return None;
             }
-            let source = json
-                .get("source")
-                .and_then(|v| v.as_str())
-                .map(String::from);
             Some(CliServerEvent::SessionUpdated {
-                session_id: event_session_id.to_string(),
-                source,
+                session_id,
+                source: Some(source),
             })
         }
-        "session.status" => {
-            if !is_my_session {
+        ServerEvent::SessionStatus { session_id, status } => {
+            if session_id != my_session_id {
                 return None;
             }
-            // Support both plain string "idle" and tagged object {"type": "idle"}
-            // formats. The server serializes SessionRunStatus with
-            // #[serde(tag = "type")] so the value is an object, but we also
-            // accept a plain string for forward compatibility.
-            let status = json
-                .get("status")
-                .and_then(|v| {
-                    v.as_str()
-                        .or_else(|| v.get("type").and_then(|t| t.as_str()))
-                })
-                .unwrap_or("");
             match status {
-                "busy" => Some(CliServerEvent::SessionBusy {
-                    session_id: event_session_id.to_string(),
-                }),
-                "idle" => Some(CliServerEvent::SessionIdle {
-                    session_id: event_session_id.to_string(),
-                }),
-                "retry" => Some(CliServerEvent::SessionRetrying {
-                    session_id: event_session_id.to_string(),
-                }),
-                _ => None,
+                SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
+                    Some(CliServerEvent::SessionBusy { session_id })
+                }
+                SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
+                    Some(CliServerEvent::SessionIdle { session_id })
+                }
+                SessionRunStatusWire::Tagged(SessionRunStatus::Retry { .. }) => {
+                    Some(CliServerEvent::SessionRetrying { session_id })
+                }
+                SessionRunStatusWire::String(value) => match value.as_str() {
+                    "busy" => Some(CliServerEvent::SessionBusy { session_id }),
+                    "idle" => Some(CliServerEvent::SessionIdle { session_id }),
+                    "retry" => Some(CliServerEvent::SessionRetrying { session_id }),
+                    _ => None,
+                },
             }
         }
-        "question.created" => {
-            // Questions may come from child/subsessions — always handle them
-            // so the CLI user can answer regardless of which session asked.
-            let request_id = json
-                .get("requestID")
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("request_id"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let questions_json = json
-                .get("questions")
-                .cloned()
-                .unwrap_or(serde_json::Value::Array(vec![]));
-            Some(CliServerEvent::QuestionCreated {
-                request_id,
-                session_id: event_session_id.to_string(),
-                questions_json,
-            })
-        }
-        "question.resolved" | "question.replied" | "question.rejected" => {
-            let request_id = json
-                .get("requestID")
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+        ServerEvent::QuestionCreated {
+            session_id,
+            request_id,
+            questions,
+        } => Some(CliServerEvent::QuestionCreated {
+            request_id,
+            session_id,
+            questions_json: questions,
+        }),
+        ServerEvent::QuestionResolved { request_id, .. } => {
             Some(CliServerEvent::QuestionResolved { request_id })
         }
-        "permission.requested" => {
-            let permission_id = json
-                .get("permissionID")
-                .or_else(|| json.get("permissionId"))
-                .or_else(|| json.get("requestID"))
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let info_json = json.get("info").cloned().unwrap_or(serde_json::Value::Null);
-            Some(CliServerEvent::PermissionRequested {
-                session_id: event_session_id.to_string(),
-                permission_id,
-                info_json,
-            })
-        }
-        "permission.resolved" | "permission.replied" => {
-            let permission_id = json
-                .get("permissionID")
-                .or_else(|| json.get("permissionId"))
-                .or_else(|| json.get("requestID"))
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+        ServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            info,
+        } => Some(CliServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            info_json: info,
+        }),
+        ServerEvent::PermissionResolved { permission_id, .. } => {
             Some(CliServerEvent::PermissionResolved { permission_id })
         }
-        "tool_call.lifecycle" => {
-            let tool_call_id = json
-                .get("toolCallId")
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            match json.get("phase").and_then(|v| v.as_str()).unwrap_or("") {
-                "start" => {
-                    let tool_name = json
-                        .get("toolName")
-                        .or_else(|| json.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    Some(CliServerEvent::ToolCallStarted {
-                        session_id: event_session_id.to_string(),
-                        tool_call_id,
-                        tool_name,
-                    })
-                }
-                "complete" => Some(CliServerEvent::ToolCallCompleted {
-                    session_id: event_session_id.to_string(),
-                    tool_call_id,
-                }),
-                _ => None,
-            }
-        }
-        "tool_call.start" => {
-            let tool_call_id = json
-                .get("toolCallId")
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let tool_name = json
-                .get("toolName")
-                .or_else(|| json.get("tool_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ToolCallStarted {
-                session_id: event_session_id.to_string(),
+        ServerEvent::ToolCallLifecycle {
+            session_id,
+            tool_call_id,
+            phase,
+            tool_name,
+        } => match phase {
+            ToolCallPhase::Start => Some(CliServerEvent::ToolCallStarted {
+                session_id,
                 tool_call_id,
-                tool_name,
-            })
-        }
-        "tool_call.complete" => {
-            let tool_call_id = json
-                .get("toolCallId")
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ToolCallCompleted {
-                session_id: event_session_id.to_string(),
+                tool_name: tool_name.unwrap_or_default(),
+            }),
+            ToolCallPhase::Complete => Some(CliServerEvent::ToolCallCompleted {
+                session_id,
                 tool_call_id,
-            })
-        }
-        "child_session.attached" => {
-            let parent_id = json
-                .get("parentID")
-                .or_else(|| json.get("parentId"))
-                .or_else(|| json.get("parent_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let child_id = json
-                .get("childID")
-                .or_else(|| json.get("childId"))
-                .or_else(|| json.get("child_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ChildSessionAttached {
-                parent_id,
-                child_id,
-            })
-        }
-        "child_session.detached" => {
-            let parent_id = json
-                .get("parentID")
-                .or_else(|| json.get("parentId"))
-                .or_else(|| json.get("parent_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let child_id = json
-                .get("childID")
-                .or_else(|| json.get("childId"))
-                .or_else(|| json.get("child_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ChildSessionDetached {
-                parent_id,
-                child_id,
-            })
-        }
-        "output_block" => {
-            // Output blocks may or may not carry a session_id.
-            let id = json.get("id").and_then(|v| v.as_str()).map(String::from);
-            Some(CliServerEvent::OutputBlock {
-                session_id: event_session_id.to_string(),
-                id,
-                payload: json.clone(),
-            })
-        }
-        "error" => {
-            let error = json
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error")
-                .to_string();
-            let message_id = json
-                .get("message_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let done = json.get("done").and_then(|v| v.as_bool());
-            Some(CliServerEvent::Error {
-                session_id: event_session_id.to_string(),
-                error,
-                message_id,
-                done,
-            })
-        }
-        "usage" => {
-            let prompt_tokens = json
-                .get("prompt_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let completion_tokens = json
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let message_id = json
-                .get("message_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            Some(CliServerEvent::Usage {
-                session_id: event_session_id.to_string(),
-                prompt_tokens,
-                completion_tokens,
-                message_id,
-            })
-        }
-        _ => {
-            tracing::trace!("Unknown SSE event: {}", event_type);
+            }),
+        },
+        ServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        } => Some(CliServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        }),
+        ServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        } => Some(CliServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        }),
+        ServerEvent::OutputBlock {
+            session_id,
+            block,
+            id,
+        } => Some(CliServerEvent::OutputBlock {
+            session_id,
+            id,
+            payload: block,
+        }),
+        ServerEvent::Error {
+            session_id,
+            error,
+            message_id,
+            done,
+        } => Some(CliServerEvent::Error {
+            session_id: session_id.unwrap_or_default(),
+            error,
+            message_id,
+            done,
+        }),
+        ServerEvent::Usage {
+            session_id,
+            prompt_tokens,
+            completion_tokens,
+            message_id,
+        } => Some(CliServerEvent::Usage {
+            session_id: session_id.unwrap_or_default(),
+            prompt_tokens,
+            completion_tokens,
+            message_id,
+        }),
+        other => {
+            tracing::trace!("Unhandled SSE event: {:?}", other.event_name());
             Some(CliServerEvent::Unknown {
-                event: event_type,
-                data: json.clone(),
+                event: other.event_name().to_string(),
+                data: serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
             })
         }
     }

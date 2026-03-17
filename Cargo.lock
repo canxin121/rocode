@@ -3336,6 +3336,7 @@ dependencies = [
  "rocode-provider",
  "rocode-session",
  "rocode-tool",
+ "rocode-types",
  "rocode-util",
  "serde",
  "serde_json",
