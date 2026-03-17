@@ -1,9 +1,12 @@
 //! Native (dylib) plugin loading via `libloading`.
 //!
-//! Rust plugins compiled as `cdylib` / `dylib` can be loaded at runtime
-//! without spawning a separate process.  The plugin must be compiled with
-//! the **same Rust compiler version** as rocode — Rust does not guarantee
-//! a stable ABI across versions.
+//! There are two supported native plugin ABIs:
+//!
+//! - **C ABI (recommended)**: stable boundary using C-compatible types and JSON
+//!   payloads.  The shared library exports `rocode_plugin_descriptor_v1`.
+//! - **Rust ABI (legacy)**: exports `rocode_plugin_create() -> Box<dyn Plugin>`.
+//!   This requires the plugin to be compiled with the **same Rust compiler
+//!   version** as rocode. Rust does NOT guarantee a stable ABI across versions.
 //!
 //! # Plugin entry point
 //!
@@ -64,12 +67,25 @@ impl NativePluginHandle {
     /// # Safety
     ///
     /// The shared library **must**:
-    /// - Be compiled with the same Rust compiler version as rocode.
-    /// - Export `rocode_plugin_create` returning `Box<dyn Plugin>`.
     /// - Not have been tampered with (arbitrary code execution risk).
+    /// - Export either:
+    ///   - `rocode_plugin_descriptor_v1` (C ABI, recommended), OR
+    ///   - `rocode_plugin_create` returning `Box<dyn Plugin>` (legacy Rust ABI).
+    ///
+    /// If the legacy Rust ABI is used, the plugin must be compiled with the
+    /// same Rust compiler version as rocode.
     pub unsafe fn load(path: &Path) -> anyhow::Result<Self> {
         let library = libloading::Library::new(path)
             .map_err(|e| anyhow::anyhow!("failed to load native plugin {:?}: {}", path, e))?;
+
+        // Prefer the stable C ABI when available.
+        if let Some(plugin) = crate::cabi::try_load_from_library(&library, path)? {
+            return Ok(Self {
+                _library: library,
+                plugin,
+                path: path.to_path_buf(),
+            });
+        }
 
         let create: libloading::Symbol<CreateFn> = library.get(ENTRY_SYMBOL).map_err(|e| {
             anyhow::anyhow!(

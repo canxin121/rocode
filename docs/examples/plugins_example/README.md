@@ -48,6 +48,14 @@
 
 本目录示例：`docs/plugins_example/rust/example_plugin.rs`
 
+## 4) Native C ABI (dylib) 插件是稳定 ABI 的进程内扩展
+
+- 仍然是 `cdylib` / `.so` / `.dylib`，但**不再**跨动态库边界传递 Rust trait object
+- 插件导出 `rocode_plugin_descriptor_v1`（C ABI），通过 JSON 字符串收发 (input/output)
+- 优点：相比 Rust ABI dylib，C ABI 更稳定；相比 TS 子进程，性能更高但仍然不沙箱
+
+本目录示例：`docs/examples/plugins_example/rust_cabi/`
+
 ## 推荐实践
 
 - 只想增强提示和流程：优先用 Skill

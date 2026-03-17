@@ -27,6 +27,19 @@ use crate::HookEvent;
 /// Map a TS hook name string to the corresponding `HookEvent` variant.
 pub fn hook_name_to_event(name: &str) -> Option<HookEvent> {
     match name {
+        // Core lifecycle
+        "config.loaded" => Some(HookEvent::ConfigLoaded),
+        "session.start" => Some(HookEvent::SessionStart),
+        "session.end" => Some(HookEvent::SessionEnd),
+        "tool.call" => Some(HookEvent::ToolCall),
+        "tool.result" => Some(HookEvent::ToolResult),
+        "message.sent" => Some(HookEvent::MessageSent),
+        "message.received" => Some(HookEvent::MessageReceived),
+        "error" => Some(HookEvent::Error),
+        "file.change" => Some(HookEvent::FileChange),
+        "provider.change" => Some(HookEvent::ProviderChange),
+
+        // TS/OpenCode-compatible hooks
         "chat.headers" => Some(HookEvent::ChatHeaders),
         "chat.params" => Some(HookEvent::ChatParams),
         "chat.message" => Some(HookEvent::ChatMessage),
