@@ -12,6 +12,7 @@ mod m20260317_000008_legacy_alter_columns;
 mod m20260317_000009_migrate_tool_call_input_data;
 mod m20260317_000010_add_pagination_indexes;
 mod m20260317_000011_add_part_todo_pagination_indexes;
+mod m20260318_000012_backfill_parts_from_messages_data;
 
 pub struct Migrator;
 
@@ -30,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260317_000009_migrate_tool_call_input_data::Migration),
             Box::new(m20260317_000010_add_pagination_indexes::Migration),
             Box::new(m20260317_000011_add_part_todo_pagination_indexes::Migration),
+            Box::new(m20260318_000012_backfill_parts_from_messages_data::Migration),
         ]
     }
 }

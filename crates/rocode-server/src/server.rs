@@ -26,7 +26,7 @@ use rocode_provider::{
     ProviderError, ProviderRegistry,
 };
 use rocode_session::{SessionManager, SessionPrompt, SessionStateManager};
-use rocode_storage::{Database, MessageRepository, SessionRepository};
+use rocode_storage::{Database, MessageRepository, PartRepository, SessionRepository};
 
 use crate::routes;
 use crate::runtime_control::RuntimeControlRegistry;
@@ -218,6 +218,7 @@ pub struct ServerState {
     pub api_perf: Arc<ApiPerfCounters>,
     pub(crate) session_repo: Option<SessionRepository>,
     pub(crate) message_repo: Option<MessageRepository>,
+    pub(crate) part_repo: Option<PartRepository>,
     pub category_registry: Arc<rocode_config::CategoryRegistry>,
     pub(crate) todo_manager: rocode_session::TodoManager,
     pub(crate) runtime_state: Arc<crate::session_runtime::state::RuntimeStateStore>,
@@ -302,6 +303,7 @@ impl ServerState {
             api_perf: Arc::new(ApiPerfCounters::new()),
             session_repo: None,
             message_repo: None,
+            part_repo: None,
             category_registry: Arc::new(rocode_config::CategoryRegistry::empty()),
             todo_manager: rocode_session::TodoManager::new(),
             runtime_state: Arc::new(crate::session_runtime::state::RuntimeStateStore::new()),
@@ -404,7 +406,8 @@ impl ServerState {
         let db = Database::new().await?;
         let conn = db.conn().clone();
         state.session_repo = Some(SessionRepository::new(conn.clone()));
-        state.message_repo = Some(MessageRepository::new(conn));
+        state.message_repo = Some(MessageRepository::new(conn.clone()));
+        state.part_repo = Some(PartRepository::new(conn));
         state.load_sessions_from_storage().await?;
         Ok(state)
     }

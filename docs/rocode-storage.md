@@ -1,6 +1,6 @@
 # ROCode 存储总览（SeaORM 版）
 
-> 生成时间：`2026-03-17`  
+> 生成时间：`2026-03-18`  
 > 分支基线：`rewrite/sea-orm-storage`  
 >
 > 本文是一个“入口文档”，把你最关心的 **目录 / 会话 / 消息 / parts** 的存储形态与分页能力先讲清楚，并给出源码落点。更细节的字段表格与配置/缓存路径请看下方链接。
@@ -70,7 +70,13 @@
 
 ### 4.3 Parts（message parts）
 
-- Schema 有 `parts` 表，但当前 server flush 链路里 **没有形成完整写入闭环**（详见 `docs/session-message-storage.md` 的第 5 节）。
+- Schema 有 `parts` 表，并且本分支已形成 **写入闭环 + 懒加载读 API**（详见 `docs/session-message-storage.md` 的第 5 节）：
+  - 写入：`SessionRepository::flush_with_messages(...)` 会 upsert messages + parts，并删除 stale parts
+  - 历史回填：迁移 `m20260318_000012_backfill_parts_from_messages_data`
+  - 读 API：
+    - `GET /session/{id}/message/summary`：仅 message headers（避免拉取 `messages.data`）
+    - `GET /session/{id}/message/{msgID}/part`：仅 parts summaries（轻量）
+    - `GET /session/{id}/message/{msgID}/part/{partID}`：单个 part 详情（按需返回 `data`）
 
 ## 5. 后续 server 开发的建议（最实用的两条）
 

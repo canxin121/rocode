@@ -532,18 +532,18 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `sessio
 |`created_at`|INTEGER|创建时间（ms）|
 |`provider_id`|TEXT nullable|provider id（预留/兼容字段；当前常见做法是写进 `metadata`）|
 |`model_id`|TEXT nullable|model id（预留/兼容字段；当前常见做法是写进 `metadata`）|
-|`tokens_input`|INTEGER|输入 tokens（预留/兼容字段）|
-|`tokens_output`|INTEGER|输出 tokens（预留/兼容字段）|
-|`tokens_reasoning`|INTEGER|reasoning tokens（预留/兼容字段）|
-|`tokens_cache_read`|INTEGER|cache read tokens（预留/兼容字段）|
-|`tokens_cache_write`|INTEGER|cache write tokens（预留/兼容字段）|
-|`cost`|REAL|成本（美元，预留/兼容字段）|
+|`tokens_input`|INTEGER|输入 tokens（来自 `SessionMessage.usage`；若无则为 0）|
+|`tokens_output`|INTEGER|输出 tokens（来自 `SessionMessage.usage`；若无则为 0）|
+|`tokens_reasoning`|INTEGER|reasoning tokens（来自 `SessionMessage.usage`；若无则为 0）|
+|`tokens_cache_read`|INTEGER|cache read tokens（来自 `SessionMessage.usage`；若无则为 0）|
+|`tokens_cache_write`|INTEGER|cache write tokens（来自 `SessionMessage.usage`；若无则为 0）|
+|`cost`|REAL|成本（美元，来自 `SessionMessage.usage.total_cost`；若无则为 0）|
 |`finish`|TEXT nullable|LLM finish reason（例如 `"stop"` / `"tool-calls"`）|
 |`metadata`|TEXT nullable|JSON：`HashMap<String, Value>`（经常存 provider/model 等）|
 |`data`|TEXT nullable|JSON：`Vec<MessagePart>`（核心内容，见下）|
 
-> 实现细节：当前 Rust 的 `MessageRepository` 写入时主要使用 `finish/metadata/data`（见 `crates/rocode-storage/src/repository.rs` → `message_insert_model(...)` + `Entity::insert(...).on_conflict(...)`），  
-> 上表中 `provider_id/model_id/tokens_* / cost` 列目前在仓库内多数路径未写入（更像是兼容/预留结构；常见做法是写进 `metadata`）。
+> 实现细节：当前 Rust 的 `MessageRepository` 会写入 `finish/metadata/data`，并把 `SessionMessage.usage` 映射到 `tokens_* / cost`（见 `crates/rocode-storage/src/repository.rs` → `message_insert_model(...)`）。  
+> `provider_id/model_id` 仍主要通过 `metadata` 携带（历史兼容；如需强约束可后续正规化写入列）。
 
 `data` 的 JSON 结构来源：`rocode-types::MessagePart` / `PartType`（`crates/rocode-types/src/message.rs`）
 
@@ -589,6 +589,8 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `sessio
 
 > 实务建议：如果你需要“完整还原消息内容”，请优先使用 `messages.data`。  
 > `parts` 更多是用于增量/索引/快速查询的冗余结构，具体写入路径取决于上层业务。
+
+补充：在本分支中，server 的 `flush` 链路已把 `parts` 写入闭环（并提供 message/parts 的懒加载 API），可用于“只读 summary，按需拉详情”的大规模会话加载优化（详见 `docs/session-message-storage.md`）。
 
 #### 4.3.4 `todos`：会话 todo 列表
 

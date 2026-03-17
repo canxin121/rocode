@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use rocode_types::{
-    MessagePart, MessageRole, Session, SessionMessage, SessionShare, SessionStatus, SessionSummary,
-    SessionTime, SessionUsage,
+    MessagePart, MessageRole, MessageUsage, PartType, Session, SessionMessage, SessionShare,
+    SessionStatus, SessionSummary, SessionTime, SessionUsage, ToolCallStatus,
 };
 
 use crate::database::DatabaseError;
@@ -260,11 +260,19 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
     let metadata_json = serde_json::to_string(&message.metadata)
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
+    let usage = message.usage.as_ref();
+
     Ok(messages::ActiveModel {
         id: Set(message.id.clone()),
         session_id: Set(message.session_id.clone()),
         role: Set(role_to_str(&message.role).to_string()),
         created_at: Set(message.created_at.timestamp_millis()),
+        tokens_input: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
+        tokens_output: Set(usage.map(|u| u.output_tokens as i64).unwrap_or(0)),
+        tokens_reasoning: Set(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0)),
+        tokens_cache_read: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
+        tokens_cache_write: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
+        cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
         finish: Set(message.finish.clone()),
         metadata: Set(Some(metadata_json)),
         data: Set(Some(data_json)),
@@ -282,6 +290,21 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
 
     let created = DateTime::from_timestamp_millis(model.created_at).unwrap_or_else(Utc::now);
 
+    let usage_present = model.tokens_input != 0
+        || model.tokens_output != 0
+        || model.tokens_reasoning != 0
+        || model.tokens_cache_read != 0
+        || model.tokens_cache_write != 0
+        || model.cost != 0.0;
+    let usage = usage_present.then(|| MessageUsage {
+        input_tokens: model.tokens_input as u64,
+        output_tokens: model.tokens_output as u64,
+        reasoning_tokens: model.tokens_reasoning as u64,
+        cache_write_tokens: model.tokens_cache_write as u64,
+        cache_read_tokens: model.tokens_cache_read as u64,
+        total_cost: model.cost,
+    });
+
     Some(SessionMessage {
         id: model.id,
         session_id: model.session_id,
@@ -292,8 +315,103 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
             .metadata
             .and_then(|m| serde_json::from_str(&m).ok())
             .unwrap_or_default(),
+        usage,
         finish: model.finish,
     })
+}
+
+fn part_type_to_str(part_type: &PartType) -> &'static str {
+    match part_type {
+        PartType::Text { .. } => "text",
+        PartType::ToolCall { .. } => "tool_call",
+        PartType::ToolResult { .. } => "tool_result",
+        PartType::Reasoning { .. } => "reasoning",
+        PartType::File { .. } => "file",
+        PartType::StepStart { .. } => "step_start",
+        PartType::StepFinish { .. } => "step_finish",
+        PartType::Snapshot { .. } => "snapshot",
+        PartType::Patch { .. } => "patch",
+        PartType::Agent { .. } => "agent",
+        PartType::Subtask { .. } => "subtask",
+        PartType::Retry { .. } => "retry",
+        PartType::Compaction { .. } => "compaction",
+    }
+}
+
+fn tool_status_to_str(status: &ToolCallStatus) -> &'static str {
+    match status {
+        ToolCallStatus::Pending => "pending",
+        ToolCallStatus::Running => "running",
+        ToolCallStatus::Completed => "completed",
+        ToolCallStatus::Error => "error",
+    }
+}
+
+fn part_insert_model(
+    session_id: &str,
+    message_id: &str,
+    sort_order: i64,
+    part: &MessagePart,
+) -> Result<parts::ActiveModel, DatabaseError> {
+    let created_at = part.created_at.timestamp_millis();
+    let data_json = serde_json::to_string(part)
+        .map(Some)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    let mut active = parts::ActiveModel {
+        id: Set(part.id.clone()),
+        message_id: Set(message_id.to_string()),
+        session_id: Set(session_id.to_string()),
+        created_at: Set(created_at),
+        part_type: Set(part_type_to_str(&part.part_type).to_string()),
+        sort_order: Set(sort_order),
+        data: Set(data_json),
+        ..Default::default()
+    };
+
+    match &part.part_type {
+        PartType::Text { text, .. } => {
+            active.text = Set(Some(text.clone()));
+        }
+        PartType::ToolCall {
+            id,
+            name,
+            input,
+            status,
+            ..
+        } => {
+            active.tool_name = Set(Some(name.clone()));
+            active.tool_call_id = Set(Some(id.clone()));
+            active.tool_arguments = Set(serde_json::to_string(input).ok());
+            active.tool_status = Set(Some(tool_status_to_str(status).to_string()));
+        }
+        PartType::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+            ..
+        } => {
+            active.tool_call_id = Set(Some(tool_call_id.clone()));
+            active.tool_result = Set(Some(content.clone()));
+            active.tool_error = Set(is_error.then(|| content.clone()));
+            active.tool_status = Set(Some(if *is_error { "error" } else { "completed" }.into()));
+        }
+        PartType::Reasoning { text } => {
+            active.reasoning = Set(Some(text.clone()));
+        }
+        PartType::File {
+            url,
+            filename,
+            mime,
+        } => {
+            active.file_url = Set(Some(url.clone()));
+            active.file_filename = Set(Some(filename.clone()));
+            active.file_mime = Set(Some(mime.clone()));
+        }
+        _ => {}
+    }
+
+    Ok(active)
 }
 
 #[derive(Clone)]
@@ -508,6 +626,12 @@ impl SessionRepository {
                             messages::Column::SessionId,
                             messages::Column::Role,
                             messages::Column::CreatedAt,
+                            messages::Column::TokensInput,
+                            messages::Column::TokensOutput,
+                            messages::Column::TokensReasoning,
+                            messages::Column::TokensCacheRead,
+                            messages::Column::TokensCacheWrite,
+                            messages::Column::Cost,
                             messages::Column::Finish,
                             messages::Column::Metadata,
                             messages::Column::Data,
@@ -518,6 +642,90 @@ impl SessionRepository {
                 .await
                 .map_err(map_query_err)?;
         }
+        Ok(())
+    }
+
+    async fn upsert_parts_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        messages_to_upsert: &[SessionMessage],
+    ) -> Result<(), DatabaseError> {
+        for msg in messages_to_upsert {
+            for (idx, part) in msg.parts.iter().enumerate() {
+                parts::Entity::insert(part_insert_model(
+                    msg.session_id.as_str(),
+                    msg.id.as_str(),
+                    idx as i64,
+                    part,
+                )?)
+                .on_conflict(
+                    OnConflict::column(parts::Column::Id)
+                        .update_columns([
+                            parts::Column::MessageId,
+                            parts::Column::SessionId,
+                            parts::Column::CreatedAt,
+                            parts::Column::PartType,
+                            parts::Column::Text,
+                            parts::Column::ToolName,
+                            parts::Column::ToolCallId,
+                            parts::Column::ToolArguments,
+                            parts::Column::ToolResult,
+                            parts::Column::ToolError,
+                            parts::Column::ToolStatus,
+                            parts::Column::FileUrl,
+                            parts::Column::FileFilename,
+                            parts::Column::FileMime,
+                            parts::Column::Reasoning,
+                            parts::Column::SortOrder,
+                            parts::Column::Data,
+                        ])
+                        .to_owned(),
+                )
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_stale_parts_for_message_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        message_id: &str,
+        keep_ids: &HashSet<String>,
+    ) -> Result<(), DatabaseError> {
+        if keep_ids.is_empty() {
+            parts::Entity::delete_many()
+                .filter(parts::Column::MessageId.eq(message_id))
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+            return Ok(());
+        }
+
+        let existing_ids: Vec<String> = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .select_only()
+            .column(parts::Column::Id)
+            .into_tuple()
+            .all(tx)
+            .await
+            .map_err(map_query_err)?;
+
+        let stale: Vec<String> = existing_ids
+            .into_iter()
+            .filter(|id| !keep_ids.contains(id))
+            .collect();
+
+        for chunk in stale.chunks(500) {
+            parts::Entity::delete_many()
+                .filter(parts::Column::Id.is_in(chunk.to_vec()))
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+        }
+
         Ok(())
     }
 
@@ -566,8 +774,14 @@ impl SessionRepository {
         let result = async {
             self.upsert_session_in_tx(&tx, session).await?;
             self.upsert_messages_in_tx(&tx, messages_to_flush).await?;
+            self.upsert_parts_in_tx(&tx, messages_to_flush).await?;
             self.delete_stale_messages_in_tx(&tx, &session.id, &keep_ids)
                 .await?;
+            for msg in messages_to_flush {
+                let keep_parts: HashSet<String> = msg.parts.iter().map(|p| p.id.clone()).collect();
+                self.delete_stale_parts_for_message_in_tx(&tx, &msg.id, &keep_parts)
+                    .await?;
+            }
             Ok::<(), DatabaseError>(())
         }
         .await;
@@ -585,6 +799,16 @@ impl SessionRepository {
 #[derive(Clone)]
 pub struct MessageRepository {
     conn: StorageConnection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageHeaderRow {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish: Option<String>,
 }
 
 impl MessageRepository {
@@ -608,6 +832,12 @@ impl MessageRepository {
                         messages::Column::SessionId,
                         messages::Column::Role,
                         messages::Column::CreatedAt,
+                        messages::Column::TokensInput,
+                        messages::Column::TokensOutput,
+                        messages::Column::TokensReasoning,
+                        messages::Column::TokensCacheRead,
+                        messages::Column::TokensCacheWrite,
+                        messages::Column::Cost,
                         messages::Column::Finish,
                         messages::Column::Metadata,
                         messages::Column::Data,
@@ -627,6 +857,7 @@ impl MessageRepository {
         let rows = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -642,6 +873,44 @@ impl MessageRepository {
             .map_err(map_query_err)
     }
 
+    pub async fn list_headers_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<MessageHeaderRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows: Vec<(String, String, String, i64, Option<String>)> = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .select_only()
+            .column(messages::Column::Id)
+            .column(messages::Column::SessionId)
+            .column(messages::Column::Role)
+            .column(messages::Column::CreatedAt)
+            .column(messages::Column::Finish)
+            .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, session_id, role, created_at, finish)| MessageHeaderRow {
+                    id,
+                    session_id,
+                    role,
+                    created_at,
+                    finish,
+                },
+            )
+            .collect())
+    }
+
     pub async fn list_for_session_page(
         &self,
         session_id: &str,
@@ -652,6 +921,7 @@ impl MessageRepository {
         let rows = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -885,6 +1155,7 @@ pub struct PartRow {
     pub id: String,
     pub message_id: String,
     pub session_id: String,
+    pub created_at: i64,
     pub part_type: String,
     pub text: Option<String>,
     pub tool_name: Option<String>,
@@ -893,7 +1164,12 @@ pub struct PartRow {
     pub tool_result: Option<String>,
     pub tool_error: Option<String>,
     pub tool_status: Option<String>,
+    pub file_url: Option<String>,
+    pub file_filename: Option<String>,
+    pub file_mime: Option<String>,
+    pub reasoning: Option<String>,
     pub sort_order: i64,
+    pub data: Option<String>,
 }
 
 #[derive(Clone)]
@@ -901,9 +1177,50 @@ pub struct PartRepository {
     conn: StorageConnection,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartSummaryRow {
+    pub id: String,
+    pub message_id: String,
+    pub session_id: String,
+    pub created_at: i64,
+    pub part_type: String,
+    pub tool_name: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub tool_status: Option<String>,
+    pub sort_order: i64,
+}
+
 impl PartRepository {
     pub fn new(conn: StorageConnection) -> Self {
         Self { conn }
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<PartRow>, DatabaseError> {
+        let row = parts::Entity::find_by_id(id.to_string())
+            .one(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(row.map(|r| PartRow {
+            id: r.id,
+            message_id: r.message_id,
+            session_id: r.session_id,
+            created_at: r.created_at,
+            part_type: r.part_type,
+            text: r.text,
+            tool_name: r.tool_name,
+            tool_call_id: r.tool_call_id,
+            tool_arguments: r.tool_arguments,
+            tool_result: r.tool_result,
+            tool_error: r.tool_error,
+            tool_status: r.tool_status,
+            file_url: r.file_url,
+            file_filename: r.file_filename,
+            file_mime: r.file_mime,
+            reasoning: r.reasoning,
+            sort_order: r.sort_order,
+            data: r.data,
+        }))
     }
 
     pub async fn list_for_message(&self, message_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
@@ -922,6 +1239,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -930,7 +1248,12 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
@@ -941,6 +1264,73 @@ impl PartRepository {
             .count(&self.conn)
             .await
             .map_err(map_query_err)
+    }
+
+    pub async fn list_summaries_for_message_page(
+        &self,
+        message_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartSummaryRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+        )> = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .select_only()
+            .column(parts::Column::Id)
+            .column(parts::Column::MessageId)
+            .column(parts::Column::SessionId)
+            .column(parts::Column::CreatedAt)
+            .column(parts::Column::PartType)
+            .column(parts::Column::ToolName)
+            .column(parts::Column::ToolCallId)
+            .column(parts::Column::ToolStatus)
+            .column(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    message_id,
+                    session_id,
+                    created_at,
+                    part_type,
+                    tool_name,
+                    tool_call_id,
+                    tool_status,
+                    sort_order,
+                )| PartSummaryRow {
+                    id,
+                    message_id,
+                    session_id,
+                    created_at,
+                    part_type,
+                    tool_name,
+                    tool_call_id,
+                    tool_status,
+                    sort_order,
+                },
+            )
+            .collect())
     }
 
     pub async fn list_for_message_page(
@@ -967,6 +1357,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -975,7 +1366,12 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
@@ -996,6 +1392,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -1004,7 +1401,12 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
@@ -1041,6 +1443,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -1049,19 +1452,22 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
 
     pub async fn upsert(&self, part: &PartRow) -> Result<(), DatabaseError> {
-        let now = Utc::now().timestamp_millis();
-
         let insert = parts::ActiveModel {
             id: Set(part.id.clone()),
             message_id: Set(part.message_id.clone()),
             session_id: Set(part.session_id.clone()),
-            created_at: Set(now),
+            created_at: Set(part.created_at),
             part_type: Set(part.part_type.clone()),
             text: Set(part.text.clone()),
             tool_name: Set(part.tool_name.clone()),
@@ -1070,7 +1476,12 @@ impl PartRepository {
             tool_result: Set(part.tool_result.clone()),
             tool_error: Set(part.tool_error.clone()),
             tool_status: Set(part.tool_status.clone()),
+            file_url: Set(part.file_url.clone()),
+            file_filename: Set(part.file_filename.clone()),
+            file_mime: Set(part.file_mime.clone()),
+            reasoning: Set(part.reasoning.clone()),
             sort_order: Set(part.sort_order),
+            data: Set(part.data.clone()),
             ..Default::default()
         };
 
@@ -1078,6 +1489,10 @@ impl PartRepository {
             .on_conflict(
                 OnConflict::column(parts::Column::Id)
                     .update_columns([
+                        parts::Column::MessageId,
+                        parts::Column::SessionId,
+                        parts::Column::CreatedAt,
+                        parts::Column::PartType,
                         parts::Column::Text,
                         parts::Column::ToolName,
                         parts::Column::ToolCallId,
@@ -1085,7 +1500,12 @@ impl PartRepository {
                         parts::Column::ToolResult,
                         parts::Column::ToolError,
                         parts::Column::ToolStatus,
+                        parts::Column::FileUrl,
+                        parts::Column::FileFilename,
+                        parts::Column::FileMime,
+                        parts::Column::Reasoning,
                         parts::Column::SortOrder,
+                        parts::Column::Data,
                     ])
                     .to_owned(),
             )
@@ -1161,6 +1581,7 @@ mod tests {
             parts: vec![],
             created_at: Utc::now(),
             metadata: HashMap::new(),
+            usage: None,
             finish: None,
         }
     }

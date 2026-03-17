@@ -1,8 +1,8 @@
 # ROCode 会话 / 消息 / Message Parts（含“活动 part”）存储形式与分页能力评估（源码导读）
 
-> 生成时间：`2026-03-17`  
+> 生成时间：`2026-03-18`  
 > 适用代码基线：workspace `version = 2026.3.16`（见 `Cargo.toml`）  
-> 分支基线：`rewrite/sea-orm-storage`（持久化层已迁移到 SeaORM，并补齐 sessions/messages 的 count + limit/offset 查询能力）  
+> 分支基线：`rewrite/sea-orm-storage`（SeaORM + sessions/messages/parts 的分页/total + parts 正规化写入闭环 + 懒加载 API）  
 >
 > 你关心的问题可以拆成两部分：
 >
@@ -30,14 +30,14 @@
 
 - **消息分片（parts / MessagePart）**：一条消息的内容由多个 part 组成，例如 `text`、`toolCall`、`toolResult`、`reasoning`、`file`、`patch` 等。  
   - 内存 part 类型更“富”：`rocode-session::PartType::ToolCall` 带 `status/raw/state`  
-  - DB 里主要存 `rocode-types::MessagePart`（字段更少），序列化进 `messages.data`（JSON 字符串）
+  - DB 里主要存 `rocode-types::MessagePart`（持久化稳定结构；已对齐 `status/raw/state` 等关键字段），序列化进 `messages.data`（JSON 字符串）
 
 - **“活动 part”（in-flight / running part）**：严格来说不是一个单独的持久化概念，而是一个**运行时投影**，常见于：
   1) 工具调用 part：`ToolCall.status = Pending/Running/Completed/Error`（内存里有）  
   2) Server 侧聚合的运行时状态：`RuntimeStateStore.active_tools/current_message_id`（只在内存里）  
   3) SSE/stream 过程中 `message.part.delta` 这类增量事件（只在内存/事件流里）
 
-结论先说在前面：**当前“活动 part”主要是运行时状态，不是持久化的一等公民**；数据库里能还原“发生过什么 tool call / tool result”，但对“当时是否 running”支持不完整（详见第 5 节）。
+结论先说在前面：**当前“活动 part”主要仍是运行时状态（`/runtime` 更权威）**；数据库里能还原“发生过什么 tool call / tool result”，并能持久化“最后一次 flush 时”的 tool status，但对“实时 running/等待中”支持仍不完整（详见第 5 节）。
 
 ---
 
@@ -238,32 +238,30 @@ API 输出（面向前端/TUI）：
 
 也就是说：**消息内容是“整条消息一个 JSON blob”，里边是 parts 数组**。
 
-### 5.3 一个容易忽略的细节：DB 用的是 `rocode-types` 的 parts（字段更少）
+### 5.3 一个容易忽略的细节：DB 用的是 `rocode-types` 的 parts（但现在已与运行时更对齐）
 
 server flush 时会做：
 
 - `rocode_session::Session` → `serde_json::Value` → `rocode_types::Session`
 
-而 `rocode_types::PartType::ToolCall` 的字段只有：
+`rocode-types` 之所以存在，是为了让 `rocode-storage` 在**不依赖 `rocode-session` 内部类型**的前提下，拥有一套稳定的持久化 JSON 结构（方便迁移、兼容、回放）。
 
-- `id/name/input`
+在本分支里，我们把持久化侧的 `SessionMessage/PartType` 补齐到足够支撑“活动/懒加载/统计”的程度：
 
-这会带来一个很现实的差异：
+- `PartType::Text`：新增 `synthetic/ignored`（与运行时一致）
+- `PartType::ToolCall`：新增 `status/raw/state`
+  - `status`：`pending/running/completed/error`
+  - `state`：使用 `Option<serde_json::Value>` 承接（避免把 `rocode-session::ToolState` 变成硬依赖）
+- `PartType::ToolResult`：新增 `title/metadata/attachments`（便于 UI/回放）
+- `SessionMessage`：新增 `usage: Option<MessageUsage>`（用于把 tokens/cost 正规化进列）
 
-- 内存态的 `ToolCall` 有 `status`（Pending/Running/Completed/Error），但 **落到 DB 的 `messages.data` 里会丢失 status**  
-  - 原因：DB 的 `MessageRepository` 使用 `rocode_types::SessionMessage`（见 `crates/rocode-storage/src/repository.rs` 的 imports）
-  - 序列化时多出来的字段会在反序列化到 `rocode_types` 时被忽略
-- server 重启从 DB 还原到内存时，`rocode_session::PartType::ToolCall.status` 有 `#[serde(default)]`，因此会默认变回 `Pending`（这会让“历史 tool call 的运行态”不可追溯）
+因此现在：
 
-同样的，**消息级 usage 也不会持久化**：
+- `messages.data`（JSON parts blob）能保留 tool call 的 `status/raw/state` 等信息（重启后不会再默认为 `Pending`）
+- `messages.tokens_* / cost` 会从 `SessionMessage.usage` 写入（便于 server 做总数/聚合/排序/统计）
+- `provider_id/model_id` 目前仍主要来自 `messages.metadata`（历史兼容；如需强约束可后续再正规化）
 
-- 内存：`rocode_session::SessionMessage.usage: Option<MessageUsage>`（`crates/rocode-session/src/message.rs`）
-- DB：`rocode_types::SessionMessage` 不包含 `usage` 字段（`crates/rocode-types/src/message.rs`）
-- SQLite schema 虽然有 `messages.tokens_* / cost / provider_id / model_id` 等列（见迁移 `crates/rocode-storage-migration/src/m20260317_000002_create_messages.rs`），但当前 `MessageRepository::{create, upsert}` 并未写入这些列（只写 `finish/metadata/data`）
-
-> 对后续 server 设计来说：如果你想做“分页 + 列表里带 token/cost/模型信息”，最好别只依赖 `messages.data` 这个 JSON blob；应该把可排序/可聚合字段正规化进列，并写入。
-
-### 5.4 `parts` 表：存在“可索引拆分表”，但目前未接入 server flush 链路
+### 5.4 `parts` 表：已形成写入闭环（并可用于懒加载）
 
 SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/src/m20260317_000003_create_parts.rs`），设计目标是把 parts 拆出来，以便：
 
@@ -271,16 +269,23 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 - 做更细粒度分页（message 内按 `sort_order` 分页）
 - 避免每次都解析 `messages.data` 的 JSON blob
 
-同时仓库也实现了 `PartRepository`：
+同时仓库实现了 `PartRepository`（SeaORM）以及 server 侧的“懒加载 API”：
 
 - `crates/rocode-storage/src/repository.rs`：`PartRepository::{upsert, list_for_message, list_for_session, ...}`
+- `crates/rocode-server/src/routes/session/messages.rs`：
+  - `GET /session/{id}/message/summary`（仅 message headers）
+  - `GET /session/{id}/message/{msgID}/part`（仅 parts summaries）
+  - `GET /session/{id}/message/{msgID}/part/{partID}`（单个 part 详情）
 
-但目前全仓库搜索不到 `PartRepository` 的实际调用点（除了定义本身），意味着：
+本分支已补齐 parts 的**写入闭环**与**历史数据回填**，从而让 parts 可以真正作为“DB 形态”的消息分片存储使用：
 
-- **在现有 server 写入路径里，parts 表大概率不会被填充**
-- 你如果要在 server 上做“按 tool/status 搜索、按 part 分页”，目前只能：
-  - 解析 `messages.data`（应用层拆 JSON）  
-  - 或者先补齐 parts 表的写入闭环
+- 写入闭环：`SessionRepository::flush_with_messages(...)` 会在同一事务内
+  - upsert session
+  - upsert messages
+  - upsert parts（按 part idx 写 `sort_order`）
+  - 删除 DB 中“该 message 下不再存在的 parts”（支持 revert/delete）
+- 历史回填：迁移 `m20260318_000012_backfill_parts_from_messages_data` 会从 `messages.data` JSON 回填 `parts`（`INSERT OR IGNORE`）
+- 懒加载读取：列表页只查 `parts` 的轻量列（id/type/tool/status/sort_order），需要全文/复杂结构时再读 `parts.data`（完整 part JSON）
 
 ### 5.5 “活动 part / 正在执行的工具调用”当前靠什么暴露？
 
@@ -289,7 +294,7 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 1) **消息 parts 内的 ToolCall.status（内存态）**  
    - 类型：`rocode_session::ToolCallStatus`（`crates/rocode-session/src/message.rs`）  
    - API 输出：`crates/rocode-server/src/routes/session/messages.rs` → `part_to_info`
-   - 注意：如 5.3 所述，这个 status 不会可靠持久化（重启后会丢）
+   - 说明：在本分支中，`status/raw/state` 已能随 `messages.data` / `parts.data` 一起持久化；重启后可回放“最后一次 flush 时”的状态
 
 2) **Server 聚合运行时状态：`RuntimeStateStore`（纯内存）**  
    - 类型：`crates/rocode-server/src/session_runtime/state.rs`
@@ -425,7 +430,9 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 - Repository：✅ 已提供
   - `PartRepository::count_for_message(message_id)`
   - `PartRepository::count_for_session(session_id)`
-- Server API：❌ 没有 parts 分页/统计 API
+- Server API：✅ 已提供（支持 `limit/offset` + 返回 `X-Total-Count`）
+  - `GET /session/{id}/message/{msgID}/part?limit=&offset=`：parts summaries（轻量）
+  - `GET /session/{id}/message/{msgID}/part/{partID}`：单个 part 详情（按需返回 `data`）
 
 **分页 / offset**
 
@@ -433,9 +440,9 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 - Repository：✅ 已提供
   - `PartRepository::list_for_message_page(message_id, limit, offset)`
   - `PartRepository::list_for_session_page(session_id, limit, offset)`
-- Server：🟡 内存里 parts 是 message JSON 的一部分，理论上可在 API 层 slice，但目前并没有对应接口
+- Server：✅ 已提供（见上）；优先走 DB（避免读取 `messages.data` 大 blob），必要时 fallback 到内存
 
-更关键的是：如 5.4 所述，**parts 表目前没有写入链路**，所以即使 schema 能做，也拿不到数据。
+补充：如果你希望“会话级 activity feed”（跨 message 的 parts 流）/“按 tool/status 检索”，推荐直接在 storage 层基于 `parts` 表做过滤分页接口（DB 更适合做这类查询）。
 
 ---
 
