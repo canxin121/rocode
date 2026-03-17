@@ -3,6 +3,7 @@ AGENT.md
 # Rust build output
 target/
 marscode/
+.codex/
 plans/
 docs/plans/
 # Cargo local config

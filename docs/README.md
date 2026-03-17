@@ -10,6 +10,8 @@ This directory contains product-facing examples and design references for ROCode
   - 项目总览、启动方式、当前公开能力范围
 - `USER_GUIDE.md`
   - 面向使用者的命令、scheduler、TUI 交互说明
+- `storage-cache-config.md`
+  - 存储 / 缓存 / 配置路径与数据库结构（源码导读，含表结构与字段语义）
 - `docs/examples/scheduler/README.md`
   - public scheduler presets、stage 默认值、当前行为说明
 - `docs/examples/scheduler/SCHEDULER_GUIDE.md`
