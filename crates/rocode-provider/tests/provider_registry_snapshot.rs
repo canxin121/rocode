@@ -15,7 +15,21 @@ fn test_provider_registry_snapshot() {
         registry.list().iter().map(|p| p.id().to_string()).collect();
     registered_ids.sort();
 
-    // With no config, env, or auth store, only the custom-loader-backed opencode
-    // provider autoloads. All other providers require explicit credentials/config.
-    assert_eq!(registered_ids, vec!["opencode".to_string()]);
+    // With no config, env, or auth store, the registry still exposes a small set
+    // of credential-less/default providers (plus the custom-loader-backed opencode).
+    //
+    // This is a snapshot-style test: update this list only when the intended
+    // default provider surface changes.
+    assert_eq!(
+        registered_ids,
+        vec![
+            "anthropic".to_string(),
+            "google".to_string(),
+            "minimax".to_string(),
+            "minimax-cn".to_string(),
+            "minimax-cn-coding-plan".to_string(),
+            "minimax-coding-plan".to_string(),
+            "opencode".to_string(),
+        ]
+    );
 }

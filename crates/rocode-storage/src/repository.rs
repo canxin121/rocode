@@ -726,6 +726,43 @@ impl TodoRepository {
             .collect())
     }
 
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        todos::Entity::find()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TodoItem>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = todos::Entity::find()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .order_by_asc(todos::Column::Position)
+            .order_by_asc(todos::Column::TodoId)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| TodoItem {
+                id: row.todo_id,
+                content: row.content,
+                status: row.status,
+                priority: row.priority,
+                position: row.position,
+            })
+            .collect())
+    }
+
     pub async fn upsert(&self, session_id: &str, todo: &TodoItem) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = todos::ActiveModel {
@@ -873,6 +910,53 @@ impl PartRepository {
         let rows = parts::Entity::find()
             .filter(parts::Column::MessageId.eq(message_id))
             .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PartRow {
+                id: r.id,
+                message_id: r.message_id,
+                session_id: r.session_id,
+                part_type: r.part_type,
+                text: r.text,
+                tool_name: r.tool_name,
+                tool_call_id: r.tool_call_id,
+                tool_arguments: r.tool_arguments,
+                tool_result: r.tool_result,
+                tool_error: r.tool_error,
+                tool_status: r.tool_status,
+                sort_order: r.sort_order,
+            })
+            .collect())
+    }
+
+    pub async fn count_for_message(&self, message_id: &str) -> Result<u64, DatabaseError> {
+        parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_message_page(
+        &self,
+        message_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -900,6 +984,53 @@ impl PartRepository {
         let rows = parts::Entity::find()
             .filter(parts::Column::SessionId.eq(session_id))
             .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PartRow {
+                id: r.id,
+                message_id: r.message_id,
+                session_id: r.session_id,
+                part_type: r.part_type,
+                text: r.text,
+                tool_name: r.tool_name,
+                tool_call_id: r.tool_call_id,
+                tool_arguments: r.tool_arguments,
+                tool_result: r.tool_result,
+                tool_error: r.tool_error,
+                tool_status: r.tool_status,
+                sort_order: r.sort_order,
+            })
+            .collect())
+    }
+
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        parts::Entity::find()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;

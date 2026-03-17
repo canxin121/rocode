@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -581,7 +582,7 @@ pub(super) async fn list_messages(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
     Query(query): Query<ListMessagesQuery>,
-) -> Result<Json<Vec<MessageInfo>>> {
+) -> Result<(HeaderMap, Json<Vec<MessageInfo>>)> {
     state
         .api_perf
         .list_messages_calls
@@ -598,6 +599,12 @@ pub(super) async fn list_messages(
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    if query.after.is_some() && query.offset.is_some() {
+        return Err(ApiError::BadRequest(
+            "Query parameters `after` and `offset` are mutually exclusive".to_string(),
+        ));
+    }
+
     let mut pending_questions =
         super::super::tui::list_questions_for_session(&state, &session_id).await;
     let sessions = state.sessions.lock().await;
@@ -605,16 +612,22 @@ pub(super) async fn list_messages(
         .get(&session_id)
         .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     let tool_names = collect_tool_names(session);
+    let total = session.messages.len();
     let limit = query.limit.filter(|value| *value > 0);
-    let mut started = query.after.is_none();
+    let start_offset = if let Some(after) = query.after.as_deref() {
+        session
+            .messages
+            .iter()
+            .position(|m| m.id == after)
+            .map(|pos| pos.saturating_add(1))
+            // If the anchor message is unknown, fall back to a full list so clients can recover.
+            .unwrap_or(0)
+    } else {
+        query.offset.unwrap_or(0)
+    };
+
     let mut messages = Vec::new();
-    for message in &session.messages {
-        if !started {
-            if query.after.as_deref() == Some(message.id.as_str()) {
-                started = true;
-            }
-            continue;
-        }
+    for message in session.messages.iter().skip(start_offset) {
         messages.push(message_to_info(
             &session_id,
             message,
@@ -628,25 +641,30 @@ pub(super) async fn list_messages(
         }
     }
 
-    // If the anchor message is unknown, fall back to a full list so clients can recover.
-    if query.after.is_some() && !started {
-        messages.clear();
-        for message in &session.messages {
-            messages.push(message_to_info(
-                &session_id,
-                message,
-                &tool_names,
-                &mut pending_questions,
-            ));
-            if let Some(limit) = limit {
-                if messages.len() >= limit {
-                    break;
-                }
-            }
-        }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&messages.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&start_offset.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    if let Some(limit) = limit {
+        headers.insert(
+            "X-Limit",
+            HeaderValue::from_str(&limit.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
     }
 
-    Ok(Json(messages))
+    Ok((headers, Json(messages)))
 }
 
 fn match_pending_question_request(
@@ -746,6 +764,7 @@ fn question_pending_interaction_json(
 pub(super) struct ListMessagesQuery {
     pub after: Option<String>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 pub(super) async fn delete_message(

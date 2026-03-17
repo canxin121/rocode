@@ -60,12 +60,12 @@
 
 ### 4.1 Sessions（会话列表）
 
-- Server API：`GET /sessions?limit=&offset=` ✅（内存过滤+排序+切片，不返回 total）
+- Server API：`GET /sessions?limit=&offset=` ✅（内存过滤+排序+切片；total 通过 `X-Total-Count` header 返回）
 - Storage：`SessionRepository::{count, list_page}` ✅（offset-based；可拿 total）
 
 ### 4.2 Messages（某会话消息列表）
 
-- Server API：`GET /session/{id}/messages?after=&limit=` 🟡（cursor-ish；不返回 total；内存扫描）
+- Server API：`GET /session/{id}/messages?after=&limit=` 或 `?offset=&limit=` 🟡（内存扫描/切片；total 通过 `X-Total-Count` header 返回）
 - Storage：`MessageRepository::{count_for_session, list_for_session_page}` ✅（offset-based；可拿 total）
 
 ### 4.3 Parts（message parts）
@@ -76,4 +76,3 @@
 
 1. **如果你要做标准 REST 列表（total + limit/offset）**：优先走 storage 层的 `count_* + list_*_page`，并利用新增索引（目录/会话维度）。
 2. **如果你要做大规模分页**：尽量用 keyset/cursor（`(updated_at, id)` / `(created_at, id)`），避免大 offset 的线性跳过成本。
-

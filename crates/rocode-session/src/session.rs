@@ -1115,6 +1115,13 @@ impl SessionManager {
 
     /// List sessions with filters
     pub fn list_filtered(&self, filter: SessionFilter) -> Vec<&Session> {
+        self.list_filtered_with_total(filter).1
+    }
+
+    /// List sessions with filters, returning `(total, items)`.
+    ///
+    /// `total` is the count after filtering but before pagination.
+    pub fn list_filtered_with_total(&self, filter: SessionFilter) -> (usize, Vec<&Session>) {
         let search = filter.search.as_deref().map(|s| s.to_lowercase());
 
         let mut sessions: Vec<&Session> = self
@@ -1152,12 +1159,13 @@ impl SessionManager {
                 .then_with(|| a.id.cmp(&b.id))
         });
 
+        let total = sessions.len();
         let offset = filter.offset.unwrap_or(0);
         let mut paged: Vec<&Session> = sessions.into_iter().skip(offset).collect();
         if let Some(limit) = filter.limit {
             paged.truncate(limit);
         }
-        paged
+        (total, paged)
     }
 
     /// Get children of a session

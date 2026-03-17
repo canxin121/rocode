@@ -642,6 +642,7 @@ Repo：`crates/rocode-storage/src/repository.rs` → `ShareRepository`
 
 - 基础索引：`crates/rocode-storage-migration/src/m20260317_000007_create_indexes.rs`
 - 分页相关补充索引：`crates/rocode-storage-migration/src/m20260317_000010_add_pagination_indexes.rs`
+- parts/todos 分页补充索引：`crates/rocode-storage-migration/src/m20260317_000011_add_part_todo_pagination_indexes.rs`
 
 主要包含：
 
@@ -649,7 +650,9 @@ Repo：`crates/rocode-storage/src/repository.rs` → `ShareRepository`
 - messages：按 `session_id`、`created_at`
 - messages（补充）：按 `(session_id, created_at)`（更适合 `WHERE session_id = ? ORDER BY created_at`）
 - parts：按 `message_id`、`session_id`、`sort_order`
+- parts（补充）：按 `(message_id, sort_order, created_at, id)` 与 `(session_id, sort_order, created_at, id)`（更适合稳定分页/避免同序号 tie）
 - todos：按 `session_id`、`status`
+- todos（补充）：按 `(session_id, position, todo_id)`（更适合 `WHERE session_id = ? ORDER BY position`）
 - sessions（补充）：按 `(directory, updated_at)`（更适合 `WHERE directory = ? ORDER BY updated_at`）
 
 ---
@@ -674,6 +677,7 @@ Repo：`crates/rocode-storage/src/repository.rs` → `ShareRepository`
 分页/查询相关补充：
 
 - `crates/rocode-storage-migration/src/m20260317_000010_add_pagination_indexes.rs`：新增 `(directory, updated_at)` 与 `(session_id, created_at)` 索引（更适合 server 侧分页查询）。
+- `crates/rocode-storage-migration/src/m20260317_000011_add_part_todo_pagination_indexes.rs`：新增 parts/todos 的复合索引（更适合 message parts 与 todo 列表的稳定分页查询）。
 
 ---
 

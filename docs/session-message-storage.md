@@ -301,31 +301,50 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 
 > 如果你要做 server：“页面上展示当前 session 正在跑哪个工具、跑了多久、是否卡在 permission/question”，建议把 `/runtime` 作为主信息源，而不是试图从历史 messages 反推。
 
-### 5.6 现有 API 对消息分页的“真实能力”：支持 `after + limit`，但不是 offset
+### 5.6 现有 API 对消息分页的“真实能力”：同时支持 `after + limit`（增量）与 `offset + limit`（标准分页）
 
 消息列表路由：
 
-- `crates/rocode-server/src/routes/session/messages.rs`：`list_messages`
+- `crates/rocode-server/src/routes/session/messages.rs`：`list_messages`（`GET /session/{id}/messages`）
 
-它支持：
+它支持两种互斥的分页方式：
 
-- `limit: Option<usize>`：限制返回条数
+1) **增量/游标式**：`after + limit`
+
 - `after: Option<String>`：以 message id 为锚点，从该 message **之后**开始返回
+- `limit: Option<usize>`：限制返回条数
 
-实现方式是：
+2) **标准 offset 分页**：`offset + limit`
 
-- 从内存 `session.messages: Vec<SessionMessage>` 顺序扫描
-- 找到 `after` 的 message id 后开始 push，直到达到 limit
-- 如果 `after` 找不到，会 fallback 返回从头开始的前 `limit` 条（让客户端能自愈）
+- `offset: Option<usize>`：跳过前 N 条（0-based，按消息存储顺序）
+- `limit: Option<usize>`：限制返回条数
 
-这类分页的特点：
+约束：
 
-- 优点：适合“增量拉取”（类似 cursor pagination）
+- `after` 与 `offset` **互斥**，同时传会返回 400。
+
+返回 headers（便于前端做 total/分页 UI）：
+
+- `X-Total-Count`：该 session 的消息总数（不受 limit/offset 影响）
+- `X-Returned-Count`：本次返回条数
+- `X-Offset`：本次返回 slice 的起始 offset（当使用 `after` 时，会按锚点计算；锚点不存在时 fallback 为 0）
+- `X-Limit`：本次生效的 limit（仅当传入且 >0 时）
+
+实现方式（仍是内存切片）：
+
+- 数据源：内存 `session.messages: Vec<SessionMessage>`
+- `after` 模式：先定位锚点索引，再从 `pos+1` 处开始返回（锚点不存在则退化为从头开始）
+- `offset` 模式：直接 `skip(offset)` 再取 `limit`
+- total 直接用 `session.messages.len()`，无需额外 DB count
+
+特点：
+
+- 优点：
+  - `after` 适合“增量拉取”（例如轮询/断线重连补齐）
+  - `offset` 适合标准分页组件（配合 `X-Total-Count` 计算最后一页）
 - 缺点：
-  - 锚点是 message id，不是排序键（created_at）——虽然目前消息 vector 是按时间 append 的
-  - 没有总数（total）
-  - 不是 offset-based
-  - 扫描复杂度 O(n)（对超长 session 会变慢）
+  - 仍基于内存 vector，anchor 定位/offset 跳过在超长 session 下是 O(n)
+  - 并未下沉到 DB（真正 server 化时仍建议用 storage repo + 索引或 keyset 分页）
 
 ---
 
@@ -345,7 +364,8 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 - Repository：✅ 已提供
   - `SessionRepository::count(project_id: Option<&str>)`
   - `SessionRepository::count_for_directory(directory: &str)`
-- Server API：❌ 当前没有返回 total 的接口（`list_sessions` 只返回列表）
+- Server API：✅ `GET /sessions` 会在 response headers 返回 `X-Total-Count`
+  - 同时返回 `X-Returned-Count` / `X-Offset` / `X-Limit`（便于前端分页 UI）
 
 **分页（LIMIT / cursor）**
 
@@ -374,39 +394,45 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 
 - Schema：✅ `SELECT COUNT(*) FROM messages WHERE session_id = ?`
 - Repository：✅ `MessageRepository::count_for_session(session_id)`
-- Server API：❌ `GET /session/{id}/messages` 不返回 total
+- Server API：✅ `GET /session/{id}/messages` 在 response headers 返回 `X-Total-Count`
 
 **分页**
 
 - Schema：✅（建议使用 `(created_at, id)` 做 keyset；也可以 OFFSET）
 - Repository：✅ 新增 offset-based 分页
   - `MessageRepository::list_for_session_page(session_id, limit, offset)`
-- Server API：🟡 仍主要是 `after + limit`（见 5.6），但它是：
-  - 基于内存 vector 的扫描分页
-  - 锚点是 message id（而不是时间戳/复合键）
-  - 不返回 total
+- Server API：🟡 内存层目前支持两套分页语义（见 5.6）：
+  - `after + limit`（增量）
+  - `offset + limit`（标准分页）
+  - 返回 `X-Total-Count` 等 headers
+  - 但依旧是对内存 `Vec` 做定位/切片，数据规模大时复杂度仍为 O(n)
 
 **offset 获取**
 
 - Schema：✅ 可实现
 - Repository：✅ 已实现（见上）
-- Server API：❌ 未实现（只有 after）
+- Server API：✅ 已实现（`offset` query 参数；与 `after` 互斥）
 
-> 结论：storage 层现在已经能支持“total + limit/offset”风格的标准分页；  
-> API 层如果需要“标准分页 + total”，可以直接复用 repository，并基于新增索引做查询。
+> 结论：storage 层已经能支持“total + limit/offset”风格的标准分页；  
+> API 层当前也能通过 headers 拿到 total 并做 offset 分页，但仍是内存切片。  
+> 如果未来要做真正的 server 化/多进程/大数据，建议把列表读路径下沉到 storage repo（或改为 keyset/cursor）。
 
 ### 6.3 Parts（message parts / tool calls 等）
 
 **总数（COUNT）**
 
 - Schema：✅ 可对 `parts` 表 count，也可对 `messages.data` 做应用层统计
-- Repository：❌ `PartRepository` 没有 count 方法
+- Repository：✅ 已提供
+  - `PartRepository::count_for_message(message_id)`
+  - `PartRepository::count_for_session(session_id)`
 - Server API：❌ 没有 parts 分页/统计 API
 
 **分页 / offset**
 
 - Schema：✅ `ORDER BY sort_order LIMIT/OFFSET` 当然可实现
-- Repository：❌ `PartRepository::list_for_message/list_for_session` 无 limit/offset
+- Repository：✅ 已提供
+  - `PartRepository::list_for_message_page(message_id, limit, offset)`
+  - `PartRepository::list_for_session_page(session_id, limit, offset)`
 - Server：🟡 内存里 parts 是 message JSON 的一部分，理论上可在 API 层 slice，但目前并没有对应接口
 
 更关键的是：如 5.4 所述，**parts 表目前没有写入链路**，所以即使 schema 能做，也拿不到数据。
@@ -427,6 +453,7 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
 - `crates/rocode-server/src/routes/session/session_crud.rs`：`list_sessions`
   - 支持 `offset` query 参数（与 `limit` 组合做 offset-based pagination）
   - `directory` query 会先 `resolved_session_directory()` 规范化（减少路径不一致导致的“查不到”）
+  - 在 headers 返回 `X-Total-Count` / `X-Returned-Count` / `X-Offset` / `X-Limit`
 
 这能让前端稳定拿到“最近会话”列表，并且分页语义明确。
 
@@ -440,6 +467,7 @@ SQLite schema 里有 `parts` 表（见迁移 `crates/rocode-storage-migration/sr
   - `SessionRepository::{count, list_page, count_for_directory, list_for_directory_page}`
   - `MessageRepository::{count_for_session, list_for_session_page}`
 - 索引迁移：`crates/rocode-storage-migration/src/m20260317_000010_add_pagination_indexes.rs`
+- 索引迁移（parts/todos）：`crates/rocode-storage-migration/src/m20260317_000011_add_part_todo_pagination_indexes.rs`
 
 下一步更推荐 keyset/cursor（避免大 offset 线性跳过成本）：
 
