@@ -38,24 +38,47 @@ struct PermissionReply {
     message: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct PermissionRequestMetadataMessage {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    question: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    command: Option<String>,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None => None,
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+impl PermissionRequestMetadataMessage {
+    fn from_map(metadata: &HashMap<String, serde_json::Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
 fn permission_request_message(request: &rocode_tool::PermissionRequest) -> String {
-    request
-        .metadata
-        .get("description")
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            request
-                .metadata
-                .get("question")
-                .and_then(|value| value.as_str())
-        })
-        .or_else(|| {
-            request
-                .metadata
-                .get("command")
-                .and_then(|value| value.as_str())
-        })
-        .map(str::to_string)
+    let metadata = PermissionRequestMetadataMessage::from_map(&request.metadata);
+    metadata
+        .description
+        .or(metadata.question)
+        .or(metadata.command)
         .or_else(|| {
             (!request.patterns.is_empty())
                 .then(|| format!("{}: {}", request.permission, request.patterns.join(", ")))
@@ -123,10 +146,7 @@ pub(crate) async fn request_permission(
     PERMISSION_WAITERS.lock().await.remove(&permission_id);
 
     // Clear pending permission from aggregated runtime state.
-    state
-        .runtime_state
-        .permission_resolved(&session_id)
-        .await;
+    state.runtime_state.permission_resolved(&session_id).await;
 
     match wait_result {
         Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {

@@ -9,6 +9,7 @@
 use crate::cli_select::{interactive_select, SelectOption, SelectResult};
 use crate::cli_spinner::SpinnerGuard;
 use crate::cli_style::CliStyle;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -64,6 +65,46 @@ pub enum PermissionDecision {
     Deny,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PermissionMetadata {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    command: Option<String>,
+    #[serde(
+        default,
+        alias = "filePath",
+        alias = "file_path",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    filepath: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    diff: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    query: Option<String>,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None => None,
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+impl PermissionMetadata {
+    fn from_map(metadata: &std::collections::HashMap<String, serde_json::Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
 /// Format a permission request into a human-readable summary block for the terminal.
 fn format_permission_summary(
     permission: &str,
@@ -72,6 +113,7 @@ fn format_permission_summary(
     style: &CliStyle,
 ) -> String {
     let mut lines = Vec::new();
+    let metadata = PermissionMetadata::from_map(metadata);
 
     // Permission type icon + label
     let (icon, label) = match permission {
@@ -107,7 +149,7 @@ fn format_permission_summary(
     }
 
     // Show relevant metadata
-    if let Some(command) = metadata.get("command").and_then(|v| v.as_str()) {
+    if let Some(command) = metadata.command.as_deref() {
         let display = if command.len() > 120 {
             format!("{}…", &command[..117])
         } else {
@@ -116,13 +158,13 @@ fn format_permission_summary(
         lines.push(format!("    {} {}", style.dim("$"), display));
     }
 
-    if let Some(filepath) = metadata.get("filepath").and_then(|v| v.as_str()) {
+    if let Some(filepath) = metadata.filepath.as_deref() {
         if patterns.is_empty() || !patterns.iter().any(|p| p == filepath) {
             lines.push(format!("    {} {}", style.dim("file:"), filepath));
         }
     }
 
-    if let Some(diff) = metadata.get("diff").and_then(|v| v.as_str()) {
+    if let Some(diff) = metadata.diff.as_deref() {
         // Show first few lines of the diff
         let diff_lines: Vec<&str> = diff.lines().take(8).collect();
         if !diff_lines.is_empty() {
@@ -147,7 +189,7 @@ fn format_permission_summary(
         }
     }
 
-    if let Some(query) = metadata.get("query").and_then(|v| v.as_str()) {
+    if let Some(query) = metadata.query.as_deref() {
         lines.push(format!("    {} {}", style.dim("query:"), query));
     }
 
