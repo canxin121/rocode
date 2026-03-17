@@ -3,7 +3,7 @@ use crate::{MessageRole, SessionMessage};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+pub(crate) fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
     #[derive(Debug, Deserialize)]
     #[serde(untagged)]
     enum HookEnvelope<T> {

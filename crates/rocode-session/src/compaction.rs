@@ -15,6 +15,7 @@ use crate::message_v2::{
     AssistantTime, AssistantTokens, CacheTokens, CompletedTime, MessageInfo, MessagePath,
     MessageWithParts, ModelRef, Part, TextTime, ToolState, UserTime,
 };
+use crate::prompt::hooks::parse_hook_payload;
 use rocode_provider::{Content, ContentPart, ImageUrl, Message, Provider, Role};
 
 const COMPACTION_BUFFER: u64 = 20_000;
@@ -854,44 +855,75 @@ pub fn generate_continue_message() -> String {
 }
 
 fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>, Vec<String>) {
-    let source = payload
-        .get("data")
-        .filter(|value| value.is_object())
-        .unwrap_or(payload);
-
-    let prompt = source
-        .get("prompt")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            source
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        });
-
-    let mut context = Vec::new();
-    if let Some(value) = source.get("context") {
-        if let Some(values) = value.as_array() {
-            context.extend(values.iter().filter_map(|item| {
-                item.as_str()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToString::to_string)
-            }));
-        } else if let Some(item) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-        {
-            context.push(item.to_string());
-        }
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
     }
 
-    (prompt, context)
+    fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let mut out = Vec::new();
+        match value {
+            Some(serde_json::Value::Array(values)) => {
+                for item in values {
+                    if let Some(item) = item.as_str().map(str::trim).filter(|text| !text.is_empty())
+                    {
+                        out.push(item.to_string());
+                    }
+                }
+            }
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+            }
+            _ => {}
+        }
+        Ok(out)
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct CompactionHookStructuredWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        prompt: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+        context: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum CompactionHookSourceWire {
+        Structured(CompactionHookStructuredWire),
+        Text(String),
+    }
+
+    let parsed = parse_hook_payload::<CompactionHookSourceWire>(payload);
+    match parsed {
+        Some(CompactionHookSourceWire::Text(text)) => {
+            let prompt = text.trim();
+            ((!prompt.is_empty()).then(|| prompt.to_string()), Vec::new())
+        }
+        Some(CompactionHookSourceWire::Structured(structured)) => {
+            let prompt = structured
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            (prompt, structured.context)
+        }
+        None => (None, Vec::new()),
+    }
 }
 
 fn resolve_compaction_prompt(

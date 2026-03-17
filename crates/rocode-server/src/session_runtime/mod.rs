@@ -384,51 +384,79 @@ where
     Some(result)
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SessionMessageMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    scheduler_stage_emitted: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    scheduler_stage_streaming: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_waiting_on: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_last_event: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_profile: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    resolved_scheduler_profile: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+    scheduler_stage_index: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_start_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_finish_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_decision_kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_decision_title: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_decision_spec_lossy")]
+    scheduler_decision_spec: Option<SchedulerDecisionRenderSpec>,
+    #[serde(default, deserialize_with = "deserialize_decision_fields_lossy")]
+    scheduler_decision_fields: Vec<SchedulerDecisionField>,
+    #[serde(default, deserialize_with = "deserialize_decision_sections_lossy")]
+    scheduler_decision_sections: Vec<SchedulerDecisionSection>,
+}
+
+fn session_message_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> SessionMessageMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return SessionMessageMetadataWire::default();
+    };
+    serde_json::from_value::<SessionMessageMetadataWire>(value).unwrap_or_default()
+}
+
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
     session.messages.iter_mut().rev().find(|message| {
-        message.role == MessageRole::Assistant
-            && message
-                .metadata
-                .get("scheduler_stage_emitted")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            && (message
-                .metadata
-                .get("scheduler_stage_streaming")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || matches!(
-                    message
-                        .metadata
-                        .get("scheduler_stage_status")
-                        .and_then(|value| value.as_str()),
-                    Some("running" | "waiting" | "cancelling")
-                ))
+        if message.role != MessageRole::Assistant {
+            return false;
+        }
+
+        let metadata = session_message_metadata_wire(&message.metadata);
+        if !metadata.scheduler_stage_emitted.unwrap_or(false) {
+            return false;
+        }
+
+        metadata.scheduler_stage_streaming.unwrap_or(false)
+            || matches!(
+                metadata.scheduler_stage_status.as_deref(),
+                Some("running" | "waiting" | "cancelling")
+            )
     })
 }
 
 fn scheduler_abort_info(message: &SessionMessage) -> SchedulerAbortInfo {
+    let metadata = session_message_metadata_wire(&message.metadata);
     SchedulerAbortInfo {
-        execution_id: message
-            .metadata
-            .get("scheduler_stage_id")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        scheduler_profile: message
-            .metadata
-            .get("scheduler_profile")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        stage_name: message
-            .metadata
-            .get("scheduler_stage")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        stage_index: message
-            .metadata
-            .get("scheduler_stage_index")
-            .and_then(|value| value.as_u64())
-            .map(|value| value as u32),
+        execution_id: metadata.scheduler_stage_id,
+        scheduler_profile: metadata.scheduler_profile,
+        stage_name: metadata.scheduler_stage,
+        stage_index: metadata.scheduler_stage_index,
     }
 }
 
@@ -745,20 +773,19 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             let mut to_snapshot: Option<String> = None;
 
             for msg in &session.messages {
+                let metadata = session_message_metadata_wire(&msg.metadata);
                 if from_snapshot.is_none() {
-                    if let Some(s) = msg
-                        .metadata
-                        .get("step_start_snapshot")
-                        .and_then(|v| v.as_str())
+                    if let Some(s) = metadata
+                        .step_start_snapshot
+                        .as_deref()
                         .filter(|s| !s.is_empty())
                     {
                         from_snapshot = Some(s.to_string());
                     }
                 }
-                if let Some(s) = msg
-                    .metadata
-                    .get("step_finish_snapshot")
-                    .and_then(|v| v.as_str())
+                if let Some(s) = metadata
+                    .step_finish_snapshot
+                    .as_deref()
                     .filter(|s| !s.is_empty())
                 {
                     to_snapshot = Some(s.to_string());
@@ -1425,23 +1452,21 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 }
 
 fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatch {
+    let metadata = session_message_metadata_wire(&message.metadata);
     ExecutionPatch {
-        status: message
-            .metadata
-            .get("scheduler_stage_status")
-            .and_then(|value| value.as_str())
+        status: metadata
+            .scheduler_stage_status
+            .as_deref()
             .and_then(runtime_execution_status_from_stage_status),
-        waiting_on: message
-            .metadata
-            .get("scheduler_stage_waiting_on")
-            .and_then(|value| value.as_str())
+        waiting_on: metadata
+            .scheduler_stage_waiting_on
+            .as_deref()
             .filter(|value| *value != "none" && !value.is_empty())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Clear),
-        recent_event: message
-            .metadata
-            .get("scheduler_stage_last_event")
-            .and_then(|value| value.as_str())
+        recent_event: metadata
+            .scheduler_stage_last_event
+            .as_deref()
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Keep),
         metadata: FieldUpdate::Set(scheduler_stage_runtime_metadata(message)),
@@ -1908,6 +1933,59 @@ where
         Some(serde_json::Value::Bool(value)) => Some(value),
         _ => None,
     })
+}
+
+fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => {
+            value.as_u64().and_then(|value| u32::try_from(value).ok())
+        }
+        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_decision_spec_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<SchedulerDecisionRenderSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<SchedulerDecisionRenderSpec>(value).ok())
+}
+
+fn deserialize_decision_fields_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SchedulerDecisionField>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SchedulerDecisionField>>(value).unwrap_or_default())
+}
+
+fn deserialize_decision_sections_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SchedulerDecisionSection>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SchedulerDecisionSection>>(value).unwrap_or_default())
 }
 
 fn deserialize_opt_vec_string_lossy<'de, D>(
@@ -2791,32 +2869,20 @@ fn scheduler_decision_block(
 fn decision_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionBlock> {
-    let kind = metadata
-        .get("scheduler_decision_kind")
-        .and_then(|value| value.as_str())?
-        .to_string();
-    let title = metadata
-        .get("scheduler_decision_title")
-        .and_then(|value| value.as_str())
-        .unwrap_or("Decision")
-        .to_string();
+    let wire = session_message_metadata_wire(metadata);
+    let kind = wire.scheduler_decision_kind?;
+    let title = wire
+        .scheduler_decision_title
+        .unwrap_or_else(|| "Decision".to_string());
 
     Some(SchedulerDecisionBlock {
         kind,
         title,
-        spec: decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec),
-        fields: metadata
-            .get("scheduler_decision_fields")
-            .and_then(|value| {
-                serde_json::from_value::<Vec<SchedulerDecisionField>>(value.clone()).ok()
-            })
-            .unwrap_or_default(),
-        sections: metadata
-            .get("scheduler_decision_sections")
-            .and_then(|value| {
-                serde_json::from_value::<Vec<SchedulerDecisionSection>>(value.clone()).ok()
-            })
-            .unwrap_or_default(),
+        spec: wire
+            .scheduler_decision_spec
+            .unwrap_or_else(default_decision_render_spec),
+        fields: wire.scheduler_decision_fields,
+        sections: wire.scheduler_decision_sections,
     })
 }
 
@@ -2942,13 +3008,6 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
     }
 }
 
-fn decision_spec_from_metadata(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<SchedulerDecisionRenderSpec> {
-    let spec = metadata.get("scheduler_decision_spec")?.clone();
-    serde_json::from_value::<SchedulerDecisionRenderSpec>(spec).ok()
-}
-
 fn default_decision_render_spec() -> SchedulerDecisionRenderSpec {
     SchedulerDecisionRenderSpec {
         version: "decision-card/v1".to_string(),
@@ -2976,10 +3035,11 @@ fn pretty_scheduler_stage_title(
     stage: &str,
 ) -> String {
     let stage_title = prettify_decision_value(stage);
-    match metadata
-        .get("resolved_scheduler_profile")
-        .or_else(|| metadata.get("scheduler_profile"))
-        .and_then(|value| value.as_str())
+    let wire = session_message_metadata_wire(metadata);
+    match wire
+        .resolved_scheduler_profile
+        .as_deref()
+        .or_else(|| wire.scheduler_profile.as_deref())
     {
         Some(profile) if !profile.is_empty() => format!("{profile} · {stage_title}"),
         _ => stage_title,

@@ -6,6 +6,69 @@ use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => {
+            value.as_u64().and_then(|value| u32::try_from(value).ok())
+        }
+        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_i64(),
+        Some(serde_json::Value::String(value)) => value.parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExecutionRecordMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    child_session_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+    attempt: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_i64_lossy")]
+    next: Option<i64>,
+}
+
+fn execution_record_metadata_wire(
+    metadata: Option<&serde_json::Value>,
+) -> ExecutionRecordMetadataWire {
+    let Some(metadata) = metadata else {
+        return ExecutionRecordMetadataWire::default();
+    };
+
+    serde_json::from_value::<ExecutionRecordMetadataWire>(metadata.clone()).unwrap_or_default()
+}
+
 /// Metadata about the execution record that triggered a topology change.
 #[derive(Debug, Clone)]
 pub(crate) struct TopologyChangeContext {
@@ -71,17 +134,15 @@ impl ExecutionRecord {
     /// The protocol shape is defined in `rocode-command::stage_protocol` so
     /// that CLI, TUI, and Web can consume it without depending on server internals.
     pub fn to_node(&self) -> ExecutionNode {
+        let metadata_wire = execution_record_metadata_wire(self.metadata.as_ref());
         ExecutionNode {
             execution_id: self.id.clone(),
             parent_execution_id: self.parent_id.clone(),
             // Prefer first-class field; fall back to metadata for backward compat.
-            stage_id: self.stage_id.clone().or_else(|| {
-                self.metadata
-                    .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_id"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            }),
+            stage_id: self
+                .stage_id
+                .clone()
+                .or_else(|| metadata_wire.scheduler_stage_id.clone()),
             kind: match self.kind {
                 ExecutionKind::SchedulerStage => ExecutionNodeKind::Stage,
                 ExecutionKind::AgentTask => ExecutionNodeKind::Agent,
@@ -102,12 +163,7 @@ impl ExecutionRecord {
             started_at: self.started_at,
             updated_at: self.updated_at,
             session_id: self.session_id.clone(),
-            child_session_id: self
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("child_session_id"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            child_session_id: metadata_wire.child_session_id.clone(),
         }
     }
 }
@@ -319,22 +375,11 @@ impl RuntimeControlRegistry {
                     | ExecutionStatus::Waiting
                     | ExecutionStatus::Cancelling => SessionRunStatus::Busy,
                     ExecutionStatus::Retry => {
-                        let metadata = record.metadata.as_ref();
+                        let metadata = execution_record_metadata_wire(record.metadata.as_ref());
                         SessionRunStatus::Retry {
-                            attempt: metadata
-                                .and_then(|value| value.get("attempt"))
-                                .and_then(|value| value.as_u64())
-                                .map(|value| value as u32)
-                                .unwrap_or(1),
-                            message: metadata
-                                .and_then(|value| value.get("message"))
-                                .and_then(|value| value.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            next: metadata
-                                .and_then(|value| value.get("next"))
-                                .and_then(|value| value.as_i64())
-                                .unwrap_or_default(),
+                            attempt: metadata.attempt.unwrap_or(1),
+                            message: metadata.message.unwrap_or_default(),
+                            next: metadata.next.unwrap_or_default(),
                         }
                     }
                     // Done is filtered out above, but satisfy exhaustiveness.

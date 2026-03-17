@@ -41,7 +41,11 @@ struct OauthCallbackWire {
 
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     key: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy", alias = "apiKey")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_string_lossy",
+        alias = "apiKey"
+    )]
     api_key: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     token: Option<String>,
@@ -152,12 +156,7 @@ impl ProviderAuth {
 
         if let Some(key) = parsed.key.or(parsed.api_key).or(parsed.token) {
             self.auth_manager
-                .set(
-                    target_provider,
-                    AuthInfo::Api {
-                        key,
-                    },
-                )
+                .set(target_provider, AuthInfo::Api { key })
                 .await;
             return Ok(());
         }

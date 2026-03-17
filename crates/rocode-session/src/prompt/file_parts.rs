@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use base64::Engine;
+use serde::Deserialize;
 
 use crate::system::SystemPrompt;
 use crate::SessionMessage;
@@ -271,16 +272,43 @@ impl SessionPrompt {
     }
 
     pub(super) fn loaded_instruction_paths(msg: &SessionMessage) -> HashSet<String> {
-        msg.metadata
-            .get("loaded_instruction_files")
-            .and_then(|value| value.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(ToString::to_string))
-                    .collect()
+        fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+
+            Ok(match value {
+                serde_json::Value::Array(values) => values
+                    .into_iter()
+                    .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                    .collect(),
+                serde_json::Value::String(value) => {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![trimmed.to_string()]
+                    }
+                }
+                _ => Vec::new(),
             })
-            .unwrap_or_default()
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct LoadedInstructionPathsWire {
+            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            loaded_instruction_files: Vec<String>,
+        }
+
+        let Ok(value) = serde_json::to_value(&msg.metadata) else {
+            return HashSet::new();
+        };
+        let wire = serde_json::from_value::<LoadedInstructionPathsWire>(value).unwrap_or_default();
+        wire.loaded_instruction_files.into_iter().collect()
     }
 
     pub(super) fn store_loaded_instruction_paths(

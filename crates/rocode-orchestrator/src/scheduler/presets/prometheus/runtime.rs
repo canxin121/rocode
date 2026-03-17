@@ -152,7 +152,10 @@ pub fn parse_prometheus_user_choice(output: &str) -> String {
         .and_then(|wire| wire.answers)
         .and_then(|answers| match answers {
             AnswersWire::Flat(values) => values.into_iter().next(),
-            AnswersWire::Nested(values) => values.into_iter().next().and_then(|inner| inner.into_iter().next()),
+            AnswersWire::Nested(values) => values
+                .into_iter()
+                .next()
+                .and_then(|inner| inner.into_iter().next()),
         })
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

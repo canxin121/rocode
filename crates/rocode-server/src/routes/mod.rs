@@ -384,8 +384,7 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
         return false;
     }
     if current_kind == Some("message")
-        && json_object_field_str(current_block, "role")
-            != json_object_field_str(next_block, "role")
+        && json_object_field_str(current_block, "role") != json_object_field_str(next_block, "role")
     {
         return false;
     }
@@ -401,7 +400,10 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
     let Some(object) = current_block.as_object_mut() else {
         return false;
     };
-    if let Some((_, text)) = object.iter_mut().find(|(candidate, _)| candidate == "text") {
+    if let Some((_, text)) = object
+        .iter_mut()
+        .find(|(candidate, _)| candidate.as_str() == "text")
+    {
         *text = serde_json::Value::String(merged);
     } else {
         object.insert("text".to_string(), serde_json::Value::String(merged));

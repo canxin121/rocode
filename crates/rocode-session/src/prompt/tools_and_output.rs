@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rocode_orchestrator::session_title_request;
 use rocode_provider::{Content, Message, Provider, Role, ToolDefinition};
+use serde::Deserialize;
 
 use crate::{sanitize_display_text, MessageRole, PartType, Session, SessionMessage};
 
@@ -128,13 +129,33 @@ pub fn insert_reminders(
 }
 
 pub fn was_plan_agent(messages: &[SessionMessage]) -> bool {
-    messages.iter().any(|m| {
-        if let Some(agent) = m.metadata.get("agent") {
-            agent.as_str() == Some("plan")
-        } else {
-            false
-        }
-    })
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct AgentMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        agent: Option<String>,
+    }
+
+    fn agent_metadata_wire(metadata: &HashMap<String, serde_json::Value>) -> AgentMetadataWire {
+        let Ok(value) = serde_json::to_value(metadata) else {
+            return AgentMetadataWire::default();
+        };
+        serde_json::from_value::<AgentMetadataWire>(value).unwrap_or_default()
+    }
+
+    messages
+        .iter()
+        .any(|m| agent_metadata_wire(&m.metadata).agent.as_deref() == Some("plan"))
 }
 
 // --- Tool Resolution ---

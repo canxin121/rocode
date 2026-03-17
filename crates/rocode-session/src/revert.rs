@@ -49,6 +49,38 @@ pub struct RevertManager {
     worktree: PathBuf,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SnapshotMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_start_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_finish_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    snapshot: Option<String>,
+}
+
+fn snapshot_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> SnapshotMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return SnapshotMetadataWire::default();
+    };
+    serde_json::from_value::<SnapshotMetadataWire>(value).unwrap_or_default()
+}
+
 impl RevertManager {
     pub fn new(worktree: PathBuf) -> Self {
         Self { worktree }
@@ -222,19 +254,23 @@ impl RevertManager {
         let mut to_snapshot: Option<String> = None;
 
         for msg in messages {
+            let metadata = snapshot_metadata_wire(&msg.metadata);
             // Check message-level metadata for snapshot hashes
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_start_snapshot")
+                if let Some(s) = metadata
+                    .step_start_snapshot
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
                 {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
+                    from_snapshot = Some(s.to_string());
                 }
             }
-            if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_finish_snapshot") {
-                if !s.is_empty() {
-                    to_snapshot = Some(s.clone());
-                }
+            if let Some(s) = metadata
+                .step_finish_snapshot
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
+                to_snapshot = Some(s.to_string());
             }
 
             // Also scan parts: StepStart / StepFinish carry id+name / id+output,
@@ -242,10 +278,12 @@ impl RevertManager {
             // in the v1 format. We also check part-level metadata stored in the
             // message metadata under "snapshot" as a generic key.
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("snapshot") {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
+                if let Some(s) = metadata
+                    .snapshot
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                {
+                    from_snapshot = Some(s.to_string());
                 }
             }
         }
