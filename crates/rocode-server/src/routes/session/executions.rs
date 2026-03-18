@@ -5,6 +5,7 @@ use axum::Json;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
 use rocode_session::{PartType, Session, ToolCallStatus};
+use serde::Deserialize;
 
 use crate::runtime_control::SessionExecutionTopology;
 use crate::{ApiError, Result, ServerState};
@@ -253,15 +254,40 @@ fn select_active_tool_parent_id(
 fn select_active_agent_task_parent_id(
     records: &[crate::runtime_control::ExecutionRecord],
 ) -> Option<String> {
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolCallMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        tool_name: Option<String>,
+    }
+
+    fn tool_call_name(metadata: Option<&serde_json::Value>) -> Option<String> {
+        let Some(metadata) = metadata else {
+            return None;
+        };
+        serde_json::from_value::<ToolCallMetadataWire>(metadata.clone())
+            .ok()
+            .and_then(|wire| wire.tool_name)
+    }
+
     records
         .iter()
         .filter(|record| matches!(record.kind, crate::runtime_control::ExecutionKind::ToolCall))
         .filter(|record| {
-            record
-                .metadata
-                .as_ref()
-                .and_then(|value| value.get("tool_name"))
-                .and_then(|value| value.as_str())
+            tool_call_name(record.metadata.as_ref())
+                .as_deref()
                 .map(|name| matches!(name, "task" | "task_flow"))
                 .unwrap_or(false)
         })

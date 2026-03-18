@@ -343,19 +343,80 @@ fn message_to_info(
     tool_names: &HashMap<String, String>,
     pending_questions: &mut Vec<super::super::tui::QuestionInfo>,
 ) -> MessageInfo {
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_i64_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<i64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(value)) => value.as_i64(),
+            Some(serde_json::Value::String(value)) => value.parse::<i64>().ok(),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_f64_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<f64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(value)) => value.as_f64(),
+            Some(serde_json::Value::String(value)) => value.parse::<f64>().ok(),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct MessageMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        model_id: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        model_provider: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
+        cost: Option<f64>,
+        #[serde(default, deserialize_with = "deserialize_opt_i64_lossy")]
+        completed_at: Option<i64>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        agent: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        mode: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        finish_reason: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        error: Option<String>,
+    }
+
+    fn message_metadata_wire(metadata: &HashMap<String, serde_json::Value>) -> MessageMetadataWire {
+        let Ok(value) = serde_json::to_value(metadata) else {
+            return MessageMetadataWire::default();
+        };
+        serde_json::from_value::<MessageMetadataWire>(value).unwrap_or_default()
+    }
+
+    let wire = message_metadata_wire(&message.metadata);
     let mut metadata = message.metadata.clone();
     augment_scheduler_decision_metadata_for_response(&mut metadata, message);
     let usage = message.usage.clone().unwrap_or_default();
-    let model_id = message
-        .metadata
-        .get("model_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let model_provider = message
-        .metadata
-        .get("model_provider")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let model_id = wire.model_id.clone();
+    let model_provider = wire.model_provider.clone();
     let model = match (model_provider.as_deref(), model_id.as_deref()) {
         (Some(provider), Some(model)) => Some(format!("{}/{}", provider, model)),
         (None, Some(model)) => Some(model.to_string()),
@@ -364,11 +425,7 @@ fn message_to_info(
     let cost = if usage.total_cost > 0.0 {
         usage.total_cost
     } else {
-        message
-            .metadata
-            .get("cost")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
+        wire.cost.unwrap_or(0.0)
     };
 
     MessageInfo {
@@ -381,33 +438,12 @@ fn message_to_info(
             .map(|part| part_to_info(part, tool_names, pending_questions))
             .collect(),
         created_at: message.created_at.timestamp_millis(),
-        completed_at: message
-            .metadata
-            .get("completed_at")
-            .and_then(|v| v.as_i64()),
-        agent: message
-            .metadata
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        completed_at: wire.completed_at,
+        agent: wire.agent.clone(),
         model,
-        mode: message
-            .metadata
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        finish: message.finish.clone().or_else(|| {
-            message
-                .metadata
-                .get("finish_reason")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        }),
-        error: message
-            .metadata
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        mode: wire.mode.clone(),
+        finish: message.finish.clone().or(wire.finish_reason.clone()),
+        error: wire.error.clone(),
         cost,
         tokens: MessageTokensInfo {
             input: usage.input_tokens,
@@ -441,10 +477,30 @@ fn augment_scheduler_decision_metadata_for_response(
     if metadata.contains_key("scheduler_decision_title") {
         return;
     }
-    let Some(stage) = metadata
-        .get("scheduler_stage")
-        .and_then(|value| value.as_str())
-    else {
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct SchedulerStageWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage: Option<String>,
+    }
+
+    let stage = serde_json::to_value(&*metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<SchedulerStageWire>(value).ok())
+        .and_then(|wire| wire.scheduler_stage);
+    let Some(stage) = stage.as_deref() else {
         return;
     };
     let text = assistant_visible_text(message);

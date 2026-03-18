@@ -39,23 +39,38 @@ struct PermissionReply {
 }
 
 fn permission_request_message(request: &rocode_tool::PermissionRequest) -> String {
-    request
-        .metadata
-        .get("description")
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            request
-                .metadata
-                .get("question")
-                .and_then(|value| value.as_str())
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
         })
-        .or_else(|| {
-            request
-                .metadata
-                .get("command")
-                .and_then(|value| value.as_str())
-        })
-        .map(str::to_string)
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct PermissionRequestMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        description: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        question: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        command: Option<String>,
+    }
+
+    let metadata = serde_json::to_value(&request.metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<PermissionRequestMetadataWire>(value).ok())
+        .unwrap_or_default();
+
+    metadata
+        .description
+        .or(metadata.question)
+        .or(metadata.command)
         .or_else(|| {
             (!request.patterns.is_empty())
                 .then(|| format!("{}: {}", request.permission, request.patterns.join(", ")))

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -381,11 +382,33 @@ impl SessionSchedulerToolExecutor {
                 }
             }
         });
-        base_ctx.call_id = exec_ctx
-            .metadata
-            .get("call_id")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
+
+        fn deserialize_opt_string_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(serde_json::Value::String(value)) => Some(value),
+                _ => None,
+            })
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct OrchestratorExecutionMetadataWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            call_id: Option<String>,
+        }
+
+        let wire = serde_json::to_value(&exec_ctx.metadata)
+            .ok()
+            .and_then(|value| {
+                serde_json::from_value::<OrchestratorExecutionMetadataWire>(value).ok()
+            })
+            .unwrap_or_default();
+        base_ctx.call_id = wire.call_id;
         base_ctx.extra = exec_ctx.metadata.clone();
         Self::with_agent_task_publish_bus(base_ctx, self.state.clone())
     }

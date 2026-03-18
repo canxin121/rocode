@@ -390,6 +390,29 @@ fn apply_history_tool_result_display_override(
     title: Option<&str>,
     metadata: &HashMap<String, serde_json::Value>,
 ) {
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(value)) => value.as_u64(),
+            Some(serde_json::Value::String(value)) => value.parse::<u64>().ok(),
+            _ => None,
+        })
+    }
+
     match tool_name {
         "question" => {
             #[derive(Debug, Deserialize)]
@@ -399,15 +422,43 @@ fn apply_history_tool_result_display_override(
                 value: Option<String>,
             }
 
-            let summary = metadata
-                .get("display.summary")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-                .or_else(|| title.map(str::to_string));
-            let fields = metadata
-                .get("display.fields")
-                .and_then(|value| serde_json::from_value::<Vec<DisplayField>>(value.clone()).ok())
-                .unwrap_or_default()
+            fn deserialize_vec_display_field_lossy<'de, D>(
+                deserializer: D,
+            ) -> Result<Vec<DisplayField>, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+                let Some(value) = value else {
+                    return Ok(Vec::new());
+                };
+                Ok(serde_json::from_value::<Vec<DisplayField>>(value).unwrap_or_default())
+            }
+
+            #[derive(Debug, Default, Deserialize)]
+            struct QuestionToolMetadataWire {
+                #[serde(
+                    default,
+                    rename = "display.summary",
+                    deserialize_with = "deserialize_opt_string_lossy"
+                )]
+                display_summary: Option<String>,
+                #[serde(
+                    default,
+                    rename = "display.fields",
+                    deserialize_with = "deserialize_vec_display_field_lossy"
+                )]
+                display_fields: Vec<DisplayField>,
+            }
+
+            let wire = serde_json::to_value(metadata)
+                .ok()
+                .and_then(|value| serde_json::from_value::<QuestionToolMetadataWire>(value).ok())
+                .unwrap_or_default();
+
+            let summary = wire.display_summary.or_else(|| title.map(str::to_string));
+            let fields = wire
+                .display_fields
                 .into_iter()
                 .map(|field| {
                     json!({
@@ -419,16 +470,36 @@ fn apply_history_tool_result_display_override(
             apply_display_override(web, summary, fields, None);
         }
         "todowrite" | "todo_write" | "todoread" | "todo_read" => {
-            let todos = metadata
-                .get("todos")
-                .and_then(|value| serde_json::from_value::<Vec<TodoItem>>(value.clone()).ok())
+            fn deserialize_vec_todo_items_lossy<'de, D>(
+                deserializer: D,
+            ) -> Result<Vec<TodoItem>, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+                let Some(value) = value else {
+                    return Ok(Vec::new());
+                };
+                Ok(serde_json::from_value::<Vec<TodoItem>>(value).unwrap_or_default())
+            }
+
+            #[derive(Debug, Default, Deserialize)]
+            struct TodoToolMetadataWire {
+                #[serde(default, deserialize_with = "deserialize_vec_todo_items_lossy")]
+                todos: Vec<TodoItem>,
+                #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+                count: Option<u64>,
+            }
+
+            let wire = serde_json::to_value(metadata)
+                .ok()
+                .and_then(|value| serde_json::from_value::<TodoToolMetadataWire>(value).ok())
                 .unwrap_or_default();
-            let summary = title.map(str::to_string).or_else(|| {
-                metadata
-                    .get("count")
-                    .and_then(|value| value.as_u64())
-                    .map(|count| format!("{count} todo items"))
-            });
+
+            let todos = wire.todos;
+            let summary = title
+                .map(str::to_string)
+                .or_else(|| wire.count.map(|count| format!("{count} todo items")));
             let fields = todo_summary_fields_from_array(&todos);
             let preview = todo_preview_from_array(&todos);
             apply_display_override(web, summary, fields, preview);
