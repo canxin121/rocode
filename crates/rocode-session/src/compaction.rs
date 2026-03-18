@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::events::BusEventName;
 use rocode_orchestrator::compaction_request;
 use rocode_orchestrator::runtime::events::CancelToken as RuntimeCancelToken;
 use rocode_orchestrator::runtime::events::LoopRequest;
@@ -48,7 +49,8 @@ impl RuntimeCancelToken for CompactionAbortToken {
 }
 
 /// Bus event definition for session.compacted (mirrors TS Event.Compacted).
-pub const EVENT_COMPACTED: BusEventDef = BusEventDef::new("session.compacted");
+pub const EVENT_COMPACTED: BusEventDef =
+    BusEventDef::new(BusEventName::SessionCompacted.as_str());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionConfig {

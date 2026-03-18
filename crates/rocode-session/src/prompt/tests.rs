@@ -2,6 +2,7 @@ use super::*;
 use crate::message::MessagePart;
 use async_trait::async_trait;
 use futures::stream;
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use rocode_orchestrator::CompiledExecutionRequest;
 use rocode_provider::{
     ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamEvent, StreamResult, StreamUsage,
@@ -300,7 +301,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
             StreamEvent::TextDelta("Hel".to_string()),
             StreamEvent::TextDelta("lo".to_string()),
             StreamEvent::FinishStep {
-                finish_reason: Some("stop".to_string()),
+                finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                 usage: StreamUsage {
                     prompt_tokens: 3,
                     completion_tokens: 2,
@@ -424,7 +425,7 @@ async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
                 StreamEvent::Start,
                 StreamEvent::TextDelta("Read complete".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage::default(),
                     provider_metadata: None,
                 },
@@ -1082,7 +1083,7 @@ fn early_exit_does_not_break_on_tool_calls_finish() {
         message_id: None,
     });
     // finish_reason is "tool-calls" — loop should continue, not break
-    assistant.finish = Some("tool-calls".to_string());
+    assistant.finish = Some(ProviderFinishReasonWire::ToolCalls.as_str().to_string());
 
     let messages = vec![user, assistant];
 
@@ -1097,10 +1098,7 @@ fn early_exit_does_not_break_on_tool_calls_finish() {
     // The early-exit check from the prompt loop
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false
@@ -1128,7 +1126,7 @@ fn early_exit_breaks_on_terminal_finish() {
         created_at: chrono::Utc::now(),
         message_id: None,
     });
-    assistant.finish = Some("stop".to_string());
+    assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
 
     let messages = vec![user, assistant];
 
@@ -1142,10 +1140,7 @@ fn early_exit_breaks_on_terminal_finish() {
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false
@@ -1185,10 +1180,7 @@ fn early_exit_does_not_break_when_finish_is_none() {
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false

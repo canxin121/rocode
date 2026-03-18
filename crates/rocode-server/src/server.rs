@@ -25,6 +25,8 @@ use rocode_provider::{
     CustomFetchProxy, CustomFetchRequest, CustomFetchResponse, CustomFetchStreamResponse,
     ProviderError, ProviderRegistry,
 };
+use rocode_core::contracts::events::ServerEventType;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_session::{SessionManager, SessionPrompt, SessionStateManager};
 use rocode_storage::{Database, MessageRepository, SessionRepository};
 
@@ -268,12 +270,12 @@ impl ServerState {
                     scope: rocode_command::stage_protocol::EventScope::Stage,
                     stage_id: ctx.stage_id.clone(),
                     execution_id: Some(ctx.execution_id.clone()),
-                    event_type: "execution.topology.changed".to_string(),
+                    event_type: ServerEventType::ExecutionTopologyChanged.as_str().to_string(),
                     ts: chrono::Utc::now().timestamp_millis(),
                     payload: serde_json::json!({
-                        "sessionID": ctx.session_id,
-                        "executionID": ctx.execution_id,
-                        "stageID": ctx.stage_id,
+                        (wire_keys::SESSION_ID): ctx.session_id,
+                        (wire_keys::EXECUTION_ID): ctx.execution_id,
+                        (wire_keys::STAGE_ID): ctx.stage_id,
                     }),
                 };
                 let log = event_log_for_callback.clone();

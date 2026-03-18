@@ -4,6 +4,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::task::{
+    TaskResultEnvelope, TASK_NO_TEXT_OUTPUT_MESSAGE, TASK_STATUS_COMPLETED,
+};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::{
     Metadata, PermissionRequest, TaskAgentInfo, TaskAgentModel, Tool, ToolContext, ToolError,
@@ -23,10 +29,6 @@ impl Default for TaskTool {
         Self::new()
     }
 }
-
-const TASK_STATUS_COMPLETED: &str = "completed";
-const TASK_NO_TEXT_OUTPUT_MESSAGE: &str =
-    "Task completed successfully. No textual output was returned by subagent.";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TaskInput {
@@ -169,10 +171,7 @@ fn format_task_output(session_id: &str, result_text: &str) -> (String, bool) {
     };
 
     (
-        format!(
-            "task_id: {} (for resuming to continue this task if needed)\ntask_status: {}\n\n<task_result>\n{}\n</task_result>",
-            session_id, TASK_STATUS_COMPLETED, task_body
-        ),
+        TaskResultEnvelope::format_completed(session_id, &task_body),
         has_text_output,
     )
 }
@@ -180,7 +179,7 @@ fn format_task_output(session_id: &str, result_text: &str) -> (String, bool) {
 #[async_trait]
 impl Tool for TaskTool {
     fn id(&self) -> &str {
-        "task"
+        BuiltinToolName::Task.as_str()
     }
 
     fn description(&self) -> &str {
@@ -244,7 +243,7 @@ impl Tool for TaskTool {
 
         if !bypass_check {
             ctx.ask_permission(
-                PermissionRequest::new("task")
+                PermissionRequest::new(BuiltinToolName::Task.as_str())
                     .with_pattern(&dispatch_label)
                     .with_metadata("description", serde_json::json!(&input.description))
                     .with_metadata("subagent_type", serde_json::json!(&dispatch_label))
@@ -348,12 +347,12 @@ impl Tool for TaskTool {
         // Notify RuntimeControlRegistry (if wired) so the agent task appears
         // in the execution topology with a parent link to the enclosing tool call.
         ctx.do_publish_bus(
-            "agent_task.registered",
+            BusEventName::AgentTaskRegistered.as_str(),
             serde_json::json!({
-                "task_id": agent_task_id,
-                "session_id": ctx.session_id,
-                "agent_name": dispatch_label,
-                "parent_tool_call_id": ctx.call_id,
+                (agent_task_bus_keys::TASK_ID): agent_task_id,
+                (agent_task_bus_keys::SESSION_ID): ctx.session_id,
+                (agent_task_bus_keys::AGENT_NAME): dispatch_label,
+                (agent_task_bus_keys::PARENT_TOOL_CALL_ID): ctx.call_id,
             }),
         )
         .await;
@@ -366,8 +365,8 @@ impl Tool for TaskTool {
                 global_task_registry()
                     .complete(&agent_task_id, AgentTaskStatus::Completed { steps: 0 });
                 ctx.do_publish_bus(
-                    "agent_task.completed",
-                    serde_json::json!({ "task_id": agent_task_id }),
+                    BusEventName::AgentTaskCompleted.as_str(),
+                    serde_json::json!({ (agent_task_bus_keys::TASK_ID): agent_task_id }),
                 )
                 .await;
                 text
@@ -382,8 +381,8 @@ impl Tool for TaskTool {
                 };
                 global_task_registry().complete(&agent_task_id, status);
                 ctx.do_publish_bus(
-                    "agent_task.completed",
-                    serde_json::json!({ "task_id": agent_task_id }),
+                    BusEventName::AgentTaskCompleted.as_str(),
+                    serde_json::json!({ (agent_task_bus_keys::TASK_ID): agent_task_id }),
                 )
                 .await;
                 return Err(e);
@@ -429,11 +428,14 @@ fn get_disabled_tools(
     agent: Option<&TaskAgentInfo>,
     _load_skills: Option<&Vec<String>>,
 ) -> Vec<String> {
-    let mut disabled = vec!["todowrite".to_string(), "todoread".to_string()];
+    let mut disabled = vec![
+        BuiltinToolName::TodoWrite.as_str().to_string(),
+        BuiltinToolName::TodoRead.as_str().to_string(),
+    ];
 
     let has_task_permission = agent.map(|a| a.can_use_task).unwrap_or(false);
     if !has_task_permission {
-        disabled.push("task".to_string());
+        disabled.push(BuiltinToolName::Task.as_str().to_string());
     }
 
     disabled
@@ -568,7 +570,10 @@ mod tests {
         assert_eq!(create_calls[0].2, Some("provider-x:model-y".to_string()));
         assert_eq!(
             create_calls[0].3,
-            vec!["todowrite".to_string(), "todoread".to_string()]
+            vec![
+                BuiltinToolName::TodoWrite.as_str().to_string(),
+                BuiltinToolName::TodoRead.as_str().to_string(),
+            ]
         );
 
         let prompt_calls = prompt_calls.lock().await.clone();
@@ -718,7 +723,10 @@ mod tests {
         // can_use_task=true means "task" should NOT be in disabled_tools
         assert_eq!(
             create_calls[0].3,
-            vec!["todowrite".to_string(), "todoread".to_string()]
+            vec![
+                BuiltinToolName::TodoWrite.as_str().to_string(),
+                BuiltinToolName::TodoRead.as_str().to_string(),
+            ]
         );
     }
 
@@ -772,7 +780,9 @@ mod tests {
         assert_eq!(create_calls.len(), 1);
         assert_eq!(create_calls[0].2, Some("anthropic:claude".to_string()));
         // Unknown agent → can_use_task defaults to false → "task" should be disabled
-        assert!(create_calls[0].3.contains(&"task".to_string()));
+        assert!(create_calls[0]
+            .3
+            .contains(&BuiltinToolName::Task.as_str().to_string()));
     }
 
     #[tokio::test]
@@ -814,7 +824,9 @@ mod tests {
 
         let create_calls = create_calls.lock().await.clone();
         // Without callback, agent=None → task disabled (backward compat)
-        assert!(create_calls[0].3.contains(&"task".to_string()));
+        assert!(create_calls[0]
+            .3
+            .contains(&BuiltinToolName::Task.as_str().to_string()));
     }
 
     #[tokio::test]

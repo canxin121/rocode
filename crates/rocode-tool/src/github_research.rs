@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::{header, Client, StatusCode};
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use strum_macros::{Display, EnumString, IntoStaticStr};
 
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -41,8 +43,20 @@ GitHub-native platform operations use the GitHub API:
 - view_pr_files
 - list_releases"#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum GitHubResearchOperation {
     SearchCode,
     SearchIssues,
@@ -61,23 +75,8 @@ enum GitHubResearchOperation {
 }
 
 impl GitHubResearchOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::SearchCode => "search_code",
-            Self::SearchIssues => "search_issues",
-            Self::SearchPrs => "search_prs",
-            Self::ViewIssue => "view_issue",
-            Self::ViewPr => "view_pr",
-            Self::ViewPrFiles => "view_pr_files",
-            Self::GetHeadSha => "get_head_sha",
-            Self::BuildPermalink => "build_permalink",
-            Self::ReadFile => "read_file",
-            Self::CloneRepo => "clone_repo",
-            Self::ListReleases => "list_releases",
-            Self::ListTags => "list_tags",
-            Self::GitLog => "git_log",
-            Self::GitBlame => "git_blame",
-        }
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -1595,7 +1594,7 @@ impl Default for GitHubResearchTool {
 #[async_trait]
 impl Tool for GitHubResearchTool {
     fn id(&self) -> &str {
-        "github_research"
+        BuiltinToolName::GitHubResearch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -1707,7 +1706,7 @@ impl Tool for GitHubResearchTool {
 
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("github_research")
+        let mut permission = PermissionRequest::new(BuiltinToolName::GitHubResearch.as_str())
             .with_pattern(&input.repo)
             .with_metadata("operation", serde_json::json!(input.operation.as_str()))
             .with_metadata("repo", serde_json::json!(&input.repo))
@@ -2458,7 +2457,7 @@ fn local_repo_root(ctx: &ToolContext) -> PathBuf {
             dirs::cache_dir()
                 .unwrap_or_else(std::env::temp_dir)
                 .join("rocode")
-                .join("github_research")
+                .join(BuiltinToolName::GitHubResearch.as_str())
         })
 }
 

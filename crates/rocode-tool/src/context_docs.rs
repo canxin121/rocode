@@ -1,9 +1,12 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::context_docs_backend::{
     load_registered_docs_source, resolve_registered_docs_source_display,
@@ -33,8 +36,21 @@ Not yet included:
 - richer remote docs providers
 - automatic crawling/indexing"#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum ContextDocsOperation {
     ResolveLibrary,
     QueryDocs,
@@ -42,12 +58,8 @@ enum ContextDocsOperation {
 }
 
 impl ContextDocsOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::ResolveLibrary => "resolve_library",
-            Self::QueryDocs => "query_docs",
-            Self::GetPage => "get_page",
-        }
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -222,7 +234,7 @@ impl Default for ContextDocsTool {
 #[async_trait]
 impl Tool for ContextDocsTool {
     fn id(&self) -> &str {
-        "context_docs"
+        BuiltinToolName::ContextDocs.as_str()
     }
 
     fn description(&self) -> &str {
@@ -230,12 +242,14 @@ impl Tool for ContextDocsTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> =
+            ContextDocsOperation::iter().map(ContextDocsOperation::as_str).collect();
         serde_json::json!({
             "type": "object",
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["resolve_library", "query_docs", "get_page"],
+                    "enum": operations,
                     "description": "Docs-aware operation to execute"
                 },
                 "library": {
@@ -283,7 +297,8 @@ impl Tool for ContextDocsTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = crate::PermissionRequest::new("context_docs")
+        let mut permission =
+            crate::PermissionRequest::new(BuiltinToolName::ContextDocs.as_str())
             .with_metadata("operation", serde_json::json!(input.operation.as_str()))
             .with_metadata("limit", serde_json::json!(input.limit))
             .always_allow();
@@ -1296,9 +1311,9 @@ mod tests {
         let ops = schema["properties"]["operation"]["enum"]
             .as_array()
             .expect("enum should exist");
-        assert!(ops.iter().any(|v| v == "resolve_library"));
-        assert!(ops.iter().any(|v| v == "query_docs"));
-        assert!(ops.iter().any(|v| v == "get_page"));
+        for expected in ContextDocsOperation::iter().map(ContextDocsOperation::as_str) {
+            assert!(ops.iter().any(|v| v == expected), "missing {expected}");
+        }
     }
 
     #[test]
@@ -1366,7 +1381,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": "resolve_library",
+                    "operation": ContextDocsOperation::ResolveLibrary.as_str(),
                     "library": "react router"
                 }),
                 tool_ctx_with_registry(&registry_path),
@@ -1388,7 +1403,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": "query_docs",
+                    "operation": ContextDocsOperation::QueryDocs.as_str(),
                     "library_id": "react-router",
                     "query": "loader redirect"
                 }),
@@ -1411,7 +1426,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": "get_page",
+                    "operation": ContextDocsOperation::GetPage.as_str(),
                     "library_id": "react-router",
                     "page_id": "guides/data-loading"
                 }),
@@ -1434,7 +1449,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": "query_docs",
+                    "operation": ContextDocsOperation::QueryDocs.as_str(),
                     "library_id": "react-router",
                     "query": "loader redirect"
                 }),
@@ -1461,7 +1476,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": "get_page",
+                    "operation": ContextDocsOperation::GetPage.as_str(),
                     "library_id": "react-router",
                     "page_id": "guides/loaders"
                 }),
@@ -1486,7 +1501,7 @@ mod tests {
         let error = tool
             .execute(
                 serde_json::json!({
-                    "operation": "resolve_library",
+                    "operation": ContextDocsOperation::ResolveLibrary.as_str(),
                     "library": "react router"
                 }),
                 ToolContext::new("session-1".into(), "message-1".into(), ".".into()),

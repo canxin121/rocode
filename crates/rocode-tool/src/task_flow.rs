@@ -1,7 +1,13 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, EnumString, IntoStaticStr};
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
+use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
+use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
 
 use crate::task::TaskTool;
 use crate::todo::TodoWriteTool;
@@ -22,8 +28,20 @@ Phase 1 status:
 - create/resume are implemented as thin adapters over the existing `task` tool
 "#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum TaskFlowOperation {
     Create,
     Resume,
@@ -33,14 +51,8 @@ enum TaskFlowOperation {
 }
 
 impl TaskFlowOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Create => "create",
-            Self::Resume => "resume",
-            Self::Get => "get",
-            Self::List => "list",
-            Self::Cancel => "cancel",
-        }
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -133,7 +145,7 @@ impl Default for TaskFlowTool {
 #[async_trait]
 impl Tool for TaskFlowTool {
     fn id(&self) -> &str {
-        "task_flow"
+        BuiltinToolName::TaskFlow.as_str()
     }
 
     fn description(&self) -> &str {
@@ -190,7 +202,12 @@ impl Tool for TaskFlowTool {
                         "content": { "type": "string" },
                         "status": {
                             "type": "string",
-                            "enum": ["pending", "in_progress", "completed"]
+                            "enum": [
+                                TodoStatus::Pending.as_str(),
+                                TodoStatus::InProgress.as_str(),
+                                TodoStatus::Completed.as_str(),
+                                TodoStatus::Cancelled.as_str(),
+                            ]
                         },
                         "priority": { "type": "string" }
                     },
@@ -200,7 +217,13 @@ impl Tool for TaskFlowTool {
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["pending", "running", "completed", "cancelled", "failed"]
+                        "enum": [
+                            AgentTaskStatusKind::Pending.as_str(),
+                            AgentTaskStatusKind::Running.as_str(),
+                            AgentTaskStatusKind::Completed.as_str(),
+                            AgentTaskStatusKind::Cancelled.as_str(),
+                            AgentTaskStatusKind::Failed.as_str(),
+                        ]
                     },
                     "description": "Optional status filter for list"
                 },
@@ -225,11 +248,12 @@ impl Tool for TaskFlowTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("task_flow")
+        let mut permission = PermissionRequest::new(BuiltinToolName::TaskFlow.as_str())
             .with_metadata("operation", serde_json::json!(input.operation.as_str()))
             .always_allow();
         if let Some(task_id) = input.task_id.as_ref() {
-            permission = permission.with_metadata("task_id", serde_json::json!(task_id));
+            permission =
+                permission.with_metadata(agent_task_bus_keys::TASK_ID, serde_json::json!(task_id));
         }
         if let Some(agent) = input.agent.as_ref() {
             permission = permission.with_metadata("agent", serde_json::json!(agent));
@@ -283,7 +307,10 @@ async fn execute_delegate(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        task_args.insert("task_id".to_string(), serde_json::json!(task_id));
+        task_args.insert(
+            agent_task_bus_keys::TASK_ID.to_string(),
+            serde_json::json!(task_id),
+        );
     }
     if let Some(command) = input
         .command
@@ -348,7 +375,7 @@ async fn execute_delegate(
         metadata.insert("loadedSkillCount".to_string(), loaded_skill_count.clone());
     }
     metadata.insert(
-        "display.summary".to_string(),
+        output_keys::DISPLAY_SUMMARY.to_string(),
         serde_json::json!(format!(
             "Delegated {} task {} via session {}",
             operation.as_str(),
@@ -468,13 +495,15 @@ fn build_projection_todo_item(input: &TaskFlowInput, view: &TaskFlowTaskView) ->
         .and_then(|item| item.status.as_deref())
         .map(normalize_projection_todo_status)
         .unwrap_or_else(|| task_status_to_todo_status(&view.status))
+        .as_str()
         .to_string();
     let priority = input
         .todo_item
         .as_ref()
         .and_then(|item| item.priority.as_deref())
         .map(normalize_projection_todo_priority)
-        .unwrap_or("medium")
+        .unwrap_or(TodoPriority::Medium)
+        .as_str()
         .to_string();
 
     TodoItemData {
@@ -492,29 +521,22 @@ fn todo_item_to_json(item: &TodoItemData) -> serde_json::Value {
     })
 }
 
-fn task_status_to_todo_status(status: &str) -> &'static str {
-    match status.trim() {
-        "running" => "in_progress",
-        "completed" => "completed",
-        "cancelled" | "failed" => "pending",
-        _ => "pending",
+fn task_status_to_todo_status(status: &str) -> TodoStatus {
+    match AgentTaskStatusKind::parse(status).unwrap_or(AgentTaskStatusKind::Pending) {
+        AgentTaskStatusKind::Running => TodoStatus::InProgress,
+        AgentTaskStatusKind::Completed => TodoStatus::Completed,
+        AgentTaskStatusKind::Pending | AgentTaskStatusKind::Cancelled | AgentTaskStatusKind::Failed => {
+            TodoStatus::Pending
+        }
     }
 }
 
-fn normalize_projection_todo_status(status: &str) -> &'static str {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "in_progress" | "in-progress" | "in progress" | "doing" => "in_progress",
-        "completed" | "done" => "completed",
-        _ => "pending",
-    }
+fn normalize_projection_todo_status(status: &str) -> TodoStatus {
+    TodoStatus::parse(status).unwrap_or(TodoStatus::Pending)
 }
 
-fn normalize_projection_todo_priority(priority: &str) -> &'static str {
-    match priority.trim().to_ascii_lowercase().as_str() {
-        "high" => "high",
-        "low" => "low",
-        _ => "medium",
-    }
+fn normalize_projection_todo_priority(priority: &str) -> TodoPriority {
+    TodoPriority::parse(priority).unwrap_or(TodoPriority::Medium)
 }
 
 fn execute_get(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
@@ -531,7 +553,7 @@ fn execute_get(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     metadata.insert("operation".to_string(), serde_json::json!("get"));
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
     metadata.insert(
-        "display.summary".to_string(),
+        output_keys::DISPLAY_SUMMARY.to_string(),
         serde_json::json!(format!("Loaded task {} ({})", view.task_id, view.status)),
     );
 
@@ -553,7 +575,7 @@ fn execute_list(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     metadata.insert("truncated".to_string(), serde_json::json!(truncated));
     metadata.insert("tasks".to_string(), serde_json::to_value(&views).unwrap());
     metadata.insert(
-        "display.summary".to_string(),
+        output_keys::DISPLAY_SUMMARY.to_string(),
         serde_json::json!(format!(
             "Listed {} task(s){}",
             views.len(),
@@ -587,7 +609,7 @@ fn execute_cancel(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     metadata.insert("operation".to_string(), serde_json::json!("cancel"));
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
     metadata.insert(
-        "display.summary".to_string(),
+        output_keys::DISPLAY_SUMMARY.to_string(),
         serde_json::json!(format!("Cancelled task {}", view.task_id)),
     );
 
@@ -618,8 +640,10 @@ fn task_matches_status_filter(task: &AgentTask, status_filter: Option<&[String]>
     let Some(status_filter) = status_filter else {
         return true;
     };
-    let status = task_status_label(&task.status);
-    status_filter.iter().any(|value| value == status)
+    let task_status = task.status.kind();
+    status_filter.iter().any(|value| {
+        AgentTaskStatusKind::parse(value).is_some_and(|candidate| candidate == task_status)
+    })
 }
 
 fn task_to_view(task: &AgentTask, include_detail: bool) -> TaskFlowTaskView {
@@ -627,7 +651,7 @@ fn task_to_view(task: &AgentTask, include_detail: bool) -> TaskFlowTaskView {
     TaskFlowTaskView {
         task_id: task.id.clone(),
         agent: task.agent_name.clone(),
-        status: status.to_string(),
+        status: status.as_str().to_string(),
         step,
         steps,
         max_steps: task.max_steps,
@@ -641,19 +665,14 @@ fn task_to_view(task: &AgentTask, include_detail: bool) -> TaskFlowTaskView {
 
 fn status_fields(
     status: &AgentTaskStatus,
-) -> (&'static str, Option<u32>, Option<u32>, Option<String>) {
+) -> (AgentTaskStatusKind, Option<u32>, Option<u32>, Option<String>) {
     match status {
-        AgentTaskStatus::Pending => ("pending", None, None, None),
-        AgentTaskStatus::Running { step } => ("running", Some(*step), None, None),
-        AgentTaskStatus::Completed { steps } => ("completed", None, Some(*steps), None),
-        AgentTaskStatus::Cancelled => ("cancelled", None, None, None),
-        AgentTaskStatus::Failed { error } => ("failed", None, None, Some(error.clone())),
+        AgentTaskStatus::Pending => (status.kind(), None, None, None),
+        AgentTaskStatus::Running { step } => (status.kind(), Some(*step), None, None),
+        AgentTaskStatus::Completed { steps } => (status.kind(), None, Some(*steps), None),
+        AgentTaskStatus::Cancelled => (status.kind(), None, None, None),
+        AgentTaskStatus::Failed { error } => (status.kind(), None, None, Some(error.clone())),
     }
-}
-
-fn task_status_label(status: &AgentTaskStatus) -> &'static str {
-    let (label, _, _, _) = status_fields(status);
-    label
 }
 
 fn render_task_detail_output(view: &TaskFlowTaskView) -> String {
@@ -786,21 +805,26 @@ fn require_non_empty(value: Option<&str>, message: &str) -> Result<(), ToolError
 }
 
 fn validate_todo_status(status: &str) -> Result<(), ToolError> {
-    match status.trim() {
-        "pending" | "in_progress" | "completed" => Ok(()),
-        _ => Err(ToolError::InvalidArguments(
-            "todo_item.status must be one of: pending, in_progress, completed".to_string(),
-        )),
+    if TodoStatus::parse(status).is_some() {
+        return Ok(());
     }
+    Err(ToolError::InvalidArguments(format!(
+        "todo_item.status must be one of: {}, {}, {}, {}",
+        TodoStatus::Pending.as_str(),
+        TodoStatus::InProgress.as_str(),
+        TodoStatus::Completed.as_str(),
+        TodoStatus::Cancelled.as_str(),
+    )))
 }
 
 fn validate_task_status_filter(status: &str) -> Result<(), ToolError> {
-    match status.trim() {
-        "pending" | "running" | "completed" | "cancelled" | "failed" => Ok(()),
-        _ => Err(ToolError::InvalidArguments(
-            "status_filter values must be one of: pending, running, completed, cancelled, failed"
-                .to_string(),
-        )),
+    if AgentTaskStatusKind::parse(status).is_some() {
+        Ok(())
+    } else {
+        Err(ToolError::InvalidArguments(format!(
+            "status_filter values must be one of: {}",
+            AgentTaskStatusKind::allowed_values().join(", ")
+        )))
     }
 }
 
@@ -941,7 +965,10 @@ mod tests {
             run_in_background: false,
             sync_todo: false,
             todo_item: None,
-            status_filter: Some(vec!["running".to_string(), "completed".to_string()]),
+            status_filter: Some(vec![
+                AgentTaskStatusKind::Running.as_str().to_string(),
+                AgentTaskStatusKind::Completed.as_str().to_string(),
+            ]),
             limit: 0,
         };
         assert!(matches!(
@@ -983,7 +1010,7 @@ mod tests {
             sync_todo: true,
             todo_item: Some(TaskFlowTodoItemInput {
                 content: "   ".to_string(),
-                status: Some("pending".to_string()),
+                status: Some(TodoStatus::Pending.as_str().to_string()),
                 priority: None,
             }),
             status_filter: None,
@@ -1019,7 +1046,7 @@ mod tests {
 
         assert_eq!(view.task_id, "a42");
         assert_eq!(view.agent, "build");
-        assert_eq!(view.status, "running");
+        assert_eq!(view.status, AgentTaskStatusKind::Running.as_str());
         assert_eq!(view.step, Some(3));
         assert_eq!(view.steps, None);
         assert_eq!(view.max_steps, Some(8));
@@ -1034,7 +1061,7 @@ mod tests {
         });
         let view = task_to_view(&task, true);
 
-        assert_eq!(view.status, "failed");
+        assert_eq!(view.status, AgentTaskStatusKind::Failed.as_str());
         assert_eq!(view.error.as_deref(), Some("boom"));
         assert_eq!(view.prompt.as_deref(), Some("Investigate runtime behavior"));
         assert_eq!(view.output_tail.as_ref().map(|v| v.len()), Some(2));
@@ -1061,13 +1088,21 @@ mod tests {
 
         let (views, truncated) = list_task_views(
             &[running, completed, cancelled],
-            Some(&["running".to_string(), "completed".to_string()]),
+            Some(&[
+                AgentTaskStatusKind::Running.as_str().to_string(),
+                AgentTaskStatusKind::Completed.as_str().to_string(),
+            ]),
             1,
         );
 
         assert_eq!(views.len(), 1);
         assert!(truncated);
-        assert!(matches!(views[0].status.as_str(), "running" | "completed"));
+        let kind =
+            AgentTaskStatusKind::parse(&views[0].status).expect("filtered view status should parse");
+        assert!(matches!(
+            kind,
+            AgentTaskStatusKind::Running | AgentTaskStatusKind::Completed
+        ));
     }
 
     #[test]
@@ -1076,7 +1111,10 @@ mod tests {
         let output = render_task_detail_output(&view);
 
         assert!(output.contains("Task a42"));
-        assert!(output.contains("Status: completed (2 steps)"));
+        assert!(output.contains(&format!(
+            "Status: {} (2 steps)",
+            AgentTaskStatusKind::Completed.as_str()
+        )));
         assert!(output.contains("Prompt: Investigate runtime behavior"));
         assert!(output.contains("Recent output:"));
         assert!(output.contains("first line"));
@@ -1146,7 +1184,7 @@ mod tests {
         );
         assert_eq!(
             result.metadata["task"]["status"],
-            serde_json::json!("cancelled")
+            serde_json::json!(AgentTaskStatusKind::Cancelled.as_str())
         );
     }
 
@@ -1206,7 +1244,7 @@ mod tests {
         let requests = requests.lock().await.clone();
         let task_flow_request = requests
             .iter()
-            .find(|req| req.permission == "task_flow")
+            .find(|req| req.permission == BuiltinToolName::TaskFlow.as_str())
             .expect("task_flow permission request should exist");
         assert_eq!(
             task_flow_request.metadata.get("operation"),
@@ -1300,7 +1338,7 @@ mod tests {
         assert_eq!(result.metadata["task"]["agent"], serde_json::json!("build"));
         assert_eq!(
             result.metadata["task"]["status"],
-            serde_json::json!("completed")
+            serde_json::json!(AgentTaskStatusKind::Completed.as_str())
         );
         assert!(result.output.contains("agent_task_id:"));
         assert!(result.output.contains("session_id: task_build_123"));
@@ -1370,8 +1408,8 @@ mod tests {
             .with_todo_get(|_session_id| async move {
                 Ok(vec![crate::TodoItemData {
                     content: "existing item".to_string(),
-                    status: "pending".to_string(),
-                    priority: "high".to_string(),
+                    status: TodoStatus::Pending.as_str().to_string(),
+                    priority: TodoPriority::High.as_str().to_string(),
                 }])
             })
             .with_todo_update({
@@ -1408,8 +1446,8 @@ mod tests {
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[0].content, "existing item");
         assert_eq!(todos[1].content, "Track delegated investigation");
-        assert_eq!(todos[1].status, "completed");
-        assert_eq!(todos[1].priority, "medium");
+        assert_eq!(todos[1].status, TodoStatus::Completed.as_str());
+        assert_eq!(todos[1].priority, TodoPriority::Medium.as_str());
 
         let create_calls = create_calls.lock().await.clone();
         assert_eq!(create_calls.len(), 1);
@@ -1602,7 +1640,7 @@ mod tests {
             .is_some_and(|value| value.starts_with('a')));
         assert_eq!(
             result.metadata["task"]["status"],
-            serde_json::json!("completed")
+            serde_json::json!(AgentTaskStatusKind::Completed.as_str())
         );
 
         let prompted = prompted.lock().await.clone();

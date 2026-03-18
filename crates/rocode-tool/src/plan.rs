@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -62,7 +63,7 @@ async fn create_user_message_with_part(
 #[async_trait]
 impl Tool for PlanEnterTool {
     fn id(&self) -> &str {
-        "plan_enter"
+        BuiltinToolName::PlanEnter.as_str()
     }
 
     fn description(&self) -> &str {
@@ -151,7 +152,7 @@ impl Tool for PlanEnterTool {
 #[async_trait]
 impl Tool for PlanExitTool {
     fn id(&self) -> &str {
-        "plan_exit"
+        BuiltinToolName::PlanExit.as_str()
     }
 
     fn description(&self) -> &str {

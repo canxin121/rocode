@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
@@ -46,7 +48,7 @@ struct QuestionResponse {
 #[async_trait]
 impl Tool for QuestionTool {
     fn id(&self) -> &str {
-        "question"
+        BuiltinToolName::Question.as_str()
     }
 
     fn description(&self) -> &str {
@@ -141,10 +143,16 @@ impl Tool for QuestionTool {
             let answers = answers_by_question.get(idx).cloned().unwrap_or_default();
             let answer_text = answers.join(", ");
             all_answers.extend(answers);
-            display_fields.push(serde_json::json!({
-                "key": q.question,
-                "value": answer_text,
-            }));
+            display_fields.push(serde_json::Value::Object(serde_json::Map::from_iter([
+                (
+                    output_keys::DISPLAY_FIELD_KEY.to_string(),
+                    serde_json::json!(q.question),
+                ),
+                (
+                    output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                    serde_json::json!(answer_text),
+                ),
+            ])));
         }
 
         let response = QuestionResponse {
@@ -158,7 +166,7 @@ impl Tool for QuestionTool {
         let mut metadata = std::collections::HashMap::new();
 
         metadata.insert(
-            "display.fields".to_string(),
+            output_keys::DISPLAY_FIELDS.to_string(),
             serde_json::Value::Array(display_fields),
         );
 
@@ -169,7 +177,7 @@ impl Tool for QuestionTool {
             format!("{} questions answered", input.questions.len())
         };
         metadata.insert(
-            "display.summary".to_string(),
+            output_keys::DISPLAY_SUMMARY.to_string(),
             serde_json::Value::String(summary),
         );
 
@@ -312,7 +320,7 @@ fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_question_input, QuestionInput, QuestionTool};
+    use super::{output_keys, parse_question_input, QuestionInput, QuestionTool};
     use crate::{Tool, ToolContext};
 
     #[test]
@@ -383,7 +391,7 @@ mod tests {
         assert_eq!(
             result
                 .metadata
-                .get("display.summary")
+                .get(output_keys::DISPLAY_SUMMARY)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default(),
             "1 question answered"

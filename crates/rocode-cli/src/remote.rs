@@ -8,6 +8,10 @@ use rocode_command::output_blocks::{
 };
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
+use rocode_core::contracts::events::ServerEventType;
+use rocode_core::contracts::output_blocks::{
+    BlockToneWire, MessagePhaseWire, MessageRoleWire, OutputBlockKind, ToolPhaseWire,
+};
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,19 +62,21 @@ async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow
 }
 
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
-    let kind = payload.get("kind")?.as_str()?;
+    let kind_raw = payload.get("kind")?.as_str()?;
+    let kind = OutputBlockKind::parse(kind_raw)?;
+
     match kind {
-        "status" => {
-            let tone = match payload
+        OutputBlockKind::Status => {
+            let tone_raw = payload
                 .get("tone")
                 .and_then(|v| v.as_str())
-                .unwrap_or("normal")
-            {
-                "title" => BlockTone::Title,
-                "muted" => BlockTone::Muted,
-                "success" => BlockTone::Success,
-                "warning" => BlockTone::Warning,
-                "error" => BlockTone::Error,
+                .unwrap_or(BlockToneWire::Normal.as_str());
+            let tone = match BlockToneWire::parse(tone_raw) {
+                Some(BlockToneWire::Title) => BlockTone::Title,
+                Some(BlockToneWire::Muted) => BlockTone::Muted,
+                Some(BlockToneWire::Success) => BlockTone::Success,
+                Some(BlockToneWire::Warning) => BlockTone::Warning,
+                Some(BlockToneWire::Error) => BlockTone::Error,
                 _ => BlockTone::Normal,
             };
             let text = payload
@@ -80,26 +86,28 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .to_string();
             Some(OutputBlock::Status(StatusBlock { tone, text }))
         }
-        "message" => {
-            let role = match payload
+        OutputBlockKind::Message => {
+            let role_raw = payload
                 .get("role")
                 .and_then(|v| v.as_str())
-                .unwrap_or("assistant")
-            {
-                "user" => MessageRole::User,
-                "system" => MessageRole::System,
+                .unwrap_or(MessageRoleWire::Assistant.as_str());
+            let role = match MessageRoleWire::parse(role_raw) {
+                Some(MessageRoleWire::User) => MessageRole::User,
+                Some(MessageRoleWire::System) => MessageRole::System,
                 _ => MessageRole::Assistant,
             };
-            let phase = match payload
+
+            let phase_raw = payload
                 .get("phase")
                 .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
-                "start" => MessagePhase::Start,
-                "end" => MessagePhase::End,
-                "full" => MessagePhase::Full,
+                .unwrap_or(MessagePhaseWire::Delta.as_str());
+            let phase = match MessagePhaseWire::parse(phase_raw) {
+                Some(MessagePhaseWire::Start) => MessagePhase::Start,
+                Some(MessagePhaseWire::End) => MessagePhase::End,
+                Some(MessagePhaseWire::Full) => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
+
             let text = payload
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -107,20 +115,20 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .to_string();
             Some(OutputBlock::Message(MessageBlock { role, phase, text }))
         }
-        "tool" => {
+        OutputBlockKind::Tool => {
             let name = payload
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("tool")
                 .to_string();
-            let phase = match payload
+            let phase_raw = payload
                 .get("phase")
                 .and_then(|v| v.as_str())
-                .unwrap_or("running")
-            {
-                "start" => ToolPhase::Start,
-                "done" | "result" => ToolPhase::Done,
-                "error" => ToolPhase::Error,
+                .unwrap_or(ToolPhaseWire::Running.as_str());
+            let phase = match ToolPhaseWire::parse(phase_raw) {
+                Some(ToolPhaseWire::Start) => ToolPhase::Start,
+                Some(ToolPhaseWire::Done) => ToolPhase::Done,
+                Some(ToolPhaseWire::Error) => ToolPhase::Error,
                 _ => ToolPhase::Running,
             };
             let detail = payload
@@ -134,15 +142,15 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 structured: None,
             }))
         }
-        "reasoning" => {
-            let phase = match payload
+        OutputBlockKind::Reasoning => {
+            let phase_raw = payload
                 .get("phase")
                 .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
-                "start" => MessagePhase::Start,
-                "end" => MessagePhase::End,
-                "full" => MessagePhase::Full,
+                .unwrap_or(MessagePhaseWire::Delta.as_str());
+            let phase = match MessagePhaseWire::parse(phase_raw) {
+                Some(MessagePhaseWire::Start) => MessagePhase::Start,
+                Some(MessagePhaseWire::End) => MessagePhase::End,
+                Some(MessagePhaseWire::Full) => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
             let text = payload
@@ -152,7 +160,7 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .to_string();
             Some(OutputBlock::Reasoning(ReasoningBlock { phase, text }))
         }
-        "session_event" => Some(OutputBlock::SessionEvent(SessionEventBlock {
+        OutputBlockKind::SessionEvent => Some(OutputBlock::SessionEvent(SessionEventBlock {
             event: payload
                 .get("event")
                 .and_then(|v| v.as_str())
@@ -195,7 +203,7 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         })),
-        "queue_item" => Some(OutputBlock::QueueItem(QueueItemBlock {
+        OutputBlockKind::QueueItem => Some(OutputBlock::QueueItem(QueueItemBlock {
             position: payload
                 .get("position")
                 .and_then(|v| v.as_u64())
@@ -206,7 +214,8 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .unwrap_or_default()
                 .to_string(),
         })),
-        "scheduler_stage" => Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
+        OutputBlockKind::SchedulerStage => {
+            Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
             stage_id: payload
                 .get("stage_id")
                 .and_then(|v| v.as_str())
@@ -314,7 +323,8 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .get("child_session_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-        }))),
+            })))
+        }
         _ => None,
     }
 }
@@ -543,7 +553,9 @@ async fn dispatch_remote_sse_event(
         })
         .unwrap_or_else(|| "message".to_string());
 
-    if event_type == "config.updated" {
+    let event_kind = ServerEventType::parse(&event_type);
+
+    if event_kind == Some(ServerEventType::ConfigUpdated) {
         if let Ok(config) = fetch_remote_config(client, base_url).await {
             if let Some(enabled) = remote_show_thinking_from_config(&config) {
                 show_thinking.store(enabled, Ordering::SeqCst);
@@ -579,7 +591,7 @@ async fn dispatch_remote_sse_event(
         return Ok(());
     }
 
-    if event_type == "output_block" {
+    if event_kind == Some(ServerEventType::OutputBlock) {
         let payload = parsed.get("block").unwrap_or(&parsed);
         if let Some(block) = parse_output_block(payload) {
             if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking.load(Ordering::SeqCst) {
@@ -592,7 +604,7 @@ async fn dispatch_remote_sse_event(
         return Ok(());
     }
 
-    if event_type.as_str() == "error" {
+    if event_kind == Some(ServerEventType::Error) {
         let message = parsed
             .get("error")
             .and_then(|v| v.as_str())
@@ -672,6 +684,7 @@ mod tests {
     use super::parse_output_block;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
     use rocode_command::output_blocks::{MessagePhase, OutputBlock};
+    use rocode_core::contracts::output_blocks::{MessagePhaseWire, OutputBlockKind};
 
     #[test]
     fn parses_canonical_scheduler_stage_payload() {
@@ -683,8 +696,8 @@ mod tests {
     #[test]
     fn parses_reasoning_payload() {
         let payload = serde_json::json!({
-            "kind": "reasoning",
-            "phase": "delta",
+            "kind": OutputBlockKind::Reasoning.as_str(),
+            "phase": MessagePhaseWire::Delta.as_str(),
             "text": "thinking"
         });
         let block = parse_output_block(&payload).expect("reasoning block");

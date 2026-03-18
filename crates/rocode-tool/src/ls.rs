@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use glob::Pattern;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -67,7 +69,7 @@ fn has_glob_meta(pattern: &str) -> bool {
 #[async_trait]
 impl Tool for LsTool {
     fn id(&self) -> &str {
-        "ls"
+        BuiltinToolName::Ls.as_str()
     }
 
     fn description(&self) -> &str {
@@ -129,7 +131,7 @@ impl Tool for LsTool {
         .await?;
 
         ctx.ask_permission(
-            PermissionRequest::new("list")
+            PermissionRequest::new(PermissionTypeWire::List.as_str())
                 .with_pattern(&base_dir_str)
                 .with_metadata("path", serde_json::json!(&base_dir_str))
                 .always_allow(),
@@ -282,7 +284,7 @@ mod tests {
             .expect("ls should succeed");
 
         let permissions = seen.lock().expect("lock").clone();
-        assert!(permissions.contains(&"external_directory".to_string()));
-        assert!(permissions.contains(&"list".to_string()));
+        assert!(permissions.contains(&PermissionTypeWire::ExternalDirectory.as_str().to_string()));
+        assert!(permissions.contains(&PermissionTypeWire::List.as_str().to_string()));
     }
 }

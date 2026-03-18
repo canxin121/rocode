@@ -1,4 +1,7 @@
 use async_trait::async_trait;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -42,7 +45,7 @@ pub struct LspTool;
 #[async_trait]
 impl Tool for LspTool {
     fn id(&self) -> &str {
-        "lsp"
+        BuiltinToolName::Lsp.as_str()
     }
 
     fn description(&self) -> &str {
@@ -105,15 +108,15 @@ impl Tool for LspTool {
 
         if ctx.is_external_path(&path_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(&path_str)
-                    .with_metadata("filepath", serde_json::json!(&path_str)),
+                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("lsp")
+            crate::PermissionRequest::new(BuiltinToolName::Lsp.as_str())
                 .with_patterns(vec!["*".to_string()])
                 .always_allow(),
         )
@@ -133,7 +136,10 @@ impl Tool for LspTool {
                 format_lsp_placeholder(&params.operation, &params.file_path, line, character);
             let mut metadata = Metadata::new();
             metadata.insert("operation".to_string(), serde_json::json!(params.operation));
-            metadata.insert("file_path".to_string(), serde_json::json!(params.file_path));
+            metadata.insert(
+                patch_keys::FILE_PATH_SNAKE.to_string(),
+                serde_json::json!(params.file_path),
+            );
 
             Ok(ToolResult {
                 output,
@@ -340,7 +346,10 @@ async fn execute_with_lsp(
 
     let mut metadata = Metadata::new();
     metadata.insert("operation".to_string(), serde_json::json!(params.operation));
-    metadata.insert("file_path".to_string(), serde_json::json!(params.file_path));
+    metadata.insert(
+        patch_keys::FILE_PATH_SNAKE.to_string(),
+        serde_json::json!(params.file_path),
+    );
 
     Ok(ToolResult {
         output,

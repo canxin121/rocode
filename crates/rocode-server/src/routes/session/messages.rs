@@ -4,6 +4,11 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::scheduler::decision_keys as scheduler_decision_keys;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::{BuiltinToolName, QuestionInteractionStatus, ToolCallStatusWire};
 use serde::{Deserialize, Serialize};
 
 use crate::session_runtime::{assistant_visible_text, decision_from_stage_text};
@@ -157,10 +162,12 @@ fn part_to_info(
             input: input.clone(),
             status: Some(
                 match status {
-                    rocode_session::ToolCallStatus::Pending => "pending",
-                    rocode_session::ToolCallStatus::Running => "running",
-                    rocode_session::ToolCallStatus::Completed => "completed",
-                    rocode_session::ToolCallStatus::Error => "error",
+                    rocode_session::ToolCallStatus::Pending => ToolCallStatusWire::Pending.as_str(),
+                    rocode_session::ToolCallStatus::Running => ToolCallStatusWire::Running.as_str(),
+                    rocode_session::ToolCallStatus::Completed => {
+                        ToolCallStatusWire::Completed.as_str()
+                    }
+                    rocode_session::ToolCallStatus::Error => ToolCallStatusWire::Error.as_str(),
                 }
                 .to_string(),
             ),
@@ -254,7 +261,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "retry",
             "Retry",
-            Some("running"),
+            Some(ToolCallStatusWire::Running.as_str()),
             Some(format!("Retry attempt {}", count)),
             vec![(
                 "Attempt".to_string(),
@@ -267,7 +274,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "step",
             format!("Step · {name}"),
-            Some("running"),
+            Some(ToolCallStatusWire::Running.as_str()),
             Some("Step started".to_string()),
             vec![("ID".to_string(), id.clone(), None)],
             None,
@@ -276,7 +283,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "step",
             "Step complete",
-            Some("completed"),
+            Some(ToolCallStatusWire::Completed.as_str()),
             Some("Step finished".to_string()),
             vec![("ID".to_string(), id.clone(), None)],
             output.clone(),
@@ -290,12 +297,12 @@ fn part_to_info(
             serde_json::Value::Number(part.created_at.timestamp_millis().into()),
         );
         if let Some(tool_call) = tool_call.as_ref() {
-            if tool_call.name.eq_ignore_ascii_case("question") {
+            if BuiltinToolName::parse(&tool_call.name) == Some(BuiltinToolName::Question) {
                 if let Some(question_info) =
                     match_pending_question_request(&tool_call.input, pending_questions)
                 {
                     map.insert(
-                        "interaction".to_string(),
+                        output_keys::INTERACTION.to_string(),
                         question_pending_interaction_json(question_info, &tool_call.input),
                     );
                 }
@@ -348,12 +355,12 @@ fn message_to_info(
     let usage = message.usage.clone().unwrap_or_default();
     let model_id = message
         .metadata
-        .get("model_id")
+        .get(session_keys::MODEL_ID)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let model_provider = message
         .metadata
-        .get("model_provider")
+        .get(session_keys::MODEL_PROVIDER)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let model = match (model_provider.as_deref(), model_id.as_deref()) {
@@ -366,7 +373,7 @@ fn message_to_info(
     } else {
         message
             .metadata
-            .get("cost")
+            .get(session_keys::COST)
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0)
     };
@@ -383,29 +390,29 @@ fn message_to_info(
         created_at: message.created_at.timestamp_millis(),
         completed_at: message
             .metadata
-            .get("completed_at")
+            .get(session_keys::COMPLETED_AT)
             .and_then(|v| v.as_i64()),
         agent: message
             .metadata
-            .get("agent")
+            .get(session_keys::AGENT)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         model,
         mode: message
             .metadata
-            .get("mode")
+            .get(session_keys::MODE)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         finish: message.finish.clone().or_else(|| {
             message
                 .metadata
-                .get("finish_reason")
+                .get(session_keys::FINISH_REASON)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         }),
         error: message
             .metadata
-            .get("error")
+            .get(session_keys::ERROR)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         cost,
@@ -438,11 +445,11 @@ fn augment_scheduler_decision_metadata_for_response(
     metadata: &mut HashMap<String, serde_json::Value>,
     message: &rocode_session::SessionMessage,
 ) {
-    if metadata.contains_key("scheduler_decision_title") {
+    if metadata.contains_key(scheduler_decision_keys::TITLE) {
         return;
     }
     let Some(stage) = metadata
-        .get("scheduler_stage")
+        .get(scheduler_keys::STAGE)
         .and_then(|value| value.as_str())
     else {
         return;
@@ -453,15 +460,15 @@ fn augment_scheduler_decision_metadata_for_response(
     };
 
     metadata.insert(
-        "scheduler_decision_kind".to_string(),
+        scheduler_decision_keys::KIND.to_string(),
         serde_json::json!(decision.kind),
     );
     metadata.insert(
-        "scheduler_decision_title".to_string(),
+        scheduler_decision_keys::TITLE.to_string(),
         serde_json::json!(decision.title),
     );
     metadata.insert(
-        "scheduler_decision_spec".to_string(),
+        scheduler_decision_keys::SPEC.to_string(),
         serde_json::json!({
             "version": decision.spec.version,
             "show_header_divider": decision.spec.show_header_divider,
@@ -473,7 +480,7 @@ fn augment_scheduler_decision_metadata_for_response(
         }),
     );
     metadata.insert(
-        "scheduler_decision_fields".to_string(),
+        scheduler_decision_keys::FIELDS.to_string(),
         serde_json::Value::Array(
             decision
                 .fields
@@ -489,7 +496,7 @@ fn augment_scheduler_decision_metadata_for_response(
         ),
     );
     metadata.insert(
-        "scheduler_decision_sections".to_string(),
+        scheduler_decision_keys::SECTIONS.to_string(),
         serde_json::Value::Array(
             decision
                 .sections
@@ -559,9 +566,10 @@ pub(super) async fn send_message(
         .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     session.add_user_message(&req.content);
     if let Some(variant) = req.variant.as_deref() {
-        session
-            .metadata
-            .insert("model_variant".to_string(), serde_json::json!(variant));
+        session.metadata.insert(
+            session_keys::MODEL_VARIANT.to_string(),
+            serde_json::json!(variant),
+        );
     }
     let tool_names = collect_tool_names(session);
     let assistant_msg = session.add_assistant_message();
@@ -733,8 +741,8 @@ fn question_pending_interaction_json(
         })
         .collect::<Vec<_>>();
     serde_json::json!({
-        "type": "question",
-        "status": "pending",
+        "type": BuiltinToolName::Question.as_str(),
+        "status": QuestionInteractionStatus::Pending.as_str(),
         "request_id": question_info.id,
         "can_reply": true,
         "can_reject": true,
@@ -805,17 +813,17 @@ fn build_message_part(req: AddPartRequest, msg_id: &str) -> Result<rocode_sessio
                 )
             })?,
             input: req.tool_input.unwrap_or_else(|| serde_json::json!({})),
-            status: match req
-                .tool_status
-                .as_deref()
-                .unwrap_or("pending")
-                .to_ascii_lowercase()
-                .as_str()
+            status: match ToolCallStatusWire::parse(
+                req.tool_status
+                    .as_deref()
+                    .unwrap_or(ToolCallStatusWire::Pending.as_str()),
+            )
+            .unwrap_or(ToolCallStatusWire::Pending)
             {
-                "running" => rocode_session::ToolCallStatus::Running,
-                "completed" => rocode_session::ToolCallStatus::Completed,
-                "error" => rocode_session::ToolCallStatus::Error,
-                _ => rocode_session::ToolCallStatus::Pending,
+                ToolCallStatusWire::Pending => rocode_session::ToolCallStatus::Pending,
+                ToolCallStatusWire::Running => rocode_session::ToolCallStatus::Running,
+                ToolCallStatusWire::Completed => rocode_session::ToolCallStatus::Completed,
+                ToolCallStatusWire::Error => rocode_session::ToolCallStatus::Error,
             },
             raw: req.tool_raw_input,
             state: None,

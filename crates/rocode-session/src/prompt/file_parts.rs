@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use base64::Engine;
+use rocode_core::contracts::patch::keys as patch_keys;
 
 use crate::system::SystemPrompt;
 use crate::SessionMessage;
@@ -133,7 +134,7 @@ impl SessionPrompt {
         if let Some(text) = Self::decode_data_url_text(raw_url, mime) {
             msg.add_text(format!(
                 "Called the Read tool with the following input: {}",
-                serde_json::json!({ "filePath": filename })
+                serde_json::json!({ (patch_keys::FILE_PATH): filename })
             ));
             msg.add_text(text);
         }
@@ -184,7 +185,7 @@ impl SessionPrompt {
             let listing = Self::read_directory_preview(&file_path).await;
             msg.add_text(format!(
                 "Called the Read tool with the following input: {}",
-                serde_json::json!({ "filePath": file_path.display().to_string() })
+                serde_json::json!({ (patch_keys::FILE_PATH): file_path.display().to_string() })
             ));
             msg.add_text(listing);
             msg.add_file(
@@ -220,7 +221,7 @@ impl SessionPrompt {
 
         let mut text = String::from_utf8_lossy(&bytes).to_string();
         let mut read_args = serde_json::json!({
-            "filePath": file_path.display().to_string(),
+            (patch_keys::FILE_PATH): file_path.display().to_string(),
         });
 
         if let Some((start, end)) = self.resolve_file_line_window(&file_path, &parsed).await {

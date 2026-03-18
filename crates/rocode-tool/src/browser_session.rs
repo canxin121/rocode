@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 use reqwest::Client;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -249,7 +250,7 @@ impl BrowserSessionTool {
         let session = browser_session_manager().get(&session_id).await?;
         let target_url = resolve_target_url(&session, &input).await?;
         ctx.ask_permission(
-            PermissionRequest::new("webfetch")
+            PermissionRequest::new(BuiltinToolName::WebFetch.as_str())
                 .with_pattern(target_url.as_str())
                 .with_metadata("url", serde_json::json!(target_url.as_str()))
                 .always_allow(),
@@ -331,7 +332,7 @@ impl Default for BrowserSessionTool {
 #[async_trait]
 impl Tool for BrowserSessionTool {
     fn id(&self) -> &str {
-        "browser_session"
+        BuiltinToolName::BrowserSession.as_str()
     }
 
     fn description(&self) -> &str {
@@ -814,7 +815,7 @@ mod tests {
         assert_eq!(
             permission_log
                 .iter()
-                .filter(|item| item.as_str() == "webfetch")
+                .filter(|item| item.as_str() == BuiltinToolName::WebFetch.as_str())
                 .count(),
             2
         );

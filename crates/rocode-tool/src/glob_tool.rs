@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
@@ -26,7 +28,7 @@ impl Default for GlobTool {
 #[async_trait]
 impl Tool for GlobTool {
     fn id(&self) -> &str {
-        "glob"
+        BuiltinToolName::Glob.as_str()
     }
 
     fn description(&self) -> &str {
@@ -75,7 +77,7 @@ impl Tool for GlobTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", base_dir_str))
                     .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
@@ -83,7 +85,7 @@ impl Tool for GlobTool {
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("glob")
+            crate::PermissionRequest::new(BuiltinToolName::Glob.as_str())
                 .with_pattern(&pattern)
                 .with_metadata("path", serde_json::json!(&base_dir_str))
                 .always_allow(),

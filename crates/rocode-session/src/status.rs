@@ -4,16 +4,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::events::BusEventName;
 
 // ============================================================================
 // Bus event definitions (matches TS SessionStatus.Event)
 // ============================================================================
 
 /// Event published when a session's run status changes.
-pub static SESSION_STATUS_EVENT: BusEventDef = BusEventDef::new("session.status");
+pub static SESSION_STATUS_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionStatus.as_str());
 
 /// Deprecated event published when a session becomes idle.
-pub static SESSION_IDLE_EVENT: BusEventDef = BusEventDef::new("session.idle");
+pub static SESSION_IDLE_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionIdle.as_str());
 
 // ============================================================================
 // Status types (matches TS SessionStatus.Info union type)

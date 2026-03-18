@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
@@ -9,7 +10,6 @@ use crate::attachment_metadata::{
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 
 const MAX_BATCH_SIZE: usize = 25;
-const DISALLOWED_TOOLS: &[&str] = &["batch"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchParams {
@@ -40,7 +40,7 @@ type BatchFuture = Pin<Box<dyn Future<Output = BatchResult> + Send>>;
 #[async_trait]
 impl Tool for BatchTool {
     fn id(&self) -> &str {
-        "batch"
+        BuiltinToolName::Batch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -107,12 +107,13 @@ impl Tool for BatchTool {
         let mut futures: Vec<BatchFuture> = Vec::new();
 
         for call in tool_calls {
-            if DISALLOWED_TOOLS.contains(&call.tool.as_str()) {
+            if BuiltinToolName::parse(&call.tool).is_some_and(|tool| tool == BuiltinToolName::Batch)
+            {
                 let tool_name = call.tool.clone();
                 let err_msg = format!(
                     "Tool '{}' is not allowed in batch. Disallowed: {}",
                     tool_name,
-                    DISALLOWED_TOOLS.join(", ")
+                    BuiltinToolName::Batch.as_str(),
                 );
                 futures.push(Box::pin(async move {
                     BatchResult {
@@ -260,7 +261,7 @@ impl Tool for BatchTool {
 
         if discarded_count > 0 {
             final_results.push(BatchResult {
-                tool: "batch".to_string(),
+                tool: BuiltinToolName::Batch.as_str().to_string(),
                 success: false,
                 error: Some(format!(
                     "{} additional calls discarded (max {} per batch)",
@@ -328,17 +329,18 @@ impl Tool for BatchTool {
 #[cfg(test)]
 mod tests {
     use super::BatchParams;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn batch_params_accepts_camel_case_tool_calls() {
         let value = serde_json::json!({
             "toolCalls": [
-                { "tool": "read", "parameters": { "file_path": "index.html" } }
+                { "tool": BuiltinToolName::Read.as_str(), "parameters": { "file_path": "index.html" } }
             ]
         });
         let parsed: BatchParams = serde_json::from_value(value).expect("should parse toolCalls");
         assert_eq!(parsed.tool_calls.len(), 1);
-        assert_eq!(parsed.tool_calls[0].tool, "read");
+        assert_eq!(parsed.tool_calls[0].tool, BuiltinToolName::Read.as_str());
     }
 
     #[test]

@@ -171,12 +171,7 @@ impl RuntimeStateStore {
     }
 
     /// Register a tool call start.
-    pub async fn tool_started(
-        &self,
-        session_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-    ) {
+    pub async fn tool_started(&self, session_id: &str, tool_call_id: &str, tool_name: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnTool;
             s.active_tools.push(ActiveToolSummary {
@@ -191,8 +186,7 @@ impl RuntimeStateStore {
     /// Register a tool call end.
     pub async fn tool_ended(&self, session_id: &str, tool_call_id: &str) {
         self.update(session_id, |s| {
-            s.active_tools
-                .retain(|t| t.tool_call_id != tool_call_id);
+            s.active_tools.retain(|t| t.tool_call_id != tool_call_id);
             // If no more tools are active, revert to Running.
             if s.active_tools.is_empty() && s.run_status == RunStatus::WaitingOnTool {
                 s.run_status = RunStatus::Running;
@@ -293,6 +287,7 @@ impl Default for RuntimeStateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn new_session_starts_idle() {
@@ -318,7 +313,7 @@ mod tests {
         assert_eq!(state.current_message_id.as_deref(), Some("msg_001"));
 
         store
-            .tool_started("ses_1", "tc_1", "bash")
+            .tool_started("ses_1", "tc_1", BuiltinToolName::Bash.as_str())
             .await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::WaitingOnTool);
@@ -335,8 +330,12 @@ mod tests {
     async fn tool_end_reverts_to_running_when_no_more_tools() {
         let store = RuntimeStateStore::new();
         store.mark_running("ses_1", None).await;
-        store.tool_started("ses_1", "tc_1", "read").await;
-        store.tool_started("ses_1", "tc_2", "write").await;
+        store
+            .tool_started("ses_1", "tc_1", BuiltinToolName::Read.as_str())
+            .await;
+        store
+            .tool_started("ses_1", "tc_2", BuiltinToolName::Write.as_str())
+            .await;
         assert_eq!(store.get("ses_1").await.unwrap().active_tools.len(), 2);
 
         store.tool_ended("ses_1", "tc_1").await;
@@ -369,7 +368,11 @@ mod tests {
         assert!(state.pending_question.is_none());
 
         store
-            .permission_requested("ses_1", "perm_1", serde_json::json!({"tool": "bash"}))
+            .permission_requested(
+                "ses_1",
+                "perm_1",
+                serde_json::json!({"tool": BuiltinToolName::Bash.as_str()}),
+            )
             .await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::WaitingOnUser);

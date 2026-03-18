@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use regex::Regex;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -38,7 +40,7 @@ struct GrepMatch {
 #[async_trait]
 impl Tool for GrepTool {
     fn id(&self) -> &str {
-        "grep"
+        BuiltinToolName::Grep.as_str()
     }
 
     fn description(&self) -> &str {
@@ -109,7 +111,7 @@ impl Tool for GrepTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", base_dir_str))
                     .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
@@ -117,7 +119,7 @@ impl Tool for GrepTool {
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("grep")
+            crate::PermissionRequest::new(BuiltinToolName::Grep.as_str())
                 .with_pattern(&pattern)
                 .always_allow()
                 .with_metadata("path", serde_json::json!(&base_dir_str)),

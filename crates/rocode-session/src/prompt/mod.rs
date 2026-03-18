@@ -36,6 +36,9 @@ use tokio_util::sync::CancellationToken;
 use rocode_content::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
+use rocode_core::contracts::events::{ServerEventType, ToolCallPhase};
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -60,10 +63,14 @@ const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
 /// Returns `true` when the finish reason indicates the conversation turn is
 /// complete (i.e. not a tool-use continuation or unknown state).
 fn is_terminal_finish(reason: Option<&str>) -> bool {
-    !matches!(
-        reason,
-        None | Some("tool-calls") | Some("tool_calls") | Some("unknown")
-    )
+    let Some(raw) = reason else {
+        return false;
+    };
+
+    match ProviderFinishReasonWire::parse(raw) {
+        Some(ProviderFinishReasonWire::ToolCalls | ProviderFinishReasonWire::Unknown) => false,
+        _ => true,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -699,10 +706,10 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     // Broadcast canonical tool lifecycle event.
                     if let Some(broadcast) = &self.event_broadcast {
                         let event = serde_json::json!({
-                            "type": "tool_call.lifecycle",
+                            "type": ServerEventType::ToolCallLifecycle.as_str(),
                             "sessionID": self.session.id,
                             "toolCallId": id,
-                            "phase": "start",
+                            "phase": ToolCallPhase::Start.as_str(),
                             "toolName": next_name,
                         });
                         broadcast(event);
@@ -843,10 +850,10 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 // Broadcast canonical tool lifecycle event.
                 if let Some(broadcast) = &self.event_broadcast {
                     let event = serde_json::json!({
-                        "type": "tool_call.lifecycle",
+                        "type": ServerEventType::ToolCallLifecycle.as_str(),
                         "sessionID": self.session.id,
                         "toolCallId": &call.id,
-                        "phase": "complete",
+                        "phase": ToolCallPhase::Complete.as_str(),
                         "toolName": &call.name,
                     });
                     broadcast(event);
@@ -942,8 +949,12 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 usage,
             } => {
                 self.finish_reason = Some(match finish_reason {
-                    RuntimeFinishReason::ToolUse => "tool-calls".to_string(),
-                    RuntimeFinishReason::EndTurn => "stop".to_string(),
+                    RuntimeFinishReason::ToolUse => {
+                        ProviderFinishReasonWire::ToolCalls.as_str().to_string()
+                    }
+                    RuntimeFinishReason::EndTurn => {
+                        ProviderFinishReasonWire::Stop.as_str().to_string()
+                    }
                     RuntimeFinishReason::Provider(reason) => reason.clone(),
                     RuntimeFinishReason::MaxSteps => "max_steps".to_string(),
                     RuntimeFinishReason::Cancelled => "cancelled".to_string(),
@@ -1179,23 +1190,24 @@ impl SessionPrompt {
         };
 
         if let Some(agent) = input.agent.as_deref() {
-            user_msg
-                .metadata
-                .insert("resolved_agent".to_string(), serde_json::json!(agent));
+            user_msg.metadata.insert(
+                session_keys::RESOLVED_AGENT.to_string(),
+                serde_json::json!(agent),
+            );
         }
 
         if let Some(system) = system_prompt {
             user_msg.metadata.insert(
-                "resolved_system_prompt".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
                 serde_json::json!(Self::truncate_debug_text(system, 8000)),
             );
             user_msg.metadata.insert(
-                "resolved_system_prompt_applied".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
                 serde_json::json!(true),
             );
         } else if input.agent.is_some() {
             user_msg.metadata.insert(
-                "resolved_system_prompt_applied".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
                 serde_json::json!(false),
             );
         }
@@ -1203,7 +1215,7 @@ impl SessionPrompt {
         let user_prompt = Self::text_from_prompt_parts(&input.parts);
         if !user_prompt.is_empty() {
             user_msg.metadata.insert(
-                "resolved_user_prompt".to_string(),
+                session_keys::RESOLVED_USER_PROMPT.to_string(),
                 serde_json::json!(Self::truncate_debug_text(&user_prompt, 8000)),
             );
         }
@@ -1530,9 +1542,14 @@ impl SessionPrompt {
         let model = session.messages.iter().rev().find_map(|m| match m.role {
             MessageRole::User => session
                 .metadata
-                .get("model_provider")
+                .get(session_keys::MODEL_PROVIDER)
                 .and_then(|p| p.as_str())
-                .zip(session.metadata.get("model_id").and_then(|i| i.as_str()))
+                .zip(
+                    session
+                        .metadata
+                        .get(session_keys::MODEL_ID)
+                        .and_then(|i| i.as_str()),
+                )
                 .map(|(provider_id, model_id)| ModelRef {
                     provider_id: provider_id.to_string(),
                     model_id: model_id.to_string(),
@@ -1552,13 +1569,13 @@ impl SessionPrompt {
         let session_id = session_id.to_string();
         let resume_agent = session
             .metadata
-            .get("agent")
+            .get(session_keys::AGENT)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let compiled_request = compiled_request.inherit_missing(&session_runtime_request_defaults(
             session
                 .metadata
-                .get("model_variant")
+                .get(session_keys::MODEL_VARIANT)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         ));
@@ -1833,16 +1850,17 @@ impl SessionPrompt {
     ) {
         if let Some(assistant_msg) = session.messages.get_mut(assistant_index) {
             if let Some(reason) = step_output.finish_reason.clone() {
-                assistant_msg
-                    .metadata
-                    .insert("finish_reason".to_string(), serde_json::json!(reason));
+                assistant_msg.metadata.insert(
+                    session_keys::FINISH_REASON.to_string(),
+                    serde_json::json!(reason),
+                );
             }
             assistant_msg.metadata.insert(
-                "completed_at".to_string(),
+                session_keys::COMPLETED_AT.to_string(),
                 serde_json::json!(chrono::Utc::now().timestamp_millis()),
             );
             assistant_msg.metadata.insert(
-                "usage".to_string(),
+                session_keys::USAGE.to_string(),
                 serde_json::json!({
                     "prompt_tokens": step_output.prompt_tokens,
                     "completion_tokens": step_output.completion_tokens,
@@ -1852,23 +1870,23 @@ impl SessionPrompt {
                 }),
             );
             assistant_msg.metadata.insert(
-                "tokens_input".to_string(),
+                session_keys::TOKENS_INPUT.to_string(),
                 serde_json::json!(step_output.prompt_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_output".to_string(),
+                session_keys::TOKENS_OUTPUT.to_string(),
                 serde_json::json!(step_output.completion_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_reasoning".to_string(),
+                session_keys::TOKENS_REASONING.to_string(),
                 serde_json::json!(step_output.reasoning_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_cache_read".to_string(),
+                session_keys::TOKENS_CACHE_READ.to_string(),
                 serde_json::json!(step_output.cache_read_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_cache_write".to_string(),
+                session_keys::TOKENS_CACHE_WRITE.to_string(),
                 serde_json::json!(step_output.cache_write_tokens),
             );
             assistant_msg.usage = Some(crate::message::MessageUsage {
@@ -2039,16 +2057,17 @@ impl SessionPrompt {
                 rocode_core::id::create(rocode_core::id::Prefix::Message, true, None);
             let mut assistant_metadata = HashMap::new();
             assistant_metadata.insert(
-                "model_provider".to_string(),
+                session_keys::MODEL_PROVIDER.to_string(),
                 serde_json::json!(&prompt_ctx.provider_id),
             );
             assistant_metadata.insert(
-                "model_id".to_string(),
+                session_keys::MODEL_ID.to_string(),
                 serde_json::json!(&prompt_ctx.model_id),
             );
             if let Some(agent) = prompt_ctx.agent_name.as_deref() {
-                assistant_metadata.insert("agent".to_string(), serde_json::json!(agent));
-                assistant_metadata.insert("mode".to_string(), serde_json::json!(agent));
+                assistant_metadata
+                    .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
+                assistant_metadata.insert(session_keys::MODE.to_string(), serde_json::json!(agent));
             }
             session.messages.push(SessionMessage {
                 id: assistant_message_id,
@@ -2764,7 +2783,7 @@ mod tests {
     fn insert_reminders_adds_build_switch_after_plan() {
         let mut user = SessionMessage::user("ses_test", "execute this");
         user.metadata
-            .insert("agent".to_string(), serde_json::json!("plan"));
+            .insert(session_keys::AGENT.to_string(), serde_json::json!("plan"));
         let output = insert_reminders(&[user], "build", true);
         let last = output.last().unwrap();
         let injected = last
@@ -2801,7 +2820,7 @@ mod tests {
                 StreamEvent::TextDelta("Hel".to_string()),
                 StreamEvent::TextDelta("lo".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage {
                         prompt_tokens: 3,
                         completion_tokens: 2,
@@ -2908,7 +2927,7 @@ mod tests {
                 },
                 StreamEvent::TextDelta("Hello".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage::default(),
                     provider_metadata: None,
                 },
@@ -3017,7 +3036,7 @@ mod tests {
                 },
                 StreamEvent::TextDelta("Hi".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage {
                         prompt_tokens: 0,
                         completion_tokens: 2,
@@ -3114,7 +3133,9 @@ mod tests {
                     StreamEvent::Start,
                     StreamEvent::TextDelta("Read complete".to_string()),
                     StreamEvent::FinishStep {
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(
+                            ProviderFinishReasonWire::Stop.as_str().to_string(),
+                        ),
                         usage: StreamUsage::default(),
                         provider_metadata: None,
                     },
@@ -3807,7 +3828,7 @@ mod tests {
             message_id: None,
         });
         // finish_reason is "tool-calls" — loop should continue, not break
-        assistant.finish = Some("tool-calls".to_string());
+        assistant.finish = Some(ProviderFinishReasonWire::ToolCalls.as_str().to_string());
 
         let messages = [user, assistant];
 
@@ -3822,10 +3843,7 @@ mod tests {
         // The early-exit check from the prompt loop
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false
@@ -3853,7 +3871,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             message_id: None,
         });
-        assistant.finish = Some("stop".to_string());
+        assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
 
         let messages = [user, assistant];
 
@@ -3867,10 +3885,7 @@ mod tests {
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false
@@ -3910,10 +3925,7 @@ mod tests {
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false

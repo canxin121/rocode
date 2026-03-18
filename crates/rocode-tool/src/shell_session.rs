@@ -1,5 +1,8 @@
 use async_trait::async_trait;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, PtySize};
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
@@ -401,7 +404,7 @@ impl ShellSessionTool {
         })??;
         let session_view = session.view().await;
         let mut metadata = shell_metadata("write", &session_view);
-        metadata.insert("bytes".to_string(), serde_json::json!(byte_len));
+        metadata.insert(patch_keys::BYTES.to_string(), serde_json::json!(byte_len));
         Ok(ToolResult {
             title: "Shell Session Write".to_string(),
             output: format!("Sent {} bytes to shell session {}.", byte_len, session_id),
@@ -510,7 +513,7 @@ impl Default for ShellSessionTool {
 #[async_trait]
 impl Tool for ShellSessionTool {
     fn id(&self) -> &str {
-        "shell_session"
+        BuiltinToolName::ShellSession.as_str()
     }
 
     fn description(&self) -> &str {
@@ -655,9 +658,9 @@ async fn authorize_cwd(cwd: &str, ctx: &ToolContext) -> Result<(), ToolError> {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string());
     ctx.ask_permission(
-        PermissionRequest::new("external_directory")
+        PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
             .with_pattern(format!("{}/*", parent))
-            .with_metadata("filepath", serde_json::json!(cwd))
+            .with_metadata(patch_keys::FILEPATH, serde_json::json!(cwd))
             .with_metadata("parentDir", serde_json::json!(parent)),
     )
     .await
@@ -906,7 +909,7 @@ mod tests {
         assert!(
             permissions
                 .iter()
-                .filter(|item| item.as_str() == "bash")
+                .filter(|item| item.as_str() == BuiltinToolName::Bash.as_str())
                 .count()
                 >= 2
         );

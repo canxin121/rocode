@@ -29,6 +29,14 @@ use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId};
 use rocode_config::loader::load_config;
 use rocode_config::Config;
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+#[cfg(test)]
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+use rocode_core::contracts::output_blocks::ToolPhaseWire;
+use rocode_core::contracts::permission::PermissionReplyWire;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::scheduler::{SchedulerStageStatus, SchedulerStageWaitingOn};
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::{QuestionInteractionStatus, ToolCallStatusWire};
 use rocode_orchestrator::{
     scheduler_plan_from_profile, scheduler_request_defaults_from_plan, SchedulerConfig,
     SchedulerPresetKind, SchedulerProfileConfig, SchedulerRequestDefaults,
@@ -535,14 +543,7 @@ async fn cli_execute_ui_action(
                 .lock()
                 .map(|projection| {
                     (
-                        match projection.phase {
-                            CliFrontendPhase::Idle => "idle",
-                            CliFrontendPhase::Busy => "busy",
-                            CliFrontendPhase::Waiting => "waiting",
-                            CliFrontendPhase::Cancelling => "cancelling",
-                            CliFrontendPhase::Failed => "failed",
-                        }
-                        .to_string(),
+                        projection.phase.as_str().to_string(),
                         projection.active_label.clone(),
                         projection.queue_len,
                         projection.token_stats.clone(),
@@ -1120,6 +1121,15 @@ struct CliObservedExecutionNode {
     recent_event: Option<String>,
     children: Vec<String>,
 }
+
+const CLI_NODE_KIND_PROMPT: &str = "prompt";
+const CLI_NODE_KIND_SCHEDULER: &str = "scheduler";
+const CLI_NODE_KIND_STAGE: &str = "stage";
+const CLI_NODE_KIND_TOOL: &str = "tool";
+const CLI_NODE_KIND_QUESTION: &str = "question";
+
+const CLI_NODE_ID_PROMPT: &str = "prompt";
+const CLI_NODE_ID_SCHEDULER: &str = "scheduler";
 
 #[derive(Clone)]
 enum CliActiveAbortHandle {
@@ -1703,6 +1713,18 @@ enum CliFrontendPhase {
     Failed,
 }
 
+impl CliFrontendPhase {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Busy => "busy",
+            Self::Waiting => "waiting",
+            Self::Cancelling => "cancelling",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 const CLI_TRANSCRIPT_MAX_LINES: usize = 1200;
 
 #[derive(Debug, Clone, Default)]
@@ -1925,35 +1947,35 @@ impl CliFrontendProjection {
 impl CliObservedExecutionTopology {
     fn reset_for_run(&mut self, agent_name: &str, scheduler_profile: Option<&str>) {
         self.active = true;
-        self.root_id = Some("prompt".to_string());
-        self.scheduler_id = scheduler_profile.map(|_| "scheduler".to_string());
+        self.root_id = Some(CLI_NODE_ID_PROMPT.to_string());
+        self.scheduler_id = scheduler_profile.map(|_| CLI_NODE_ID_SCHEDULER.to_string());
         self.active_stage_id = None;
         self.stage_order.clear();
         self.nodes.clear();
         self.nodes.insert(
-            "prompt".to_string(),
+            CLI_NODE_ID_PROMPT.to_string(),
             CliObservedExecutionNode {
-                kind: "prompt".to_string(),
+                kind: CLI_NODE_KIND_PROMPT.to_string(),
                 label: format!("Prompt run ({})", agent_name),
-                status: "running".to_string(),
-                waiting_on: Some("model".to_string()),
+                status: SchedulerStageStatus::Running.as_str().to_string(),
+                waiting_on: Some(SchedulerStageWaitingOn::Model.as_str().to_string()),
                 recent_event: Some("Prompt run started".to_string()),
                 children: Vec::new(),
             },
         );
         if let Some(profile) = scheduler_profile {
             self.nodes.insert(
-                "scheduler".to_string(),
+                CLI_NODE_ID_SCHEDULER.to_string(),
                 CliObservedExecutionNode {
-                    kind: "scheduler".to_string(),
+                    kind: CLI_NODE_KIND_SCHEDULER.to_string(),
                     label: format!("Scheduler run ({})", profile),
-                    status: "running".to_string(),
-                    waiting_on: Some("model".to_string()),
+                    status: SchedulerStageStatus::Running.as_str().to_string(),
+                    waiting_on: Some(SchedulerStageWaitingOn::Model.as_str().to_string()),
                     recent_event: Some("Scheduler orchestration started".to_string()),
                     children: Vec::new(),
                 },
             );
-            self.attach_child("prompt", "scheduler");
+            self.attach_child(CLI_NODE_ID_PROMPT, CLI_NODE_ID_SCHEDULER);
         }
     }
 
@@ -1981,16 +2003,20 @@ impl CliObservedExecutionTopology {
         let parent_id = self
             .scheduler_id
             .clone()
-            .unwrap_or_else(|| self.root_id.clone().unwrap_or_else(|| "prompt".to_string()));
+            .unwrap_or_else(|| {
+                self.root_id
+                    .clone()
+                    .unwrap_or_else(|| CLI_NODE_ID_PROMPT.to_string())
+            });
         let status = stage
             .status
             .clone()
-            .unwrap_or_else(|| "running".to_string());
+            .unwrap_or_else(|| SchedulerStageStatus::Running.as_str().to_string());
         let node = self
             .nodes
             .entry(stage_id.clone())
             .or_insert(CliObservedExecutionNode {
-                kind: "stage".to_string(),
+                kind: CLI_NODE_KIND_STAGE.to_string(),
                 label: stage.title.clone(),
                 status: status.clone(),
                 waiting_on: stage.waiting_on.clone(),
@@ -2006,8 +2032,13 @@ impl CliObservedExecutionTopology {
             self.stage_order.push(stage_id.clone());
         }
         if matches!(
-            status.as_str(),
-            "running" | "waiting" | "cancelling" | "retry"
+            SchedulerStageStatus::parse(status.as_str()),
+            Some(
+                SchedulerStageStatus::Running
+                    | SchedulerStageStatus::Waiting
+                    | SchedulerStageStatus::Cancelling
+                    | SchedulerStageStatus::Retrying
+            )
         ) {
             self.active_stage_id = Some(stage_id.clone());
         }
@@ -2015,10 +2046,17 @@ impl CliObservedExecutionTopology {
             if let Some(scheduler) = self.nodes.get_mut(&scheduler_id) {
                 scheduler.waiting_on = stage.waiting_on.clone();
                 scheduler.recent_event = stage.last_event.clone();
-                scheduler.status = if status == "waiting" {
-                    "waiting".to_string()
-                } else {
-                    "running".to_string()
+                scheduler.status = match SchedulerStageStatus::parse(status.as_str()) {
+                    Some(SchedulerStageStatus::Waiting | SchedulerStageStatus::Blocked) => {
+                        SchedulerStageStatus::Waiting.as_str().to_string()
+                    }
+                    Some(SchedulerStageStatus::Cancelling) => {
+                        SchedulerStageStatus::Cancelling.as_str().to_string()
+                    }
+                    Some(SchedulerStageStatus::Retrying) => {
+                        SchedulerStageStatus::Retrying.as_str().to_string()
+                    }
+                    _ => SchedulerStageStatus::Running.as_str().to_string(),
                 };
             }
         }
@@ -2030,23 +2068,23 @@ impl CliObservedExecutionTopology {
             .clone()
             .or_else(|| self.scheduler_id.clone())
             .or_else(|| self.root_id.clone())
-            .unwrap_or_else(|| "prompt".to_string());
+            .unwrap_or_else(|| CLI_NODE_ID_PROMPT.to_string());
         let tool_id = format!("tool:{}:{}", parent_id, tool.name);
         let status = match tool.phase {
             rocode_command::output_blocks::ToolPhase::Start
-            | rocode_command::output_blocks::ToolPhase::Running => "running",
-            rocode_command::output_blocks::ToolPhase::Done => "done",
-            rocode_command::output_blocks::ToolPhase::Error => "error",
+            | rocode_command::output_blocks::ToolPhase::Running => ToolPhaseWire::Running.as_str(),
+            rocode_command::output_blocks::ToolPhase::Done => ToolPhaseWire::Done.as_str(),
+            rocode_command::output_blocks::ToolPhase::Error => ToolPhaseWire::Error.as_str(),
         }
         .to_string();
         let node = self
             .nodes
             .entry(tool_id.clone())
             .or_insert(CliObservedExecutionNode {
-                kind: "tool".to_string(),
+                kind: CLI_NODE_KIND_TOOL.to_string(),
                 label: tool.name.clone(),
                 status: status.clone(),
-                waiting_on: Some("tool".to_string()),
+                waiting_on: Some(SchedulerStageWaitingOn::Tool.as_str().to_string()),
                 recent_event: tool.detail.clone(),
                 children: Vec::new(),
             });
@@ -2054,7 +2092,7 @@ impl CliObservedExecutionTopology {
         node.waiting_on = if matches!(tool.phase, rocode_command::output_blocks::ToolPhase::Done) {
             None
         } else {
-            Some("tool".to_string())
+            Some(SchedulerStageWaitingOn::Tool.as_str().to_string())
         };
         node.recent_event = tool.detail.clone();
         self.attach_child(&parent_id, &tool_id);
@@ -2066,15 +2104,15 @@ impl CliObservedExecutionTopology {
             .clone()
             .or_else(|| self.scheduler_id.clone())
             .or_else(|| self.root_id.clone())
-            .unwrap_or_else(|| "prompt".to_string());
+            .unwrap_or_else(|| CLI_NODE_ID_PROMPT.to_string());
         let question_id = format!("question:{}:{}", parent_id, count);
         self.nodes.insert(
             question_id.clone(),
             CliObservedExecutionNode {
-                kind: "question".to_string(),
+                kind: CLI_NODE_KIND_QUESTION.to_string(),
                 label: format!("Question ({})", count),
-                status: "waiting".to_string(),
-                waiting_on: Some("user".to_string()),
+                status: SchedulerStageStatus::Waiting.as_str().to_string(),
+                waiting_on: Some(SchedulerStageWaitingOn::User.as_str().to_string()),
                 recent_event: Some("Waiting for user answer".to_string()),
                 children: Vec::new(),
             },
@@ -2086,9 +2124,9 @@ impl CliObservedExecutionTopology {
         for node in self
             .nodes
             .values_mut()
-            .filter(|node| node.kind == "question")
+            .filter(|node| node.kind == CLI_NODE_KIND_QUESTION)
         {
-            if node.status == "waiting" {
+            if node.status == SchedulerStageStatus::Waiting.as_str() {
                 node.status = outcome.to_string();
                 node.waiting_on = None;
                 node.recent_event = Some(format!("Question {}", outcome));
@@ -2102,7 +2140,7 @@ impl CliObservedExecutionTopology {
             if let Some(root) = self.nodes.get_mut(&root_id) {
                 root.status = outcome
                     .clone()
-                    .unwrap_or_else(|| "completed".to_string())
+                    .unwrap_or_else(|| ToolCallStatusWire::Completed.as_str().to_string())
                     .to_lowercase();
                 root.waiting_on = None;
                 root.recent_event = outcome;
@@ -2566,14 +2604,15 @@ fn cli_recent_session_info_for_directory(
         .or_else(|| sessions.iter().max_by_key(|session| session.time.updated))?;
 
     let model_label = cli_session_metadata_string(session, "current_model").or_else(|| {
-        cli_session_metadata_string(session, "model_provider")
-            .zip(cli_session_metadata_string(session, "model_id"))
+        cli_session_metadata_string(session, session_keys::MODEL_PROVIDER)
+            .zip(cli_session_metadata_string(session, session_keys::MODEL_ID))
             .map(|(provider, model)| format!("{provider}/{model}"))
     });
-    let preset_label = cli_session_metadata_string(session, "scheduler_profile")
-        .or_else(|| cli_session_metadata_string(session, "resolved_scheduler_profile"))
+    let preset_label = cli_session_metadata_string(session, scheduler_keys::PROFILE)
+        .or_else(|| cli_session_metadata_string(session, scheduler_keys::RESOLVED_PROFILE))
         .or_else(|| {
-            cli_session_metadata_string(session, "agent").map(|agent| format!("agent:{agent}"))
+            cli_session_metadata_string(session, session_keys::AGENT)
+                .map(|agent| format!("agent:{agent}"))
         });
     let title = (!session.title.trim().is_empty()).then(|| session.title.trim().to_string());
 
@@ -2630,7 +2669,14 @@ fn cli_render_startup_banner(style: &CliStyle, recent: Option<&CliRecentSessionI
 }
 
 fn cli_is_terminal_stage_status(status: Option<&str>) -> bool {
-    matches!(status, Some("done" | "blocked" | "cancelled"))
+    matches!(
+        status.and_then(SchedulerStageStatus::parse),
+        Some(
+            SchedulerStageStatus::Done
+                | SchedulerStageStatus::Blocked
+                | SchedulerStageStatus::Cancelled
+        )
+    )
 }
 
 fn cli_set_root_server_session(runtime: &mut CliExecutionRuntime, session_id: String) {
@@ -3225,10 +3271,16 @@ fn cli_frontend_observe_block(
     };
     match block {
         OutputBlock::SchedulerStage(stage) => {
-            projection.phase = match stage.status.as_deref() {
-                Some("waiting") | Some("blocked") => CliFrontendPhase::Waiting,
-                Some("cancelling") => CliFrontendPhase::Cancelling,
-                Some("cancelled") | Some("done") => projection.phase,
+            projection.phase = match stage
+                .status
+                .as_deref()
+                .and_then(SchedulerStageStatus::parse)
+            {
+                Some(SchedulerStageStatus::Waiting | SchedulerStageStatus::Blocked) => {
+                    CliFrontendPhase::Waiting
+                }
+                Some(SchedulerStageStatus::Cancelling) => CliFrontendPhase::Cancelling,
+                Some(SchedulerStageStatus::Cancelled | SchedulerStageStatus::Done) => projection.phase,
                 _ => CliFrontendPhase::Busy,
             };
             projection.active_label = Some(cli_stage_activity_label(stage));
@@ -3448,11 +3500,8 @@ fn cli_sidebar_lines(
     topology: &CliObservedExecutionTopology,
 ) -> Vec<String> {
     let phase = match projection.phase {
-        CliFrontendPhase::Idle => "idle",
-        CliFrontendPhase::Busy => "busy",
-        CliFrontendPhase::Waiting => "waiting",
-        CliFrontendPhase::Cancelling => "cancelling",
-        CliFrontendPhase::Failed => "error",
+        CliFrontendPhase::Failed => ToolCallStatusWire::Error.as_str(),
+        other => other.as_str(),
     };
     let mut lines = vec![
         format!("Phase: {}", phase),
@@ -3504,21 +3553,28 @@ fn cli_sidebar_lines(
         let connected = projection
             .mcp_servers
             .iter()
-            .filter(|s| s.status == "connected")
+            .filter(|s| {
+                McpConnectionStatusWire::parse(&s.status)
+                    == Some(McpConnectionStatusWire::Connected)
+            })
             .count();
         let errored = projection
             .mcp_servers
             .iter()
-            .filter(|s| s.status == "failed" || s.status == "error")
+            .filter(|s| McpConnectionStatusWire::parse(&s.status) == Some(McpConnectionStatusWire::Failed))
             .count();
         lines.push(String::new());
         lines.push(format!("─ MCP ({} active, {} err) ─", connected, errored));
         for server in &projection.mcp_servers {
-            let indicator = match server.status.as_str() {
-                "connected" => "●",
-                "failed" | "error" => "✗",
-                "needs_auth" | "needs auth" => "?",
-                _ => "○",
+            let indicator = match McpConnectionStatusWire::parse(&server.status) {
+                Some(McpConnectionStatusWire::Connected) => "●",
+                Some(McpConnectionStatusWire::Failed) => "✗",
+                Some(
+                    McpConnectionStatusWire::NeedsAuth
+                    | McpConnectionStatusWire::NeedsClientRegistration,
+                ) => "?",
+                Some(McpConnectionStatusWire::Disabled | McpConnectionStatusWire::Disconnected)
+                | None => "○",
             };
             lines.push(format!("{} {} [{}]", indicator, server.name, server.status));
             if let Some(ref err) = server.error {
@@ -4973,7 +5029,7 @@ async fn handle_permission_from_sse(
                 let _ = api_client
                     .reply_permission(
                         permission_id,
-                        "reject",
+                        PermissionReplyWire::Reject.as_str(),
                         Some("Invalid permission request payload".to_string()),
                     )
                     .await;
@@ -5011,7 +5067,11 @@ async fn handle_permission_from_sse(
         let memory = runtime.permission_memory.lock().await;
         if memory.is_granted(&permission, &patterns) {
             let _ = api_client
-                .reply_permission(permission_id, "once", Some("auto-approved".to_string()))
+                .reply_permission(
+                    permission_id,
+                    PermissionReplyWire::Once.as_str(),
+                    Some("auto-approved".to_string()),
+                )
                 .await;
             return;
         }
@@ -5044,7 +5104,7 @@ async fn handle_permission_from_sse(
             let _ = api_client
                 .reply_permission(
                     permission_id,
-                    "reject",
+                    PermissionReplyWire::Reject.as_str(),
                     Some(format!("Permission prompt IO error: {}", error)),
                 )
                 .await;
@@ -5055,7 +5115,7 @@ async fn handle_permission_from_sse(
             let _ = api_client
                 .reply_permission(
                     permission_id,
-                    "reject",
+                    PermissionReplyWire::Reject.as_str(),
                     Some(format!("Permission prompt failed: {}", error)),
                 )
                 .await;
@@ -5064,17 +5124,20 @@ async fn handle_permission_from_sse(
     };
 
     let (reply, message) = match decision {
-        PermissionDecision::Allow => ("once", Some("approved".to_string())),
+        PermissionDecision::Allow => (PermissionReplyWire::Once, Some("approved".to_string())),
         PermissionDecision::AllowAlways => {
             let mut memory = runtime.permission_memory.lock().await;
             memory.grant_always(&permission, &patterns);
-            ("always", Some("approved always".to_string()))
+            (
+                PermissionReplyWire::Always,
+                Some("approved always".to_string()),
+            )
         }
-        PermissionDecision::Deny => ("reject", Some("rejected".to_string())),
+        PermissionDecision::Deny => (PermissionReplyWire::Reject, Some("rejected".to_string())),
     };
 
     if let Err(error) = api_client
-        .reply_permission(permission_id, reply, message)
+        .reply_permission(permission_id, reply.as_str(), message)
         .await
     {
         tracing::error!(permission_id, %error, "failed to reply permission");
@@ -5406,7 +5469,7 @@ async fn cli_ask_question(
             }
             Ok(SelectResult::Cancelled) => {
                 if let Ok(mut topology) = observed_topology.lock() {
-                    topology.finish_question("cancelled");
+                    topology.finish_question(QuestionInteractionStatus::Cancelled.as_str());
                 }
                 cli_frontend_set_phase(
                     &frontend_projection,
@@ -5423,7 +5486,7 @@ async fn cli_ask_question(
             }
             Err(e) => {
                 if let Ok(mut topology) = observed_topology.lock() {
-                    topology.finish_question("failed");
+                    topology.finish_question(QuestionInteractionStatus::Error.as_str());
                 }
                 cli_frontend_set_phase(
                     &frontend_projection,
@@ -5443,7 +5506,7 @@ async fn cli_ask_question(
     }
 
     if let Ok(mut topology) = observed_topology.lock() {
-        topology.finish_question("answered");
+        topology.finish_question(QuestionInteractionStatus::Answered.as_str());
     }
     cli_frontend_set_phase(
         &frontend_projection,
@@ -5502,26 +5565,26 @@ fn cli_list_tasks(runtime: Option<&CliExecutionRuntime>) {
     let mut done = 0usize;
     for task in &tasks {
         let (icon, status_str) = match &task.status {
-            AgentTaskStatus::Pending => ("◯", "pending".to_string()),
+            AgentTaskStatus::Pending => ("◯", task.status.kind().as_str().to_string()),
             AgentTaskStatus::Running { step } => {
                 running += 1;
                 let steps = task
                     .max_steps
                     .map(|m| format!("{}/{}", step, m))
                     .unwrap_or(format!("{}/？", step));
-                ("◐", format!("running  {}", steps))
+                ("◐", format!("{}  {}", task.status.kind().as_str(), steps))
             }
             AgentTaskStatus::Completed { steps } => {
                 done += 1;
-                ("●", format!("done     {}", steps))
+                ("●", format!("{}  {}", task.status.kind().as_str(), steps))
             }
             AgentTaskStatus::Cancelled => {
                 done += 1;
-                ("✗", "cancelled".to_string())
+                ("✗", task.status.kind().as_str().to_string())
             }
             AgentTaskStatus::Failed { .. } => {
                 done += 1;
-                ("✗", "failed".to_string())
+                ("✗", task.status.kind().as_str().to_string())
             }
         };
         let elapsed = now - task.started_at;
@@ -5544,19 +5607,25 @@ fn cli_show_task(id: &str, runtime: Option<&CliExecutionRuntime>) {
     match global_task_registry().get(id) {
         Some(task) => {
             let (status_label, step_info) = match &task.status {
-                AgentTaskStatus::Pending => ("pending".to_string(), String::new()),
+                AgentTaskStatus::Pending => (task.status.kind().as_str().to_string(), String::new()),
                 AgentTaskStatus::Running { step } => {
                     let steps = task
                         .max_steps
                         .map(|m| format!(" (step {}/{})", step, m))
                         .unwrap_or(format!(" (step {}/?)", step));
-                    ("running".to_string(), steps)
+                    (task.status.kind().as_str().to_string(), steps)
                 }
                 AgentTaskStatus::Completed { steps } => {
-                    ("completed".to_string(), format!(" ({} steps)", steps))
+                    (
+                        task.status.kind().as_str().to_string(),
+                        format!(" ({} steps)", steps),
+                    )
                 }
-                AgentTaskStatus::Cancelled => ("cancelled".to_string(), String::new()),
-                AgentTaskStatus::Failed { error } => (format!("failed: {}", error), String::new()),
+                AgentTaskStatus::Cancelled => (task.status.kind().as_str().to_string(), String::new()),
+                AgentTaskStatus::Failed { error } => (
+                    format!("{}: {}", task.status.kind().as_str(), error),
+                    String::new(),
+                ),
             };
             let now = chrono::Utc::now().timestamp();
             let elapsed = now - task.started_at;
@@ -5680,6 +5749,8 @@ fn format_session_time(timestamp: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::scheduler_keys;
+    use super::session_keys;
     use super::{
         cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
         cli_prompt_agent_override, cli_prompt_assist_view, cli_prompt_screen_lines,
@@ -5696,6 +5767,7 @@ mod tests {
     use rocode_command::output_blocks::SchedulerStageBlock;
     use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
     use rocode_config::{Config, UiPreferencesConfig};
+    use rocode_core::contracts::scheduler::SchedulerStageStatus;
     use rocode_tui::api::SessionTimeInfo;
     use std::collections::{BTreeSet, HashMap, VecDeque};
     use std::path::Path;
@@ -5831,8 +5903,8 @@ mod tests {
     #[test]
     fn cli_prints_scheduler_stage_snapshots_only_on_change() {
         let snapshots = Arc::new(Mutex::new(HashMap::new()));
-        let running = stage_with_status("running");
-        let done = stage_with_status("done");
+        let running = stage_with_status(SchedulerStageStatus::Running.as_str());
+        let done = stage_with_status(SchedulerStageStatus::Done.as_str());
 
         assert!(cli_should_emit_scheduler_stage_block(&snapshots, &running));
         assert!(!cli_should_emit_scheduler_stage_block(&snapshots, &running));
@@ -6131,10 +6203,16 @@ mod tests {
             },
             revert: None,
             metadata: Some(HashMap::from([
-                ("model_provider".to_string(), serde_json::json!("zhipuai")),
-                ("model_id".to_string(), serde_json::json!("GLM-5")),
                 (
-                    "scheduler_profile".to_string(),
+                    session_keys::MODEL_PROVIDER.to_string(),
+                    serde_json::json!("zhipuai"),
+                ),
+                (
+                    session_keys::MODEL_ID.to_string(),
+                    serde_json::json!("GLM-5"),
+                ),
+                (
+                    scheduler_keys::PROFILE.to_string(),
                     serde_json::json!("prometheus"),
                 ),
             ])),
@@ -6165,7 +6243,7 @@ mod tests {
             active_label: Some("assistant response".to_string()),
             view_label: Some("view child child-abc".to_string()),
             queue_len: 2,
-            active_stage: Some(stage_with_status("running")),
+            active_stage: Some(stage_with_status(SchedulerStageStatus::Running.as_str())),
             transcript: CliRetainedTranscript::default(),
             sidebar_collapsed: false,
             active_collapsed: false,
@@ -6276,7 +6354,7 @@ mod tests {
     fn retained_layout_active_panel_adapts_to_content() {
         let style = CliStyle::plain();
         let topology = CliObservedExecutionTopology::default();
-        let minimal_stage = stage_with_status("running");
+        let minimal_stage = stage_with_status(SchedulerStageStatus::Running.as_str());
 
         let proj_minimal = CliFrontendProjection {
             phase: CliFrontendPhase::Busy,
@@ -6295,7 +6373,7 @@ mod tests {
             &style,
         );
 
-        let mut rich_stage = stage_with_status("running");
+        let mut rich_stage = stage_with_status(SchedulerStageStatus::Running.as_str());
         rich_stage.focus = Some("analyzing codebase".to_string());
         rich_stage.last_event = Some("tool_call: read_file".to_string());
         rich_stage.activity = Some("Reviewing architecture".to_string());

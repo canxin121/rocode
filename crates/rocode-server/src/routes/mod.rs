@@ -54,6 +54,7 @@ use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
 use rocode_plugin::subprocess::{PluginLoader, PluginSubprocessError};
 use rocode_provider::AuthInfo;
+use rocode_core::contracts::wire::keys as wire_keys;
 
 pub fn router() -> Router<Arc<ServerState>> {
     Router::new()
@@ -218,7 +219,7 @@ pub(crate) fn stream_server_events(
             let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
                 return true;
             };
-            match value.get("sessionID").and_then(|v| v.as_str()) {
+            match value.get(wire_keys::SESSION_ID).and_then(|v| v.as_str()) {
                 Some(sid) => sid == filter.as_str(),
                 None => {
                     // Also check "parentID" for child_session events.
@@ -957,6 +958,7 @@ pub(crate) fn get_plugin_loader() -> Option<&'static Arc<PluginLoader>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::output_blocks::{MessagePhaseWire, MessageRoleWire, OutputBlockKind};
     use serde_json::json;
 
     #[test]
@@ -980,9 +982,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": "message",
-                "phase": "delta",
-                "role": "assistant",
+                "kind": OutputBlockKind::Message.as_str(),
+                "phase": MessagePhaseWire::Delta.as_str(),
+                "role": MessageRoleWire::Assistant.as_str(),
                 "text": "hel",
             }),
         };
@@ -990,9 +992,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": "message",
-                "phase": "delta",
-                "role": "assistant",
+                "kind": OutputBlockKind::Message.as_str(),
+                "phase": MessagePhaseWire::Delta.as_str(),
+                "role": MessageRoleWire::Assistant.as_str(),
                 "text": "lo",
             }),
         };
@@ -1013,9 +1015,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": "message",
-                "phase": "delta",
-                "role": "assistant",
+                "kind": OutputBlockKind::Message.as_str(),
+                "phase": MessagePhaseWire::Delta.as_str(),
+                "role": MessageRoleWire::Assistant.as_str(),
                 "text": "hel",
             }),
         };
@@ -1023,9 +1025,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-2".to_string()),
             block: json!({
-                "kind": "message",
-                "phase": "delta",
-                "role": "assistant",
+                "kind": OutputBlockKind::Message.as_str(),
+                "phase": MessagePhaseWire::Delta.as_str(),
+                "role": MessageRoleWire::Assistant.as_str(),
                 "text": "lo",
             }),
         };
@@ -1039,8 +1041,8 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("reasoning-1".to_string()),
             block: json!({
-                "kind": "reasoning",
-                "phase": "delta",
+                "kind": OutputBlockKind::Reasoning.as_str(),
+                "phase": MessagePhaseWire::Delta.as_str(),
                 "text": "thinking",
             }),
         };
@@ -1048,8 +1050,8 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("reasoning-1".to_string()),
             block: json!({
-                "kind": "reasoning",
-                "phase": "full",
+                "kind": OutputBlockKind::Reasoning.as_str(),
+                "phase": MessagePhaseWire::Full.as_str(),
                 "text": "thinking done",
             }),
         };

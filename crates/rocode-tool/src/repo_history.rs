@@ -1,6 +1,9 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::git_runtime::{ensure_git_available, run_git_command, DEFAULT_GIT_TIMEOUT_SECS};
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
@@ -22,8 +25,21 @@ Implemented operations:
 This tool is a thin, read-only wrapper around the local `git` executable.
 It exists to give models stable, structured git semantics instead of free-form shell output."#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum RepoHistoryOperation {
     Status,
     Head,
@@ -34,15 +50,8 @@ enum RepoHistoryOperation {
 }
 
 impl RepoHistoryOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Head => "head",
-            Self::Log => "log",
-            Self::ShowCommit => "show_commit",
-            Self::DiffUncommitted => "diff_uncommitted",
-            Self::Blame => "blame",
-        }
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -379,7 +388,7 @@ impl Default for RepoHistoryTool {
 #[async_trait]
 impl Tool for RepoHistoryTool {
     fn id(&self) -> &str {
-        "repo_history"
+        BuiltinToolName::RepoHistory.as_str()
     }
 
     fn description(&self) -> &str {
@@ -387,12 +396,14 @@ impl Tool for RepoHistoryTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> =
+            RepoHistoryOperation::iter().map(RepoHistoryOperation::as_str).collect();
         serde_json::json!({
             "type": "object",
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["status", "head", "log", "show_commit", "diff_uncommitted", "blame"],
+                    "enum": operations,
                     "description": "Local repository history operation to execute"
                 },
                 "path": {
@@ -436,7 +447,7 @@ impl Tool for RepoHistoryTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("repo_history")
+        let mut permission = PermissionRequest::new(BuiltinToolName::RepoHistory.as_str())
             .with_metadata("operation", serde_json::json!(input.operation.as_str()))
             .with_metadata("limit", serde_json::json!(input.limit))
             .always_allow();
