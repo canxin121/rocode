@@ -1,6 +1,6 @@
 use futures::{Stream, StreamExt};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use tokio::sync::mpsc;
@@ -128,10 +128,17 @@ impl OpenAIResponsesLanguageModel {
             }
         }
 
-        let mut body = json!({
-            "model": self.model_id,
-            "input": input,
-        });
+        #[derive(Serialize)]
+        struct ResponsesRequestBase<'a> {
+            model: &'a str,
+            input: &'a crate::responses::ResponsesInput,
+        }
+
+        let mut body = serde_json::to_value(ResponsesRequestBase {
+            model: &self.model_id,
+            input: &input,
+        })
+        .map_err(|e| ProviderError::InvalidRequest(format!("failed to build request body: {}", e)))?;
         let obj = body.as_object_mut().ok_or_else(|| {
             ProviderError::InvalidRequest("failed to build responses request body".to_string())
         })?;
@@ -160,10 +167,10 @@ impl OpenAIResponsesLanguageModel {
         }
         if !model_config.is_reasoning_model {
             if let Some(temperature) = options.temperature {
-                obj.insert("temperature".to_string(), json!(temperature));
+                obj.insert("temperature".to_string(), Value::from(temperature));
             }
             if let Some(top_p) = options.top_p {
-                obj.insert("top_p".to_string(), json!(top_p));
+                obj.insert("top_p".to_string(), Value::from(top_p));
             }
         }
         if model_config.required_auto_truncation {
@@ -186,7 +193,7 @@ impl OpenAIResponsesLanguageModel {
             .and_then(LogprobsSetting::top_logprobs)
         {
             text_obj.insert("logprobs".to_string(), Value::Bool(true));
-            text_obj.insert("top_logprobs".to_string(), json!(top_n));
+            text_obj.insert("top_logprobs".to_string(), Value::from(top_n));
         }
         if let Some(verbosity) = provider_options.text_verbosity.clone() {
             text_obj.insert(
@@ -206,7 +213,11 @@ impl OpenAIResponsesLanguageModel {
             obj.insert("text".to_string(), Value::Object(text_obj));
         }
 
-        if model_config.is_reasoning_model {
+        let supports_reasoning = model_config.is_reasoning_model
+            || provider_options.reasoning_effort.is_some()
+            || provider_options.reasoning_summary.is_some();
+
+        if supports_reasoning {
             let mut reasoning = serde_json::Map::new();
             if let Some(effort) = provider_options.reasoning_effort.clone() {
                 reasoning.insert("effort".to_string(), Value::String(effort));
@@ -615,20 +626,28 @@ impl OpenAIResponsesLanguageModel {
                 }
             }
 
-            let mut provider_metadata = json!({
-                "response_id": response_id,
-                "service_tier": service_tier,
-            });
-            if !logprobs.is_empty() {
-                provider_metadata["logprobs"] =
-                    serde_json::to_value(logprobs).unwrap_or(Value::Null);
+            #[derive(Serialize)]
+            struct StreamProviderMetadata {
+                response_id: Option<String>,
+                service_tier: Option<String>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                logprobs: Option<Vec<Vec<LogprobEntry>>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                metadata: Option<Value>,
             }
-            if let Some(extractor) = stream_metadata_extractor.as_ref() {
-                if let Some(extra) = extractor.build_metadata() {
-                    provider_metadata["metadata"] =
-                        serde_json::to_value(extra).unwrap_or(Value::Null);
-                }
-            }
+
+            let extra_metadata = stream_metadata_extractor
+                .as_ref()
+                .and_then(|extractor| extractor.build_metadata())
+                .and_then(|extra| serde_json::to_value(extra).ok());
+
+            let provider_metadata = serde_json::to_value(StreamProviderMetadata {
+                response_id,
+                service_tier,
+                logprobs: (!logprobs.is_empty()).then_some(logprobs),
+                metadata: extra_metadata,
+            })
+            .unwrap_or(Value::Null);
 
             let resolved_reason = if finish_reason == FinishReason::Unknown {
                 map_openai_response_finish_reason(None, has_function_call)

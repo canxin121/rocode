@@ -1,7 +1,21 @@
 use crate::{MessageRole, SessionMessage};
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize)]
+struct HookMessageInfoTime {
+    created: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct HookMessageInfo {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    role: &'static str,
+    time: HookMessageInfoTime,
+}
 
 pub(crate) fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
     #[derive(Debug, Deserialize)]
@@ -21,19 +35,23 @@ pub(crate) fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Valu
 }
 
 pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_json::Value {
-    let mut payload = serde_json::to_value(message).unwrap_or_else(|_| serde_json::json!({}));
+    let mut payload = serde_json::to_value(message).unwrap_or(serde_json::Value::Null);
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };
 
+    let info = HookMessageInfo {
+        id: message.id.clone(),
+        session_id: message.session_id.clone(),
+        role: hook_message_role(&message.role),
+        time: HookMessageInfoTime {
+            created: message.created_at.timestamp_millis(),
+        },
+    };
+
     object.insert(
         "info".to_string(),
-        serde_json::json!({
-            "id": message.id,
-            "sessionID": message.session_id,
-            "role": hook_message_role(&message.role),
-            "time": { "created": message.created_at.timestamp_millis() },
-        }),
+        serde_json::to_value(info).unwrap_or(serde_json::Value::Null),
     );
 
     payload

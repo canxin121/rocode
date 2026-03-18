@@ -87,6 +87,25 @@ pub struct CommandRegistry {
     ui_slash_aliases: HashMap<String, UiActionId>,
 }
 
+#[derive(Debug, Serialize)]
+struct CommandHookPart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    text: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct CommandExecuteBeforeHookPayload<'a> {
+    command: &'a str,
+    source: String,
+    arguments: String,
+    parts: Vec<CommandHookPart<'a>>,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedUiCommand {
     pub action_id: UiActionId,
@@ -265,18 +284,22 @@ impl CommandRegistry {
         let mut rendered = self.render_command(command, ctx.clone())?;
 
         // Plugin hook: command.execute.before
+        let hook_payload = CommandExecuteBeforeHookPayload {
+            command: name,
+            source: format!("{:?}", command.source),
+            arguments: ctx.arguments.join(" "),
+            parts: vec![CommandHookPart {
+                part_type: "text",
+                text: &rendered,
+            }],
+        };
+
         let hook_outputs = rocode_plugin::trigger_collect(
             HookContext::new(HookEvent::CommandExecuteBefore)
-                .with_data("command", serde_json::json!(name))
-                .with_data("source", serde_json::json!(format!("{:?}", command.source)))
-                .with_data("arguments", serde_json::json!(ctx.arguments.join(" ")))
-                .with_data(
-                    "parts",
-                    serde_json::json!([{
-                        "type": "text",
-                        "text": rendered
-                    }]),
-                ),
+                .with_data("command", to_value_or_null(hook_payload.command))
+                .with_data("source", to_value_or_null(hook_payload.source.clone()))
+                .with_data("arguments", to_value_or_null(hook_payload.arguments.clone()))
+                .with_data("parts", to_value_or_null(&hook_payload.parts)),
         )
         .await;
         for output in hook_outputs {

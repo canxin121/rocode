@@ -31,6 +31,17 @@ struct TodoWriteItem {
     priority: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct TodoMetadataItem<'a> {
+    content: &'a str,
+    status: &'a str,
+    priority: &'a str,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 #[async_trait]
 impl Tool for TodoReadTool {
     fn id(&self) -> &str {
@@ -68,7 +79,10 @@ impl Tool for TodoReadTool {
 
         ctx.ask_permission(
             crate::PermissionRequest::new(BuiltinToolName::TodoRead.as_str())
-                .with_metadata(todo_keys::SESSION_ID, serde_json::json!(&session_id))
+                .with_metadata(
+                    todo_keys::SESSION_ID,
+                    serde_json::Value::String(session_id.clone()),
+                )
                 .always_allow(),
         )
         .await?;
@@ -80,17 +94,20 @@ impl Tool for TodoReadTool {
         let todos_json: Vec<serde_json::Value> = todos
             .iter()
             .map(|t| {
-                serde_json::json!({
-                    todo_keys::CONTENT: t.content,
-                    todo_keys::STATUS: t.status,
-                    todo_keys::PRIORITY: t.priority
+                to_value_or_null(TodoMetadataItem {
+                    content: &t.content,
+                    status: &t.status,
+                    priority: &t.priority,
                 })
             })
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(todo_keys::TODOS.to_string(), serde_json::json!(todos_json));
-        metadata.insert(todo_keys::COUNT.to_string(), serde_json::json!(todos.len()));
+        metadata.insert(todo_keys::TODOS.to_string(), serde_json::Value::Array(todos_json));
+        metadata.insert(
+            todo_keys::COUNT.to_string(),
+            serde_json::Value::Number((todos.len() as u64).into()),
+        );
 
         Ok(ToolResult {
             title: format!("Todo List ({} items)", todos.len()),
@@ -158,8 +175,14 @@ impl Tool for TodoWriteTool {
 
         ctx.ask_permission(
             crate::PermissionRequest::new(BuiltinToolName::TodoWrite.as_str())
-                .with_metadata(todo_keys::SESSION_ID, serde_json::json!(&session_id))
-                .with_metadata(todo_keys::COUNT, serde_json::json!(input.todos.len()))
+                .with_metadata(
+                    todo_keys::SESSION_ID,
+                    serde_json::Value::String(session_id.clone()),
+                )
+                .with_metadata(
+                    todo_keys::COUNT,
+                    serde_json::Value::Number((input.todos.len() as u64).into()),
+                )
                 .always_allow(),
         )
         .await?;
@@ -192,11 +215,14 @@ impl Tool for TodoWriteTool {
                 "todowrite deduplicated unchanged todo payload"
             );
             let mut metadata = std::collections::HashMap::new();
-            metadata.insert(todo_keys::COUNT.to_string(), serde_json::json!(new_todos.len()));
-            metadata.insert(todo_keys::NO_OP.to_string(), serde_json::json!(true));
+            metadata.insert(
+                todo_keys::COUNT.to_string(),
+                serde_json::Value::Number((new_todos.len() as u64).into()),
+            );
+            metadata.insert(todo_keys::NO_OP.to_string(), serde_json::Value::Bool(true));
             metadata.insert(
                 output_keys::DISPLAY_SUMMARY.to_string(),
-                serde_json::json!(format!(
+                serde_json::Value::String(format!(
                     "Todo list unchanged ({} items), skipped duplicate update",
                     new_todos.len()
                 )),
@@ -217,19 +243,19 @@ impl Tool for TodoWriteTool {
         let todos_json: Vec<serde_json::Value> = new_todos
             .iter()
             .map(|t| {
-                serde_json::json!({
-                    todo_keys::CONTENT: t.content,
-                    todo_keys::STATUS: t.status,
-                    todo_keys::PRIORITY: t.priority
+                to_value_or_null(TodoMetadataItem {
+                    content: &t.content,
+                    status: &t.status,
+                    priority: &t.priority,
                 })
             })
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(todo_keys::TODOS.to_string(), serde_json::json!(todos_json));
+        metadata.insert(todo_keys::TODOS.to_string(), serde_json::Value::Array(todos_json));
         metadata.insert(
             todo_keys::COUNT.to_string(),
-            serde_json::json!(new_todos.len()),
+            serde_json::Value::Number((new_todos.len() as u64).into()),
         );
 
         Ok(ToolResult {

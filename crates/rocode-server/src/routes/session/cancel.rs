@@ -8,8 +8,21 @@ use axum::{
 use crate::session_runtime::request_active_scheduler_stage_abort;
 use crate::{ApiError, Result, ServerState};
 use rocode_orchestrator::OrchestratorError;
+use serde::Serialize;
 
 use super::super::tui::cancel_questions_for_session;
+
+#[derive(Debug, Serialize)]
+pub(super) struct CancelSessionResponse {
+    aborted: bool,
+    target: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scheduler_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_index: Option<u32>,
+}
 
 pub(super) async fn abort_prompt(
     State(state): State<Arc<ServerState>>,
@@ -78,21 +91,30 @@ pub(super) async fn abort_session_execution(
     }
 
     match scheduler_abort_info {
-        Some(info) => serde_json::json!({
-            "aborted": true,
-            "target": "stage",
-            "scheduler_profile": info.scheduler_profile,
-            "stage": info.stage_name,
-            "stage_index": info.stage_index,
-        }),
-        None if prompt_running || scheduler_running => serde_json::json!({
-            "aborted": true,
-            "target": "run",
-        }),
-        None => serde_json::json!({
-            "aborted": false,
-            "target": serde_json::Value::Null,
-        }),
+        Some(info) => serde_json::to_value(CancelSessionResponse {
+            aborted: true,
+            target: Some("stage"),
+            scheduler_profile: info.scheduler_profile,
+            stage: info.stage_name,
+            stage_index: info.stage_index,
+        })
+        .unwrap_or(serde_json::Value::Null),
+        None if prompt_running || scheduler_running => serde_json::to_value(CancelSessionResponse {
+            aborted: true,
+            target: Some("run"),
+            scheduler_profile: None,
+            stage: None,
+            stage_index: None,
+        })
+        .unwrap_or(serde_json::Value::Null),
+        None => serde_json::to_value(CancelSessionResponse {
+            aborted: false,
+            target: None,
+            scheduler_profile: None,
+            stage: None,
+            stage_index: None,
+        })
+        .unwrap_or(serde_json::Value::Null),
     }
 }
 

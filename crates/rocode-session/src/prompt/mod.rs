@@ -49,7 +49,7 @@ use rocode_orchestrator::{session_runtime_request_defaults, CompiledExecutionReq
 use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_v2::ModelRef as V2ModelRef;
@@ -57,6 +57,34 @@ use crate::{MessageRole, PartType, Session, SessionMessage, SessionStateManager}
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
+
+#[derive(Debug, Serialize)]
+struct ToolLifecycleEvent<'a> {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: &'a str,
+    phase: &'static str,
+    #[serde(rename = "toolName")]
+    tool_name: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct PendingSubtaskMetadata<'a> {
+    id: &'a str,
+    agent: &'a str,
+    prompt: &'a str,
+    description: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct HookModelPayload {
+    id: String,
+    name: String,
+    provider: String,
+}
 
 /// Returns `true` when the finish reason indicates the conversation turn is
 /// complete (i.e. not a tool-use continuation or unknown state).
@@ -699,13 +727,14 @@ impl<'a> LoopSink for SessionStepSink<'a> {
 
                     // Broadcast canonical tool lifecycle event.
                     if let Some(broadcast) = &self.event_broadcast {
-                        let event = serde_json::json!({
-                            "type": "tool_call.lifecycle",
-                            "sessionID": self.session.id,
-                            "toolCallId": id,
-                            "phase": "start",
-                            "toolName": next_name,
-                        });
+                        let event = serde_json::to_value(ToolLifecycleEvent {
+                            event_type: "tool_call.lifecycle",
+                            session_id: &self.session.id,
+                            tool_call_id: &id,
+                            phase: "start",
+                            tool_name: next_name,
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                         broadcast(event);
                     }
 
@@ -843,13 +872,14 @@ impl<'a> LoopSink for SessionStepSink<'a> {
 
                 // Broadcast canonical tool lifecycle event.
                 if let Some(broadcast) = &self.event_broadcast {
-                    let event = serde_json::json!({
-                        "type": "tool_call.lifecycle",
-                        "sessionID": self.session.id,
-                        "toolCallId": &call.id,
-                        "phase": "complete",
-                        "toolName": &call.name,
-                    });
+                    let event = serde_json::to_value(ToolLifecycleEvent {
+                        event_type: "tool_call.lifecycle",
+                        session_id: &self.session.id,
+                        tool_call_id: &call.id,
+                        phase: "complete",
+                        tool_name: &call.name,
+                    })
+                    .unwrap_or(serde_json::Value::Null);
                     broadcast(event);
                 }
 
@@ -1315,12 +1345,15 @@ impl SessionPrompt {
                     let description = description.clone().unwrap_or_else(|| prompt.clone());
                     msg.add_subtask(subtask_id.clone(), description.clone());
                     let mut pending = Self::pending_subtasks_metadata_values(&msg.metadata);
-                    pending.push(serde_json::json!({
-                        "id": subtask_id,
-                        "agent": agent,
-                        "prompt": prompt,
-                        "description": description,
-                    }));
+                    pending.push(
+                        serde_json::to_value(PendingSubtaskMetadata {
+                            id: &subtask_id,
+                            agent,
+                            prompt,
+                            description: &description,
+                        })
+                        .unwrap_or(serde_json::Value::Null),
+                    );
                     msg.metadata.insert(
                         "pending_subtasks".to_string(),
                         serde_json::Value::Array(pending),
@@ -1925,13 +1958,14 @@ impl SessionPrompt {
             .with_data("has_tool_calls", serde_json::json!(has_tool_calls));
 
         if let Some(model) = provider.get_model(model_id) {
+            let model_payload = HookModelPayload {
+                id: model.id.clone(),
+                name: model.name.clone(),
+                provider: model.provider.clone(),
+            };
             hook_ctx = hook_ctx.with_data(
                 "model",
-                serde_json::json!({
-                    "id": model.id,
-                    "name": model.name,
-                    "provider": model.provider,
-                }),
+                serde_json::to_value(model_payload).unwrap_or(serde_json::Value::Null),
             );
         } else {
             hook_ctx = hook_ctx.with_data("model_id", serde_json::json!(model_id));

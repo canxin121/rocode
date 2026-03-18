@@ -3,7 +3,19 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::json;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+struct ApiErrorBody {
+    error: ApiErrorDetail,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiErrorDetail {
+    message: String,
+    #[serde(rename = "type")]
+    error_type: &'static str,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -53,12 +65,12 @@ impl IntoResponse for ApiError {
             ),
         };
 
-        let body = Json(json!({
-            "error": {
-                "message": message,
-                "type": error_type
-            }
-        }));
+        let body = Json(ApiErrorBody {
+            error: ApiErrorDetail {
+                message,
+                error_type,
+            },
+        });
 
         (status, body).into_response()
     }

@@ -1,12 +1,102 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::message::{Content, ContentPart, Message, Role};
 use crate::responses::{
     CallWarning, LocalShellAction, ResponsesInput, ResponsesReasoning, SystemMessageMode,
 };
+
+#[derive(Serialize)]
+struct RoleTextMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Serialize)]
+struct RoleContentMessage {
+    role: &'static str,
+    content: Vec<Value>,
+}
+
+#[derive(Serialize)]
+struct InputTextPart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct OutputTextPart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct InputImagePart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct InputFilePart {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ItemReference {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    id: String,
+}
+
+#[derive(Serialize)]
+struct LocalShellCallItem {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    id: Option<String>,
+    call_id: String,
+    action: LocalShellAction,
+}
+
+#[derive(Serialize)]
+struct FunctionCallItem {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    id: Option<String>,
+    call_id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Serialize)]
+struct ToolOutputItem {
+    #[serde(rename = "type")]
+    item_type: &'static str,
+    call_id: String,
+    output: String,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
 
 pub async fn convert_to_openai_responses_input(
     prompt: &[Message],
@@ -27,10 +117,16 @@ pub async fn convert_to_openai_responses_input(
 
                 match system_message_mode {
                     SystemMessageMode::System => {
-                        input.push(json!({ "role": "system", "content": text }));
+                        input.push(to_value_or_null(RoleTextMessage {
+                            role: "system",
+                            content: &text,
+                        }));
                     }
                     SystemMessageMode::Developer => {
-                        input.push(json!({ "role": "developer", "content": text }));
+                        input.push(to_value_or_null(RoleTextMessage {
+                            role: "developer",
+                            content: &text,
+                        }));
                     }
                     SystemMessageMode::Remove => {
                         warnings.push(CallWarning::UnsupportedSetting {
@@ -50,21 +146,26 @@ pub async fn convert_to_openai_responses_input(
                         "text" => {
                             if let Some(text) = &part.text {
                                 if !text.is_empty() {
-                                    content.push(json!({ "type": "input_text", "text": text }));
+                                    content.push(to_value_or_null(InputTextPart {
+                                        part_type: "input_text",
+                                        text,
+                                    }));
                                 }
                             }
                         }
                         "image" | "image_url" => {
                             if let Some(url) = part.image_url.as_ref().map(|img| img.url.as_str()) {
                                 if is_file_id(url, file_id_prefixes) {
-                                    content.push(json!({
-                                        "type": "input_image",
-                                        "file_id": url,
+                                    content.push(to_value_or_null(InputImagePart {
+                                        part_type: "input_image",
+                                        file_id: Some(url),
+                                        image_url: None,
                                     }));
                                 } else {
-                                    content.push(json!({
-                                        "type": "input_image",
-                                        "image_url": url,
+                                    content.push(to_value_or_null(InputImagePart {
+                                        part_type: "input_image",
+                                        file_id: None,
+                                        image_url: Some(url),
                                     }));
                                 }
                             }
@@ -74,23 +175,29 @@ pub async fn convert_to_openai_responses_input(
                             else {
                                 continue;
                             };
-                            let mut item = json!({ "type": "input_file" });
+                            let mut item = InputFilePart {
+                                part_type: "input_file",
+                                file_id: None,
+                                file_data: None,
+                                file_url: None,
+                                filename: part.filename.clone(),
+                            };
                             if is_file_id(url, file_id_prefixes) {
-                                item["file_id"] = Value::String(url.to_string());
+                                item.file_id = Some(url.to_string());
                             } else if url.starts_with("data:") {
-                                item["file_data"] = Value::String(url.to_string());
+                                item.file_data = Some(url.to_string());
                             } else {
-                                item["file_url"] = Value::String(url.to_string());
+                                item.file_url = Some(url.to_string());
                             }
-                            if let Some(filename) = &part.filename {
-                                item["filename"] = Value::String(filename.clone());
-                            }
-                            content.push(item);
+                            content.push(to_value_or_null(item));
                         }
                         _ => {
                             if let Some(text) = &part.text {
                                 if !text.is_empty() {
-                                    content.push(json!({ "type": "input_text", "text": text }));
+                                    content.push(to_value_or_null(InputTextPart {
+                                        part_type: "input_text",
+                                        text,
+                                    }));
                                 }
                             }
                         }
@@ -98,7 +205,10 @@ pub async fn convert_to_openai_responses_input(
                 }
 
                 if !content.is_empty() {
-                    input.push(json!({ "role": "user", "content": content }));
+                    input.push(to_value_or_null(RoleContentMessage {
+                        role: "user",
+                        content,
+                    }));
                 }
             }
             Role::Assistant => {
@@ -112,9 +222,9 @@ pub async fn convert_to_openai_responses_input(
                         "text" => {
                             if let Some(text) = &part.text {
                                 if !text.is_empty() {
-                                    assistant_content.push(json!({
-                                        "type": "output_text",
-                                        "text": text,
+                                    assistant_content.push(to_value_or_null(OutputTextPart {
+                                        part_type: "output_text",
+                                        text,
                                     }));
                                 }
                             }
@@ -129,19 +239,19 @@ pub async fn convert_to_openai_responses_input(
 
                             if has_local_shell_tool && is_local_shell_tool_name(&tool_use.name) {
                                 let action = local_shell_action_from_input(&tool_use.input);
-                                input.push(json!({
-                                    "type": "local_shell_call",
-                                    "id": item_id,
-                                    "call_id": tool_use.id,
-                                    "action": action,
+                                input.push(to_value_or_null(LocalShellCallItem {
+                                    item_type: "local_shell_call",
+                                    id: item_id,
+                                    call_id: tool_use.id.clone(),
+                                    action,
                                 }));
                             } else {
-                                input.push(json!({
-                                    "type": "function_call",
-                                    "id": item_id,
-                                    "call_id": tool_use.id,
-                                    "name": tool_use.name,
-                                    "arguments": serde_json::to_string(&tool_use.input)
+                                input.push(to_value_or_null(FunctionCallItem {
+                                    item_type: "function_call",
+                                    id: item_id,
+                                    call_id: tool_use.id.clone(),
+                                    name: tool_use.name.clone(),
+                                    arguments: serde_json::to_string(&tool_use.input)
                                         .unwrap_or_else(|_| "{}".to_string()),
                                 }));
                             }
@@ -156,9 +266,9 @@ pub async fn convert_to_openai_responses_input(
                             if store {
                                 if let Some(item_id) = item_id {
                                     if item_refs_seen.insert(item_id.clone()) {
-                                        input.push(json!({
-                                            "type": "item_reference",
-                                            "id": item_id,
+                                        input.push(to_value_or_null(ItemReference {
+                                            item_type: "item_reference",
+                                            id: item_id,
                                         }));
                                     }
                                     continue;
@@ -172,16 +282,16 @@ pub async fn convert_to_openai_responses_input(
                                 .map(is_local_shell_tool_name)
                                 .unwrap_or(false)
                             {
-                                input.push(json!({
-                                    "type": "local_shell_call_output",
-                                    "call_id": tool_result.tool_use_id,
-                                    "output": tool_result.content,
+                                input.push(to_value_or_null(ToolOutputItem {
+                                    item_type: "local_shell_call_output",
+                                    call_id: tool_result.tool_use_id.clone(),
+                                    output: tool_result.content.clone(),
                                 }));
                             } else {
-                                input.push(json!({
-                                    "type": "function_call_output",
-                                    "call_id": tool_result.tool_use_id,
-                                    "output": tool_result.content,
+                                input.push(to_value_or_null(ToolOutputItem {
+                                    item_type: "function_call_output",
+                                    call_id: tool_result.tool_use_id.clone(),
+                                    output: tool_result.content.clone(),
                                 }));
                             }
                         }
@@ -197,9 +307,9 @@ pub async fn convert_to_openai_responses_input(
                                 && option_string(&part_opts, &["itemId", "item_id", "id"]).is_some()
                             {
                                 if item_refs_seen.insert(item_id.clone()) {
-                                    input.push(json!({
-                                        "type": "item_reference",
-                                        "id": item_id,
+                                    input.push(to_value_or_null(ItemReference {
+                                        item_type: "item_reference",
+                                        id: item_id,
                                     }));
                                 }
                                 continue;
@@ -235,9 +345,9 @@ pub async fn convert_to_openai_responses_input(
                         _ => {
                             if let Some(text) = &part.text {
                                 if !text.is_empty() {
-                                    assistant_content.push(json!({
-                                        "type": "output_text",
-                                        "text": text,
+                                    assistant_content.push(to_value_or_null(OutputTextPart {
+                                        part_type: "output_text",
+                                        text,
                                     }));
                                 }
                             }
@@ -246,15 +356,15 @@ pub async fn convert_to_openai_responses_input(
                 }
 
                 if !assistant_content.is_empty() {
-                    input.push(json!({
-                        "role": "assistant",
-                        "content": assistant_content,
+                    input.push(to_value_or_null(RoleContentMessage {
+                        role: "assistant",
+                        content: assistant_content,
                     }));
                 }
 
                 for id in reasoning_order {
                     if let Some(reasoning) = reasoning_by_id.remove(&id) {
-                        input.push(json!(reasoning));
+                        input.push(serde_json::to_value(reasoning).unwrap_or(Value::Null));
                     }
                 }
             }
@@ -272,16 +382,16 @@ pub async fn convert_to_openai_responses_input(
                         .map(is_local_shell_tool_name)
                         .unwrap_or(false)
                     {
-                        input.push(json!({
-                            "type": "local_shell_call_output",
-                            "call_id": tool_result.tool_use_id,
-                            "output": tool_result.content,
+                        input.push(to_value_or_null(ToolOutputItem {
+                            item_type: "local_shell_call_output",
+                            call_id: tool_result.tool_use_id.clone(),
+                            output: tool_result.content.clone(),
                         }));
                     } else {
-                        input.push(json!({
-                            "type": "function_call_output",
-                            "call_id": tool_result.tool_use_id,
-                            "output": tool_result.content,
+                        input.push(to_value_or_null(ToolOutputItem {
+                            item_type: "function_call_output",
+                            call_id: tool_result.tool_use_id.clone(),
+                            output: tool_result.content.clone(),
                         }));
                     }
                 }

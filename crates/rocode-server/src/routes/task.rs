@@ -25,6 +25,11 @@ struct TaskDetail {
     output_tail: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct CancelTaskResponse {
+    cancelled: String,
+}
+
 fn status_str(status: &AgentTaskStatus) -> String {
     match status {
         AgentTaskStatus::Failed { error } => format!("{}: {}", status.kind().as_str(), error),
@@ -87,9 +92,9 @@ async fn get_task(Path(id): Path<String>) -> Result<Json<TaskDetail>> {
     }))
 }
 
-async fn cancel_task(Path(id): Path<String>) -> Result<Json<serde_json::Value>> {
+async fn cancel_task(Path(id): Path<String>) -> Result<Json<CancelTaskResponse>> {
     rocode_orchestrator::global_lifecycle()
         .cancel_task(&id)
         .map_err(ApiError::NotFound)?;
-    Ok(Json(serde_json::json!({ "cancelled": id })))
+    Ok(Json(CancelTaskResponse { cancelled: id }))
 }

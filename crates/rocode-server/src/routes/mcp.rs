@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::mcp_oauth::{
-    LocalMcpConfig, McpOAuthError, McpOAuthManager, McpRuntimeConfig,
+    LocalMcpConfig, McpOAuthError, McpOAuthManager, McpOAuthStatus, McpRuntimeConfig,
     McpServerInfo as McpServerInfoStruct, McpServerLogEntry, RemoteMcpConfig,
 };
 use crate::{ApiError, Result, ServerState};
@@ -34,6 +34,18 @@ pub struct McpStatusInfo {
     pub resources: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SuccessResponse {
+    success: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StartMcpAuthResponse {
+    authorization_url: String,
+    client_id: Option<String>,
+    status: McpOAuthStatus,
 }
 
 static MCP_OAUTH_MANAGER: std::sync::OnceLock<McpOAuthManager> = std::sync::OnceLock::new();
@@ -123,7 +135,7 @@ async fn add_mcp_server(
 async fn start_mcp_auth(
     State(state): State<Arc<ServerState>>,
     Path(name): Path<String>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<StartMcpAuthResponse>> {
     let manager = get_mcp_oauth_manager();
     ensure_mcp_server_registered(manager, &name, &state.config_store).await?;
     let state = manager
@@ -131,11 +143,11 @@ async fn start_mcp_auth(
         .await
         .map_err(mcp_error_to_api_error)?;
 
-    Ok(Json(serde_json::json!({
-        "authorization_url": state.authorization_url,
-        "client_id": state.client_id,
-        "status": state.status
-    })))
+    Ok(Json(StartMcpAuthResponse {
+        authorization_url: state.authorization_url,
+        client_id: state.client_id,
+        status: state.status,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,11 +187,11 @@ async fn mcp_authenticate(
 async fn remove_mcp_auth(
     State(state): State<Arc<ServerState>>,
     Path(name): Path<String>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<SuccessResponse>> {
     let manager = get_mcp_oauth_manager();
     ensure_mcp_server_registered(manager, &name, &state.config_store).await?;
     manager.remove_oauth(&name).await;
-    Ok(Json(serde_json::json!({ "success": true })))
+    Ok(Json(SuccessResponse { success: true }))
 }
 
 async fn connect_mcp(

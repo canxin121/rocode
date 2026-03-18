@@ -43,6 +43,12 @@ struct QuestionResponse {
     answers: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct DisplayField<'a> {
+    key: &'a str,
+    value: String,
+}
+
 #[async_trait]
 impl Tool for QuestionTool {
     fn id(&self) -> &str {
@@ -141,10 +147,13 @@ impl Tool for QuestionTool {
             let answers = answers_by_question.get(idx).cloned().unwrap_or_default();
             let answer_text = answers.join(", ");
             all_answers.extend(answers);
-            display_fields.push(serde_json::json!({
-                "key": q.question,
-                "value": answer_text,
-            }));
+            display_fields.push(
+                serde_json::to_value(DisplayField {
+                    key: &q.question,
+                    value: answer_text,
+                })
+                .unwrap_or(serde_json::Value::Null),
+            );
         }
 
         let response = QuestionResponse {

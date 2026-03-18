@@ -28,6 +28,42 @@ const TASK_STATUS_COMPLETED: &str = "completed";
 const TASK_NO_TEXT_OUTPUT_MESSAGE: &str =
     "Task completed successfully. No textual output was returned by subagent.";
 
+#[derive(Debug, Serialize)]
+struct AgentTaskRegisteredEvent<'a> {
+    task_id: &'a str,
+    session_id: &'a str,
+    agent_name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_tool_call_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentTaskCompletedEvent<'a> {
+    task_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskResultMetadata {
+    agent_task_id: String,
+    session_id: String,
+    task_status: &'static str,
+    has_text_output: bool,
+    model: TaskResultModelMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaded_skills: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaded_skill_count: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskResultModelMetadata {
+    #[serde(rename = "modelID")]
+    model_id: String,
+    #[serde(rename = "providerID")]
+    provider_id: String,
+}
+
 fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -278,8 +314,14 @@ impl Tool for TaskTool {
             ctx.ask_permission(
                 PermissionRequest::new("task")
                     .with_pattern(&dispatch_label)
-                    .with_metadata("description", serde_json::json!(&input.description))
-                    .with_metadata("subagent_type", serde_json::json!(&dispatch_label))
+                    .with_metadata(
+                        "description",
+                        serde_json::Value::String(input.description.clone()),
+                    )
+                    .with_metadata(
+                        "subagent_type",
+                        serde_json::Value::String(dispatch_label.clone()),
+                    )
                     .always_allow(),
             )
             .await?;
@@ -381,12 +423,13 @@ impl Tool for TaskTool {
         // in the execution topology with a parent link to the enclosing tool call.
         ctx.do_publish_bus(
             "agent_task.registered",
-            serde_json::json!({
-                "task_id": agent_task_id,
-                "session_id": ctx.session_id,
-                "agent_name": dispatch_label,
-                "parent_tool_call_id": ctx.call_id,
-            }),
+            serde_json::to_value(AgentTaskRegisteredEvent {
+                task_id: &agent_task_id,
+                session_id: &ctx.session_id,
+                agent_name: &dispatch_label,
+                parent_tool_call_id: ctx.call_id.as_deref(),
+            })
+            .unwrap_or(serde_json::Value::Null),
         )
         .await;
 
@@ -399,7 +442,10 @@ impl Tool for TaskTool {
                     .complete(&agent_task_id, AgentTaskStatus::Completed { steps: 0 });
                 ctx.do_publish_bus(
                     "agent_task.completed",
-                    serde_json::json!({ "task_id": agent_task_id }),
+                    serde_json::to_value(AgentTaskCompletedEvent {
+                        task_id: &agent_task_id,
+                    })
+                    .unwrap_or(serde_json::Value::Null),
                 )
                 .await;
                 text
@@ -415,7 +461,10 @@ impl Tool for TaskTool {
                 global_task_registry().complete(&agent_task_id, status);
                 ctx.do_publish_bus(
                     "agent_task.completed",
-                    serde_json::json!({ "task_id": agent_task_id }),
+                    serde_json::to_value(AgentTaskCompletedEvent {
+                        task_id: &agent_task_id,
+                    })
+                    .unwrap_or(serde_json::Value::Null),
                 )
                 .await;
                 return Err(e);
@@ -425,28 +474,22 @@ impl Tool for TaskTool {
 
         let (output, has_text_output) = format_task_output(&session_id, &result_text);
 
-        let mut metadata = Metadata::new();
-        metadata.insert("agentTaskId".into(), serde_json::json!(agent_task_id));
-        metadata.insert("sessionId".into(), serde_json::json!(session_id));
-        metadata.insert(
-            "taskStatus".into(),
-            serde_json::json!(TASK_STATUS_COMPLETED),
-        );
-        metadata.insert("hasTextOutput".into(), serde_json::json!(has_text_output));
-        metadata.insert(
-            "model".into(),
-            serde_json::json!({
-                "modelID": model.model_id,
-                "providerID": model.provider_id,
-            }),
-        );
-        if !loaded_skill_names.is_empty() {
-            metadata.insert("loadedSkills".into(), serde_json::json!(loaded_skill_names));
-            metadata.insert(
-                "loadedSkillCount".into(),
-                serde_json::json!(loaded_skill_names.len()),
-            );
-        }
+        let metadata_wire = TaskResultMetadata {
+            agent_task_id,
+            session_id,
+            task_status: TASK_STATUS_COMPLETED,
+            has_text_output,
+            model: TaskResultModelMetadata {
+                model_id: model.model_id,
+                provider_id: model.provider_id,
+            },
+            loaded_skills: (!loaded_skill_names.is_empty()).then_some(loaded_skill_names.clone()),
+            loaded_skill_count: (!loaded_skill_names.is_empty()).then_some(loaded_skill_names.len()),
+        };
+        let metadata = serde_json::to_value(metadata_wire)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Metadata>(value).ok())
+            .unwrap_or_default();
 
         Ok(ToolResult {
             title,

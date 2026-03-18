@@ -1,5 +1,5 @@
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 use crate::message::{ContentPart, ToolResult, ToolUse};
@@ -10,6 +10,52 @@ use super::types::{
     LogprobEntry, OngoingToolCall, OutputItemAddedItem, OutputItemDoneItem, ResponsesIncludeValue,
     ResponsesStreamChunk, ResponsesUsage,
 };
+
+#[derive(Serialize)]
+struct CodeInterpreterInput {
+    code: String,
+    container_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CodeInterpreterInputValue {
+    code: Value,
+    container_id: Value,
+}
+
+#[derive(Serialize)]
+struct OutputsEnvelope {
+    outputs: Value,
+}
+
+#[derive(Serialize)]
+struct FileSearchOutput {
+    queries: Value,
+    results: Value,
+}
+
+#[derive(Serialize)]
+struct ActionEnvelope {
+    action: Value,
+}
+
+#[derive(Serialize)]
+struct ResultEnvelope {
+    result: Value,
+}
+
+#[derive(Serialize)]
+struct StatusEnvelope {
+    status: Value,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+fn empty_object() -> Value {
+    Value::Object(Map::new())
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn process_stream_chunk(
@@ -102,7 +148,7 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolCallEnd {
                     id,
                     name: "file_search_call".to_string(),
-                    input: json!({}),
+                    input: empty_object(),
                 });
             }
             OutputItemAddedItem::ImageGenerationCall { id } => {
@@ -113,7 +159,7 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolCallEnd {
                     id,
                     name: "image_generation_call".to_string(),
-                    input: json!({}),
+                    input: empty_object(),
                 });
             }
             OutputItemAddedItem::Message { id } => {
@@ -147,7 +193,7 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolCallEnd {
                     id,
                     name: "computer_call".to_string(),
-                    input: json!({}),
+                    input: empty_object(),
                 });
             }
         },
@@ -171,7 +217,7 @@ pub(super) fn process_stream_chunk(
             }
             OutputItemDoneItem::WebSearchCall { id, action, .. } => {
                 ongoing_tool_calls.remove(&output_index);
-                let input = action.unwrap_or_else(|| json!({}));
+                let input = action.unwrap_or_else(empty_object);
                 events.push(StreamEvent::ToolInputEnd { id: id.clone() });
                 events.push(StreamEvent::ToolCallEnd {
                     id: id.clone(),
@@ -205,14 +251,16 @@ pub(super) fn process_stream_chunk(
                     events.push(StreamEvent::ToolCallEnd {
                         id: id.clone(),
                         name: "code_interpreter_call".to_string(),
-                        input: json!({
-                            "code": code,
-                            "container_id": container_id,
+                        input: to_value_or_null(CodeInterpreterInput {
+                            code,
+                            container_id: Some(container_id),
                         }),
                     });
                     *has_function_call = true;
                 }
-                let output_json = json!({ "outputs": outputs });
+                let output_json = to_value_or_null(OutputsEnvelope {
+                    outputs: serde_json::to_value(outputs).unwrap_or(Value::Null),
+                });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
                     tool_name: "code_interpreter_call".to_string(),
@@ -233,9 +281,10 @@ pub(super) fn process_stream_chunk(
                 queries,
                 results,
             } => {
-                let output_json = json!({
-                    "queries": queries.unwrap_or_default(),
-                    "results": results,
+                let output_json = to_value_or_null(FileSearchOutput {
+                    queries: serde_json::to_value(queries.unwrap_or_default())
+                        .unwrap_or(Value::Array(Vec::new())),
+                    results: serde_json::to_value(results).unwrap_or(Value::Null),
                 });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
@@ -278,7 +327,9 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolCallEnd {
                     id: call_id.clone(),
                     name: "local_shell".to_string(),
-                    input: json!({ "action": action }),
+                    input: to_value_or_null(ActionEnvelope {
+                        action: serde_json::to_value(action).unwrap_or(Value::Null),
+                    }),
                 });
                 *has_function_call = true;
             }
@@ -354,9 +405,12 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolCallEnd {
                     id: call.tool_call_id.clone(),
                     name: call.tool_name.clone(),
-                    input: json!({
-                        "code": code,
-                        "container_id": call.code_interpreter.as_ref().map(|c| c.container_id.clone()),
+                    input: to_value_or_null(CodeInterpreterInput {
+                        code,
+                        container_id: call
+                            .code_interpreter
+                            .as_ref()
+                            .map(|c| c.container_id.clone()),
                     }),
                 });
             }
@@ -696,8 +750,8 @@ pub(super) fn parse_output_items(
                 parts.push(provider_executed_tool_parts(
                     id.unwrap_or_default(),
                     "web_search_call",
-                    action.clone().unwrap_or_else(|| json!({})),
-                    action.unwrap_or_else(|| json!({})),
+                    action.clone().unwrap_or_else(empty_object),
+                    action.unwrap_or_else(empty_object),
                 ));
                 has_function_call = true;
             }
@@ -706,14 +760,14 @@ pub(super) fn parse_output_items(
                 queries,
                 results,
             } => {
-                let output = json!({
-                    "queries": queries.unwrap_or_else(|| json!([])),
-                    "results": results.unwrap_or(Value::Null),
+                let output = to_value_or_null(FileSearchOutput {
+                    queries: queries.unwrap_or_else(|| Value::Array(Vec::new())),
+                    results: results.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
                     id.unwrap_or_default(),
                     "file_search_call",
-                    json!({}),
+                    empty_object(),
                     output,
                 ));
                 has_function_call = true;
@@ -724,12 +778,12 @@ pub(super) fn parse_output_items(
                 container_id,
                 outputs,
             } => {
-                let input = json!({
-                    "code": code.unwrap_or(Value::Null),
-                    "container_id": container_id.unwrap_or(Value::Null),
+                let input = to_value_or_null(CodeInterpreterInputValue {
+                    code: code.unwrap_or(Value::Null),
+                    container_id: container_id.unwrap_or(Value::Null),
                 });
-                let output = json!({
-                    "outputs": outputs.unwrap_or(Value::Null),
+                let output = to_value_or_null(OutputsEnvelope {
+                    outputs: outputs.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
                     id.unwrap_or_default(),
@@ -740,38 +794,38 @@ pub(super) fn parse_output_items(
                 has_function_call = true;
             }
             OutputItemWire::ImageGenerationCall { id, result } => {
-                let output = json!({
-                    "result": result.unwrap_or(Value::Null),
+                let output = to_value_or_null(ResultEnvelope {
+                    result: result.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
                     id.unwrap_or_default(),
                     "image_generation_call",
-                    json!({}),
+                    empty_object(),
                     output,
                 ));
                 has_function_call = true;
             }
             OutputItemWire::LocalShellCall { call_id, action } => {
-                let action = action.unwrap_or_else(|| json!({}));
+                let action = action.unwrap_or_else(empty_object);
                 parts.push(ContentPart {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(ToolUse {
                         id: call_id.unwrap_or_default(),
                         name: "local_shell".to_string(),
-                        input: json!({ "action": action }),
+                        input: to_value_or_null(ActionEnvelope { action }),
                     }),
                     ..Default::default()
                 });
                 has_function_call = true;
             }
             OutputItemWire::ComputerCall { id, status } => {
-                let output = json!({
-                    "status": status.unwrap_or(Value::Null),
+                let output = to_value_or_null(StatusEnvelope {
+                    status: status.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
                     id.unwrap_or_default(),
                     "computer_call",
-                    json!({}),
+                    empty_object(),
                     output,
                 ));
                 has_function_call = true;

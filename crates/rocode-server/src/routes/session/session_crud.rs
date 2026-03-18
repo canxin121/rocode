@@ -61,6 +61,75 @@ pub struct SessionSummaryInfo {
 }
 
 #[derive(Debug, Serialize)]
+pub(super) struct DeletedResponse {
+    deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct UnsharedResponse {
+    unshared: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MessageInfoResponse {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    role: String,
+    #[serde(rename = "createdAt")]
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MessageDetailResponse {
+    info: MessageInfoResponse,
+    parts: Vec<rocode_session::MessagePart>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct UpdatePartResponse {
+    updated: bool,
+    part: rocode_session::MessagePart,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ExecuteShellResponse {
+    executed: bool,
+    command: String,
+    workdir: Option<String>,
+    message_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct UnrevertResponse {
+    unreverted: bool,
+    message: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ExecuteCommandResponse {
+    executed: bool,
+    command: String,
+    arguments: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    message_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct CancelToolCallResponse {
+    cancelled: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PromptAsyncResponse {
+    status: &'static str,
+    message_id: String,
+    model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SessionShareInfo {
     pub url: String,
 }
@@ -571,7 +640,7 @@ pub(super) async fn update_session(
 pub(super) async fn delete_session(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<DeletedResponse>> {
     state
         .sessions
         .lock()
@@ -584,7 +653,7 @@ pub(super) async fn delete_session(
         .await;
     state.runtime_state.remove(&id).await;
     persist_sessions_if_enabled(&state).await;
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(Json(DeletedResponse { deleted: true }))
 }
 
 /// `GET /session/{id}/runtime` — aggregated runtime state snapshot for a session.
@@ -674,14 +743,14 @@ pub(super) async fn share_session(
 pub(super) async fn unshare_session(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<UnsharedResponse>> {
     let mut sessions = state.sessions.lock().await;
     sessions
         .unshare(&id)
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
-    Ok(Json(serde_json::json!({ "unshared": true })))
+    Ok(Json(UnsharedResponse { unshared: true }))
 }
 
 pub(super) async fn archive_session(
@@ -849,7 +918,7 @@ pub(super) async fn start_compaction(
 pub(super) async fn get_message(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<MessageDetailResponse>> {
     let sessions = state.sessions.lock().await;
     let session = sessions
         .get(&session_id)
@@ -858,23 +927,23 @@ pub(super) async fn get_message(
         .get_message(&msg_id)
         .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
 
-    let info = serde_json::json!({
-        "id": message.id,
-        "sessionID": session_id,
-        "role": super::messages::message_role_name(&message.role),
-        "createdAt": message.created_at.timestamp_millis(),
-    });
-    Ok(Json(serde_json::json!({
-        "info": info,
-        "parts": message.parts.clone(),
-    })))
+    let info = MessageInfoResponse {
+        id: message.id.clone(),
+        session_id,
+        role: super::messages::message_role_name(&message.role).to_string(),
+        created_at: message.created_at.timestamp_millis(),
+    };
+    Ok(Json(MessageDetailResponse {
+        info,
+        parts: message.parts.clone(),
+    }))
 }
 
 pub(super) async fn update_part(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
     Json(req): Json<UpdatePartRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<UpdatePartResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&session_id)
@@ -906,17 +975,17 @@ pub(super) async fn update_part(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "updated": true,
-        "part": updated_part,
-    })))
+    Ok(Json(UpdatePartResponse {
+        updated: true,
+        part: updated_part,
+    }))
 }
 
 pub(super) async fn execute_shell(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<ExecuteShellRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<ExecuteShellResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&id)
@@ -928,25 +997,26 @@ pub(super) async fn execute_shell(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "executed": true,
-        "command": req.command,
-        "workdir": req.workdir,
-        "message_id": assistant_id,
-    })))
+    Ok(Json(ExecuteShellResponse {
+        executed: true,
+        command: req.command,
+        workdir: req.workdir,
+        message_id: assistant_id,
+    }))
 }
 
-pub(super) async fn session_unrevert(Path(_id): Path<String>) -> Result<Json<serde_json::Value>> {
-    Ok(Json(
-        serde_json::json!({ "unreverted": true, "message": "Session unreverted successfully" }),
-    ))
+pub(super) async fn session_unrevert(Path(_id): Path<String>) -> Result<Json<UnrevertResponse>> {
+    Ok(Json(UnrevertResponse {
+        unreverted: true,
+        message: "Session unreverted successfully",
+    }))
 }
 
 pub(super) async fn execute_command(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<ExecuteCommandRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<ExecuteCommandResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&id)
@@ -974,14 +1044,14 @@ pub(super) async fn execute_command(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "executed": true,
-        "command": req.command,
-        "arguments": req.arguments,
-        "model": req.model,
-        "agent": req.agent,
-        "message_id": assistant_id,
-    })))
+    Ok(Json(ExecuteCommandResponse {
+        executed: true,
+        command: req.command,
+        arguments: req.arguments,
+        model: req.model,
+        agent: req.agent,
+        message_id: assistant_id,
+    }))
 }
 
 pub(super) async fn get_session_diff(
@@ -1011,7 +1081,7 @@ pub(super) async fn get_session_diff(
 pub(super) async fn cancel_tool_call(
     State(state): State<Arc<ServerState>>,
     Path((session_id, tool_call_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<CancelToolCallResponse>> {
     // Verify the tool call exists in the session (hold lock briefly).
     {
         let sessions = state.sessions.lock().await;
@@ -1053,32 +1123,32 @@ pub(super) async fn cancel_tool_call(
                         error = %e,
                         "Failed to send cancel request to plugin"
                     );
-                    return Ok(Json(serde_json::json!({
-                        "cancelled": false,
-                        "message": format!("Failed to cancel: {}", e)
-                    })));
+                    return Ok(Json(CancelToolCallResponse {
+                        cancelled: false,
+                        message: format!("Failed to cancel: {}", e),
+                    }));
                 }
 
                 // Remove from tracking
                 rocode_plugin::subprocess::remove_tool_call_tracking(&tool_call_id).await;
 
-                return Ok(Json(serde_json::json!({
-                    "cancelled": true,
-                    "message": "Cancel request sent to plugin"
-                })));
+                return Ok(Json(CancelToolCallResponse {
+                    cancelled: true,
+                    message: "Cancel request sent to plugin".to_string(),
+                }));
             }
         }
 
-        return Ok(Json(serde_json::json!({
-            "cancelled": false,
-            "message": "Plugin not found or not loaded"
-        })));
+        return Ok(Json(CancelToolCallResponse {
+            cancelled: false,
+            message: "Plugin not found or not loaded".to_string(),
+        }));
     }
 
-    Ok(Json(serde_json::json!({
-        "cancelled": false,
-        "message": "Tool call is not currently executing or not tracked"
-    })))
+    Ok(Json(CancelToolCallResponse {
+        cancelled: false,
+        message: "Tool call is not currently executing or not tracked".to_string(),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1091,7 +1161,7 @@ pub(super) async fn prompt_async(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<PromptAsyncRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<PromptAsyncResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&id)
@@ -1106,9 +1176,9 @@ pub(super) async fn prompt_async(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "status": "queued",
-        "message_id": assistant_id,
-        "model": req.model,
-    })))
+    Ok(Json(PromptAsyncResponse {
+        status: "queued",
+        message_id: assistant_id,
+        model: req.model,
+    }))
 }

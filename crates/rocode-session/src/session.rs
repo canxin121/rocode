@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
+#[cfg(test)]
 use rocode_core::contracts::patch::keys as patch_keys;
+#[cfg(test)]
 use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_plugin::{HookContext, HookEvent};
 
@@ -659,7 +661,7 @@ impl Session {
         self.title = title.into();
         self.metadata.insert(
             Self::AUTO_TITLE_PENDING_REFINE_KEY.to_string(),
-            serde_json::json!(true),
+            serde_json::Value::Bool(true),
         );
         self.touch();
     }
@@ -848,6 +850,74 @@ pub struct SessionManager {
     bus: Option<Arc<Bus>>,
 }
 
+#[derive(Serialize)]
+struct InfoEnvelope {
+    info: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct PartEnvelope {
+    part: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct PartDeltaEvent<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+    #[serde(rename = "partID")]
+    part_id: &'a str,
+    field: &'a str,
+    delta: &'a str,
+}
+
+#[derive(Serialize)]
+struct CommandExecutedEvent<'a> {
+    name: &'a str,
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    arguments: Vec<String>,
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct MessageRemovedEvent<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct PartRemovedEvent<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+    #[serde(rename = "partID")]
+    part_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct SessionErrorEvent<'a> {
+    error: serde_json::Value,
+    #[serde(rename = "sessionID", skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct SessionDiffEvent<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    diff: serde_json::Value,
+}
+
+fn value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 impl SessionManager {
     pub fn new() -> Self {
         Self {
@@ -881,21 +951,21 @@ impl SessionManager {
     /// Publish a session info event (Created/Updated/Deleted)
     fn publish_session_event(&self, def: &'static BusEventDef, session: &Session) {
         if let Ok(json) = serde_json::to_value(session) {
-            self.publish_event(def, serde_json::json!({ "info": json }));
+            self.publish_event(def, value_or_null(InfoEnvelope { info: json }));
         }
     }
 
     /// Publish a message event
     fn publish_message_event(&self, def: &'static BusEventDef, msg: &SessionMessage) {
         if let Ok(json) = serde_json::to_value(msg) {
-            self.publish_event(def, serde_json::json!({ "info": json }));
+            self.publish_event(def, value_or_null(InfoEnvelope { info: json }));
         }
     }
 
     /// Publish a part event
     fn publish_part_event(&self, def: &'static BusEventDef, part: &MessagePart) {
         if let Ok(json) = serde_json::to_value(part) {
-            self.publish_event(def, serde_json::json!({ "part": json }));
+            self.publish_event(def, value_or_null(PartEnvelope { part: json }));
         }
     }
 
@@ -910,12 +980,12 @@ impl SessionManager {
     ) {
         self.publish_event(
             &PART_DELTA_EVENT,
-            serde_json::json!({
-                (wire_keys::SESSION_ID): session_id,
-                (wire_keys::MESSAGE_ID): message_id,
-                "partID": part_id,
-                "field": field,
-                "delta": delta,
+            value_or_null(PartDeltaEvent {
+                session_id,
+                message_id,
+                part_id,
+                field,
+                delta,
             }),
         );
     }
@@ -1103,11 +1173,11 @@ impl SessionManager {
     ) {
         self.publish_event(
             &COMMAND_EXECUTED_EVENT,
-            serde_json::json!({
-                "name": command_name,
-                (wire_keys::SESSION_ID): session_id,
-                "arguments": arguments,
-                (wire_keys::MESSAGE_ID): message_id,
+            value_or_null(CommandExecutedEvent {
+                name: command_name,
+                session_id,
+                arguments,
+                message_id,
             }),
         );
     }
@@ -1257,9 +1327,9 @@ impl SessionManager {
         let msg = session.remove_message(message_id)?;
         self.publish_event(
             &MESSAGE_REMOVED_EVENT,
-            serde_json::json!({
-                (wire_keys::SESSION_ID): session_id,
-                (wire_keys::MESSAGE_ID): message_id,
+            value_or_null(MessageRemovedEvent {
+                session_id,
+                message_id,
             }),
         );
         Some(msg)
@@ -1289,10 +1359,10 @@ impl SessionManager {
         let part = session.remove_part(message_id, part_id)?;
         self.publish_event(
             &PART_REMOVED_EVENT,
-            serde_json::json!({
-                (wire_keys::SESSION_ID): session_id,
-                (wire_keys::MESSAGE_ID): message_id,
-                "partID": part_id,
+            value_or_null(PartRemovedEvent {
+                session_id,
+                message_id,
+                part_id,
             }),
         );
         Some(part)
@@ -1300,11 +1370,10 @@ impl SessionManager {
 
     /// Publish a session error event
     pub fn publish_error(&self, session_id: Option<&str>, error: serde_json::Value) {
-        let mut props = serde_json::json!({ "error": error });
-        if let Some(sid) = session_id {
-            props[wire_keys::SESSION_ID] = serde_json::Value::String(sid.to_string());
-        }
-        self.publish_event(&SESSION_ERROR_EVENT, props);
+        self.publish_event(
+            &SESSION_ERROR_EVENT,
+            value_or_null(SessionErrorEvent { error, session_id }),
+        );
     }
 
     /// Publish a session diff event
@@ -1312,9 +1381,9 @@ impl SessionManager {
         if let Ok(diff_json) = serde_json::to_value(diffs) {
             self.publish_event(
                 &SESSION_DIFF_EVENT,
-                serde_json::json!({
-                    (wire_keys::SESSION_ID): session_id,
-                    (patch_keys::DIFF): diff_json,
+                value_or_null(SessionDiffEvent {
+                    session_id,
+                    diff: diff_json,
                 }),
             );
         }

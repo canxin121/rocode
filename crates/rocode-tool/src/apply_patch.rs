@@ -43,6 +43,23 @@ struct FilePatch {
     hunks: Vec<Hunk>,
 }
 
+#[derive(Debug, Serialize)]
+struct ApplyPatchFileChangeMeta {
+    #[serde(rename = "filePath")]
+    file_path: String,
+    #[serde(rename = "relativePath")]
+    relative_path: String,
+    #[serde(rename = "type")]
+    change_type: String,
+    #[serde(rename = "diff")]
+    file_diff: String,
+    before: String,
+    after: String,
+    #[serde(rename = "movePath")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_path: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct Hunk {
     old_start: usize,
@@ -150,44 +167,21 @@ impl Tool for ApplyPatchTool {
                     }
                 };
 
-                serde_json::Value::Object(serde_json::Map::from_iter([
-                    (
-                        patch_keys::FILE_PATH.to_string(),
-                        serde_json::json!(
-                            base_path
-                                .join(&change.relative_path)
-                                .to_string_lossy()
-                                .to_string()
-                        ),
-                    ),
-                    (
-                        patch_keys::RELATIVE_PATH.to_string(),
-                        serde_json::json!(target_relative_path),
-                    ),
-                    (
-                        patch_keys::CHANGE_TYPE.to_string(),
-                        serde_json::json!(change_type.as_str()),
-                    ),
-                    (
-                        patch_keys::FILE_DIFF.to_string(),
-                        serde_json::json!(change.diff),
-                    ),
-                    (
-                        patch_keys::BEFORE.to_string(),
-                        serde_json::json!(change.old_content),
-                    ),
-                    (
-                        patch_keys::AFTER.to_string(),
-                        serde_json::json!(change.new_content),
-                    ),
-                    (
-                        patch_keys::MOVE_PATH.to_string(),
-                        serde_json::json!(move_path.map(|path| base_path
-                            .join(path)
-                            .to_string_lossy()
-                            .to_string())),
-                    ),
-                ]))
+                let wire = ApplyPatchFileChangeMeta {
+                    file_path: base_path
+                        .join(&change.relative_path)
+                        .to_string_lossy()
+                        .to_string(),
+                    relative_path: target_relative_path,
+                    change_type: change_type.as_str().to_string(),
+                    file_diff: change.diff.clone(),
+                    before: change.old_content.clone(),
+                    after: change.new_content.clone(),
+                    move_path: move_path.map(|path| {
+                        base_path.join(path).to_string_lossy().to_string()
+                    }),
+                };
+                serde_json::to_value(wire).unwrap_or(serde_json::Value::Null)
             })
             .collect();
 

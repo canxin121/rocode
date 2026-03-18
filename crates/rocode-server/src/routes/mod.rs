@@ -907,11 +907,21 @@ struct SetAuthRequest {
     body: serde_json::Value,
 }
 
+#[derive(Debug, Serialize)]
+struct SuccessResponse {
+    success: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DeletedResponse {
+    deleted: bool,
+}
+
 async fn set_auth(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<SetAuthRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<SuccessResponse>> {
     let auth_info = parse_auth_info_payload(req.body)
         .ok_or_else(|| ApiError::BadRequest("Invalid auth payload".to_string()))?;
     state.auth_manager.set(&id, auth_info).await;
@@ -921,17 +931,17 @@ async fn set_auth(
     state.rebuild_providers().await;
     broadcast_config_updated(state.as_ref());
 
-    Ok(Json(serde_json::json!({ "success": true })))
+    Ok(Json(SuccessResponse { success: true }))
 }
 
 async fn delete_auth(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<DeletedResponse>> {
     state.auth_manager.remove(&id).await;
     state.rebuild_providers().await;
     broadcast_config_updated(state.as_ref());
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(Json(DeletedResponse { deleted: true }))
 }
 
 fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {

@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -290,6 +292,109 @@ struct NormalizedHistoricalToolCall {
     arguments: String,
 }
 
+#[derive(Debug, Serialize)]
+struct InvalidToolPayload<'a> {
+    tool: &'a str,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: &'a str,
+    error: &'a str,
+    #[serde(rename = "receivedArgs")]
+    received_args: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyUnrecoverableReceivedArgs {
+    #[serde(rename = "type")]
+    value_type: &'static str,
+    source: &'static str,
+    raw_len: Option<u64>,
+    preview: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StringReceivedArgs {
+    #[serde(rename = "type")]
+    value_type: &'static str,
+    raw_len: usize,
+    preview: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TypeOnlyReceivedArgs<'a> {
+    #[serde(rename = "type")]
+    value_type: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct RoleContentText<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolCallInterruptedMessage<'a> {
+    role: &'static str,
+    tool_call_id: &'a str,
+    content: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UserTextPart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    text: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageUrlValue<'a> {
+    url: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct UserImagePart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'static str,
+    image_url: ImageUrlValue<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssistantFunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AssistantToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: &'static str,
+    function: AssistantFunctionCall,
+}
+
+#[derive(Debug, Serialize)]
+struct AssistantMessageWire {
+    role: &'static str,
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<AssistantToolCall>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolRoleMessage<'a> {
+    role: &'static str,
+    tool_call_id: &'a str,
+    content: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyStreamOptionsWire {
+    include_usage: bool,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
 #[allow(dead_code)]
 fn invalid_tool_payload_for_history(
     tool_name: &str,
@@ -297,12 +402,13 @@ fn invalid_tool_payload_for_history(
     error: &str,
     received_args: Value,
 ) -> Value {
-    json!({
-        "tool": tool_name,
-        "toolCallId": tool_call_id,
-        "error": error,
-        "receivedArgs": received_args,
+    serde_json::to_value(InvalidToolPayload {
+        tool: tool_name,
+        tool_call_id,
+        error,
+        received_args,
     })
+    .unwrap_or(Value::Null)
 }
 
 #[allow(dead_code)]
@@ -333,12 +439,13 @@ fn normalize_tool_call_arguments_for_request(
                 };
             }
 
-            let received_args = json!({
-                "type": "object",
-                "source": "legacy-unrecoverable-sentinel",
-                "raw_len": sentinel.raw_len,
-                "preview": sentinel.raw_preview,
-            });
+            let received_args = serde_json::to_value(LegacyUnrecoverableReceivedArgs {
+                value_type: "object",
+                source: "legacy-unrecoverable-sentinel",
+                raw_len: sentinel.raw_len,
+                preview: sentinel.raw_preview,
+            })
+            .unwrap_or(Value::Null);
             let payload = invalid_tool_payload_for_history(
                 tool_name,
                 tool_call_id,
@@ -383,11 +490,12 @@ fn normalize_tool_call_arguments_for_request(
                 tool_name,
                 tool_call_id,
                 "Historical tool arguments are malformed/truncated and cannot be replayed safely.",
-                json!({
-                    "type": "string",
-                    "raw_len": raw.len(),
-                    "preview": raw.chars().take(240).collect::<String>(),
-                }),
+                serde_json::to_value(StringReceivedArgs {
+                    value_type: "string",
+                    raw_len: raw.len(),
+                    preview: raw.chars().take(240).collect::<String>(),
+                })
+                .unwrap_or(Value::Null),
             );
             tracing::debug!(
                 tool = tool_name,
@@ -414,9 +522,10 @@ fn normalize_tool_call_arguments_for_request(
                 tool_name,
                 tool_call_id,
                 "Historical tool arguments are non-object and cannot be replayed safely.",
-                json!({
-                    "type": input_type,
-                }),
+                serde_json::to_value(TypeOnlyReceivedArgs {
+                    value_type: input_type,
+                })
+                .unwrap_or(Value::Null),
             );
             tracing::debug!(
                 tool = tool_name,
@@ -786,16 +895,17 @@ fn to_openai_compatible_chat_messages(messages: &[Message]) -> Vec<Value> {
     for message in messages {
         match message.role {
             Role::System => {
-                converted.push(json!({
-                    "role": "system",
-                    "content": content_text_lossy(&message.content),
+                let content = content_text_lossy(&message.content);
+                converted.push(to_value_or_null(RoleContentText {
+                    role: "system",
+                    content: &content,
                 }));
             }
             Role::User => {
-                converted.push(json!({
-                    "role": "user",
-                    "content": user_content_to_openai(&message.content),
-                }));
+                let mut user_message = Map::new();
+                user_message.insert("role".to_string(), Value::String("user".to_string()));
+                user_message.insert("content".to_string(), user_content_to_openai(&message.content));
+                converted.push(Value::Object(user_message));
             }
             Role::Assistant => {
                 let (assistant_msg, emitted_tool_calls) =
@@ -823,10 +933,10 @@ fn to_openai_compatible_chat_messages(messages: &[Message]) -> Vec<Value> {
 
 #[allow(dead_code)]
 fn interrupted_tool_result_to_openai(tool_call_id: &str) -> Value {
-    json!({
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        "content": "[Tool execution was interrupted]",
+    to_value_or_null(ToolCallInterruptedMessage {
+        role: "tool",
+        tool_call_id,
+        content: "[Tool execution was interrupted]",
     })
 }
 
@@ -854,17 +964,17 @@ fn user_content_to_openai(content: &crate::Content) -> Value {
             let mut converted_parts = Vec::new();
             for part in parts {
                 if let Some(text) = &part.text {
-                    converted_parts.push(json!({
-                        "type": "text",
-                        "text": text,
+                    converted_parts.push(to_value_or_null(UserTextPart {
+                        part_type: "text",
+                        text,
                     }));
                     continue;
                 }
 
                 if let Some(image) = &part.image_url {
-                    converted_parts.push(json!({
-                        "type": "image_url",
-                        "image_url": { "url": image.url },
+                    converted_parts.push(to_value_or_null(UserImagePart {
+                        part_type: "image_url",
+                        image_url: ImageUrlValue { url: &image.url },
                     }));
                 }
             }
@@ -882,15 +992,16 @@ fn user_content_to_openai(content: &crate::Content) -> Value {
 fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>) {
     match content {
         crate::Content::Text(text) => (
-            json!({
-                "role": "assistant",
-                "content": text,
+            to_value_or_null(AssistantMessageWire {
+                role: "assistant",
+                content: Some(text.clone()),
+                tool_calls: None,
             }),
             Vec::new(),
         ),
         crate::Content::Parts(parts) => {
             let mut text = String::new();
-            let mut tool_calls = Vec::new();
+            let mut tool_calls: Vec<AssistantToolCall> = Vec::new();
             let mut tool_call_ids = Vec::new();
 
             for part in parts {
@@ -908,14 +1019,14 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                                 &tool_use.input,
                             );
                             tool_call_ids.push(tool_use.id.clone());
-                            tool_calls.push(json!({
-                                "id": tool_use.id,
-                                "type": "function",
-                                "function": {
-                                    "name": normalized.tool_name,
-                                    "arguments": normalized.arguments,
-                                }
-                            }));
+                            tool_calls.push(AssistantToolCall {
+                                id: tool_use.id.clone(),
+                                call_type: "function",
+                                function: AssistantFunctionCall {
+                                    name: normalized.tool_name,
+                                    arguments: normalized.arguments,
+                                },
+                            });
                         }
                     }
                     _ => {
@@ -926,23 +1037,21 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                 }
             }
 
-            let mut message = Map::new();
-            message.insert("role".to_string(), Value::String("assistant".to_string()));
-            if tool_calls.is_empty() {
-                message.insert("content".to_string(), Value::String(text));
+            let content = if tool_calls.is_empty() || !text.is_empty() {
+                Some(text)
             } else {
-                message.insert(
-                    "content".to_string(),
-                    if text.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(text)
-                    },
-                );
-                message.insert("tool_calls".to_string(), Value::Array(tool_calls));
-            }
+                None
+            };
+            let tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
 
-            (Value::Object(message), tool_call_ids)
+            (
+                to_value_or_null(AssistantMessageWire {
+                    role: "assistant",
+                    content,
+                    tool_calls,
+                }),
+                tool_call_ids,
+            )
         }
     }
 }
@@ -957,9 +1066,9 @@ fn tool_messages_to_openai(
             if text.is_empty() {
                 Vec::new()
             } else {
-                vec![json!({
-                    "role": "user",
-                    "content": text,
+                vec![to_value_or_null(RoleContentText {
+                    role: "user",
+                    content: text,
                 })]
             }
         }
@@ -974,16 +1083,16 @@ fn tool_messages_to_openai(
                         );
                         continue;
                     }
-                    messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": tool_result.tool_use_id,
-                        "content": tool_result.content,
+                    messages.push(to_value_or_null(ToolRoleMessage {
+                        role: "tool",
+                        tool_call_id: &tool_result.tool_use_id,
+                        content: &tool_result.content,
                     }));
                 } else if let Some(text) = &part.text {
                     if !text.is_empty() {
-                        messages.push(json!({
-                            "role": "user",
-                            "content": text,
+                        messages.push(to_value_or_null(RoleContentText {
+                            role: "user",
+                            content: text,
                         }));
                     }
                 }
@@ -1117,7 +1226,9 @@ fn extract_responses_provider_options(
         }
     }
 
-    serde_json::from_value::<ResponsesProviderOptions>(serde_json::json!(options))
+    serde_json::from_value::<ResponsesProviderOptions>(
+        serde_json::to_value(options).unwrap_or(Value::Null),
+    )
         .unwrap_or_default()
 }
 
@@ -1476,7 +1587,9 @@ async fn chat_stream_openai_compatible(
     if let Value::Object(obj) = &mut request_body {
         obj.insert(
             "stream_options".to_string(),
-            serde_json::json!({"include_usage": true}),
+            to_value_or_null(LegacyStreamOptionsWire {
+                include_usage: true,
+            }),
         );
     }
 

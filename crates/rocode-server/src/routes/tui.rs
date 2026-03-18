@@ -273,6 +273,47 @@ pub struct PromptRequest {
     pub text: String,
 }
 
+#[derive(Debug, Serialize)]
+struct PromptPayload {
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EmptyPayload {}
+
+#[derive(Debug, Serialize)]
+struct CommandPayload {
+    command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ExecuteCommandPayload {
+    command: String,
+    arguments: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToastPayload {
+    message: String,
+    level: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PublishEventPayload {
+    event: String,
+    data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct SelectSessionPayload {
+    #[serde(rename = "sessionID")]
+    session_id: String,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 static TUI_REQUEST_QUEUE: Lazy<Mutex<VecDeque<TuiRequest>>> =
     Lazy::new(|| Mutex::new(VecDeque::new()));
 static TUI_RESPONSE_QUEUE: Lazy<Mutex<VecDeque<serde_json::Value>>> =
@@ -305,7 +346,7 @@ async fn append_prompt(
     enqueue_tui_request(
         &state,
         "/tui/append-prompt",
-        serde_json::json!({ "text": req.text }),
+        to_value_or_null(PromptPayload { text: req.text }),
     )
     .await;
     Ok(Json(true))
@@ -318,7 +359,7 @@ async fn set_prompt(
     enqueue_tui_request(
         &state,
         "/tui/set-prompt",
-        serde_json::json!({ "text": req.text }),
+        to_value_or_null(PromptPayload { text: req.text }),
     )
     .await;
     Ok(Json(true))
@@ -331,14 +372,14 @@ async fn submit_prompt(
     enqueue_tui_request(
         &state,
         "/tui/submit-prompt",
-        serde_json::json!({ "text": req.text }),
+        to_value_or_null(PromptPayload { text: req.text }),
     )
     .await;
     Ok(Json(true))
 }
 
 async fn clear_prompt(State(state): State<Arc<ServerState>>) -> Result<Json<bool>> {
-    enqueue_tui_request(&state, "/tui/clear-prompt", serde_json::json!({})).await;
+    enqueue_tui_request(&state, "/tui/clear-prompt", to_value_or_null(EmptyPayload {})).await;
     Ok(Json(true))
 }
 
@@ -346,7 +387,9 @@ async fn open_help(State(state): State<Arc<ServerState>>) -> Result<Json<bool>> 
     enqueue_tui_request(
         &state,
         "/tui/open-help",
-        serde_json::json!({ "command": "help.show" }),
+        to_value_or_null(CommandPayload {
+            command: "help.show",
+        }),
     )
     .await;
     Ok(Json(true))
@@ -356,7 +399,9 @@ async fn open_sessions(State(state): State<Arc<ServerState>>) -> Result<Json<boo
     enqueue_tui_request(
         &state,
         "/tui/open-sessions",
-        serde_json::json!({ "command": "session.list" }),
+        to_value_or_null(CommandPayload {
+            command: "session.list",
+        }),
     )
     .await;
     Ok(Json(true))
@@ -366,7 +411,9 @@ async fn open_themes(State(state): State<Arc<ServerState>>) -> Result<Json<bool>
     enqueue_tui_request(
         &state,
         "/tui/open-themes",
-        serde_json::json!({ "command": "theme.list" }),
+        to_value_or_null(CommandPayload {
+            command: "theme.list",
+        }),
     )
     .await;
     Ok(Json(true))
@@ -376,7 +423,9 @@ async fn open_models(State(state): State<Arc<ServerState>>) -> Result<Json<bool>
     enqueue_tui_request(
         &state,
         "/tui/open-models",
-        serde_json::json!({ "command": "model.list" }),
+        to_value_or_null(CommandPayload {
+            command: "model.list",
+        }),
     )
     .await;
     Ok(Json(true))
@@ -415,9 +464,9 @@ async fn execute_tui_command(
     enqueue_tui_request(
         &state,
         "/tui/execute-command",
-        serde_json::json!({
-            "command": mapped,
-            "arguments": req.arguments,
+        to_value_or_null(ExecuteCommandPayload {
+            command: mapped.to_string(),
+            arguments: req.arguments,
         }),
     )
     .await;
@@ -437,9 +486,9 @@ async fn show_toast(
     enqueue_tui_request(
         &state,
         "/tui/show-toast",
-        serde_json::json!({
-            "message": req.message,
-            "level": req.level,
+        to_value_or_null(ToastPayload {
+            message: req.message,
+            level: req.level,
         }),
     )
     .await;
@@ -459,9 +508,9 @@ async fn publish_tui_event(
     enqueue_tui_request(
         &state,
         "/tui/publish",
-        serde_json::json!({
-            "event": req.event,
-            "data": req.data,
+        to_value_or_null(PublishEventPayload {
+            event: req.event,
+            data: req.data,
         }),
     )
     .await;
@@ -486,7 +535,9 @@ async fn select_session(
     enqueue_tui_request(
         &state,
         "/tui/select-session",
-        serde_json::json!({ "sessionID": req.session_id }),
+        to_value_or_null(SelectSessionPayload {
+            session_id: req.session_id,
+        }),
     )
     .await;
     Ok(Json(true))

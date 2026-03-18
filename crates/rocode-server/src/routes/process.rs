@@ -19,6 +19,11 @@ struct ProcessResponse {
     memory_kb: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct KillProcessResponse {
+    killed: u32,
+}
+
 fn kind_to_str(kind: ProcessKind) -> &'static str {
     match kind {
         ProcessKind::Plugin => "plugin",
@@ -53,7 +58,7 @@ async fn list_processes() -> Json<Vec<ProcessResponse>> {
     )
 }
 
-async fn kill_process(Path(pid): Path<u32>) -> Result<Json<serde_json::Value>> {
+async fn kill_process(Path(pid): Path<u32>) -> Result<Json<KillProcessResponse>> {
     rocode_orchestrator::global_lifecycle()
         .kill_process(pid)
         .map_err(|e| {
@@ -62,5 +67,5 @@ async fn kill_process(Path(pid): Path<u32>) -> Result<Json<serde_json::Value>> {
                 pid, e
             ))
         })?;
-    Ok(Json(serde_json::json!({ "killed": pid })))
+    Ok(Json(KillProcessResponse { killed: pid }))
 }

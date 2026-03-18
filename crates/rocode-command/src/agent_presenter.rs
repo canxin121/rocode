@@ -6,7 +6,7 @@ use crate::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -349,9 +349,9 @@ fn apply_history_tool_call_display_override(
                         .filter(|value| !value.is_empty())
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("Question {}", index + 1));
-                    json!({
-                        "label": label,
-                        "value": item.question,
+                    to_value_or_null(DisplayFieldValue {
+                        label,
+                        value: item.question.clone(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -461,9 +461,9 @@ fn apply_history_tool_result_display_override(
                 .display_fields
                 .into_iter()
                 .map(|field| {
-                    json!({
-                        "label": field.key,
-                        "value": field.value.unwrap_or_default(),
+                    to_value_or_null(DisplayFieldValue {
+                        label: field.key,
+                        value: field.value.unwrap_or_default(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -539,11 +539,11 @@ fn apply_history_tool_result_interaction(
     };
     map.insert(
         "interaction".to_string(),
-        json!({
-            "type": "question",
-            "status": status,
-            "can_reply": false,
-            "can_reject": false,
+        to_value_or_null(QuestionInteractionReadonly {
+            interaction_type: "question",
+            status: status.to_string(),
+            can_reply: false,
+            can_reject: false,
         }),
     );
 }
@@ -559,13 +559,13 @@ fn apply_display_override(
     };
     let display = map
         .entry("display".to_string())
-        .or_insert_with(|| json!({}))
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
         .as_object_mut();
     let Some(display) = display else {
         return;
     };
     if let Some(summary) = summary {
-        display.insert("summary".to_string(), json!(summary));
+        display.insert("summary".to_string(), serde_json::Value::String(summary));
     }
     if !fields.is_empty() {
         display.insert("fields".to_string(), serde_json::Value::Array(fields));
@@ -590,10 +590,22 @@ fn todo_summary_fields_from_array(todos: &[TodoItem]) -> Vec<serde_json::Value> 
         }
     }
     vec![
-        json!({ "label": "Count", "value": todos.len().to_string() }),
-        json!({ "label": "Pending", "value": pending.to_string() }),
-        json!({ "label": "In Progress", "value": in_progress.to_string() }),
-        json!({ "label": "Completed", "value": completed.to_string() }),
+        to_value_or_null(DisplayFieldValue {
+            label: "Count".to_string(),
+            value: todos.len().to_string(),
+        }),
+        to_value_or_null(DisplayFieldValue {
+            label: "Pending".to_string(),
+            value: pending.to_string(),
+        }),
+        to_value_or_null(DisplayFieldValue {
+            label: "In Progress".to_string(),
+            value: in_progress.to_string(),
+        }),
+        to_value_or_null(DisplayFieldValue {
+            label: "Completed".to_string(),
+            value: completed.to_string(),
+        }),
     ]
 }
 
@@ -616,10 +628,10 @@ fn todo_preview_from_array(todos: &[TodoItem]) -> Option<serde_json::Value> {
     if lines.is_empty() {
         return None;
     }
-    Some(json!({
-        "kind": "text",
-        "text": lines.join("\n"),
-        "truncated": todos.len() > lines.len(),
+    Some(to_value_or_null(TextPreviewPayload {
+        kind: "text",
+        text: lines.join("\n"),
+        truncated: todos.len() > lines.len(),
     }))
 }
 
@@ -813,24 +825,254 @@ fn meta_bool(meta: &HashMap<String, serde_json::Value>, key: &str) -> bool {
     meta.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+#[derive(Serialize)]
+struct WebStatusBlock<'a> {
+    kind: &'static str,
+    tone: &'a str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct WebMessageBlock<'a> {
+    kind: &'static str,
+    role: &'a str,
+    phase: &'a str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct WebReasoningBlock<'a> {
+    kind: &'static str,
+    phase: &'a str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct WebToolDisplayField {
+    label: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct WebToolDisplayPreview {
+    kind: String,
+    text: String,
+    truncated: bool,
+}
+
+#[derive(Serialize)]
+struct WebToolDisplay {
+    header: String,
+    summary: Option<String>,
+    fields: Vec<WebToolDisplayField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<WebToolDisplayPreview>,
+}
+
+#[derive(Serialize)]
+struct WebToolBlock<'a> {
+    kind: &'static str,
+    name: &'a str,
+    phase: &'a str,
+    detail: Option<&'a str>,
+    display: WebToolDisplay,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    structured: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct WebSessionEventField {
+    label: String,
+    value: String,
+    tone: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WebSessionEventBlock {
+    kind: &'static str,
+    event: String,
+    title: String,
+    status: Option<String>,
+    summary: Option<String>,
+    fields: Vec<WebSessionEventField>,
+    body: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WebQueueItemDisplay {
+    summary: String,
+}
+
+#[derive(Serialize)]
+struct WebQueueItemBlock {
+    kind: &'static str,
+    position: usize,
+    text: String,
+    display: WebQueueItemDisplay,
+}
+
+#[derive(Serialize)]
+struct WebSchedulerDecisionSpec {
+    version: String,
+    show_header_divider: bool,
+    field_order: String,
+    field_label_emphasis: String,
+    status_palette: String,
+    section_spacing: String,
+    update_policy: String,
+}
+
+#[derive(Serialize)]
+struct WebSchedulerDecisionField {
+    label: String,
+    value: String,
+    tone: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WebSchedulerDecisionSection {
+    title: String,
+    body: String,
+}
+
+#[derive(Serialize)]
+struct WebSchedulerDecision {
+    kind: String,
+    title: String,
+    spec: WebSchedulerDecisionSpec,
+    fields: Vec<WebSchedulerDecisionField>,
+    sections: Vec<WebSchedulerDecisionSection>,
+}
+
+#[derive(Serialize)]
+struct WebSchedulerStageBlock {
+    kind: &'static str,
+    stage_id: Option<String>,
+    profile: Option<String>,
+    stage: String,
+    title: String,
+    text: String,
+    stage_index: Option<u64>,
+    stage_total: Option<u64>,
+    step: Option<u64>,
+    status: Option<String>,
+    focus: Option<String>,
+    last_event: Option<String>,
+    waiting_on: Option<String>,
+    activity: Option<String>,
+    available_skill_count: Option<u64>,
+    available_agent_count: Option<u64>,
+    available_category_count: Option<u64>,
+    active_skills: Vec<String>,
+    active_agents: Vec<String>,
+    active_categories: Vec<String>,
+    done_agent_count: u32,
+    total_agent_count: u32,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    reasoning_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    child_session_id: Option<String>,
+    decision: Option<WebSchedulerDecision>,
+}
+
+#[derive(Serialize)]
+struct WebInspectEvent {
+    ts: i64,
+    event_type: String,
+    execution_id: Option<String>,
+    stage_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WebInspectBlock {
+    kind: &'static str,
+    stage_ids: Vec<String>,
+    filter_stage_id: Option<String>,
+    events: Vec<WebInspectEvent>,
+}
+
+#[derive(Serialize)]
+struct DisplayFieldValue {
+    label: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct QuestionInteractionReadonly {
+    #[serde(rename = "type")]
+    interaction_type: &'static str,
+    status: String,
+    can_reply: bool,
+    can_reject: bool,
+}
+
+#[derive(Serialize)]
+struct TextPreviewPayload {
+    kind: &'static str,
+    text: String,
+    truncated: bool,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WebToolStructuredDetail {
+    FileEdit {
+        file_path: String,
+        diff_preview: Option<String>,
+    },
+    FileWrite {
+        file_path: String,
+        bytes: Option<u64>,
+        lines: Option<u64>,
+        diff_preview: Option<String>,
+    },
+    FileRead {
+        file_path: String,
+        total_lines: Option<u64>,
+        truncated: bool,
+    },
+    BashExec {
+        command_preview: String,
+        exit_code: Option<i64>,
+        output_preview: Option<String>,
+        truncated: bool,
+    },
+    Search {
+        pattern: String,
+        matches: Option<u64>,
+        truncated: bool,
+    },
+    Generic,
+}
+
+fn to_value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
     match block {
-        OutputBlock::Status(StatusBlock { tone, text }) => json!({
-            "kind": "status",
-            "tone": tone_to_web(tone),
-            "text": text,
+        OutputBlock::Status(StatusBlock { tone, text }) => to_value_or_null(WebStatusBlock {
+            kind: "status",
+            tone: tone_to_web(tone),
+            text,
         }),
-        OutputBlock::Message(MessageBlock { role, phase, text }) => json!({
-            "kind": "message",
-            "role": role_to_web(role),
-            "phase": phase_to_web(phase),
-            "text": text,
-        }),
-        OutputBlock::Reasoning(ReasoningBlock { phase, text }) => json!({
-            "kind": "reasoning",
-            "phase": phase_to_web(phase),
-            "text": text,
-        }),
+        OutputBlock::Message(MessageBlock { role, phase, text }) => {
+            to_value_or_null(WebMessageBlock {
+                kind: "message",
+                role: role_to_web(role),
+                phase: phase_to_web(phase),
+                text,
+            })
+        }
+        OutputBlock::Reasoning(ReasoningBlock { phase, text }) => {
+            to_value_or_null(WebReasoningBlock {
+                kind: "reasoning",
+                phase: phase_to_web(phase),
+                text,
+            })
+        }
         OutputBlock::Tool(ToolBlock {
             name,
             phase,
@@ -843,31 +1085,29 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
                 detail: detail.clone(),
                 structured: structured.clone(),
             };
-            let mut obj = serde_json::json!({
-                "kind": "tool",
-                "name": name,
-                "phase": tool_phase_to_web(phase),
-                "detail": detail,
-                "display": {
-                    "header": tool_web_header(&tool),
-                    "summary": tool_web_summary(&tool),
-                    "fields": tool_web_fields(&tool).into_iter().map(|field| json!({
-                        "label": field.label,
-                        "value": field.value,
-                    })).collect::<Vec<_>>(),
-                    "preview": tool_web_preview(&tool).map(|preview| json!({
-                        "kind": preview.kind,
-                        "text": preview.text,
-                        "truncated": preview.truncated,
-                    })),
-                }
-            });
-            if let Some(ref s) = structured {
-                if let serde_json::Value::Object(ref mut map) = obj {
-                    map.insert("structured".to_string(), structured_to_web(s));
-                }
-            }
-            obj
+            to_value_or_null(WebToolBlock {
+                kind: "tool",
+                name,
+                phase: tool_phase_to_web(phase),
+                detail: detail.as_deref(),
+                display: WebToolDisplay {
+                    header: tool_web_header(&tool),
+                    summary: tool_web_summary(&tool),
+                    fields: tool_web_fields(&tool)
+                        .into_iter()
+                        .map(|field| WebToolDisplayField {
+                            label: field.label,
+                            value: field.value,
+                        })
+                        .collect(),
+                    preview: tool_web_preview(&tool).map(|preview| WebToolDisplayPreview {
+                        kind: preview.kind,
+                        text: preview.text,
+                        truncated: preview.truncated,
+                    }),
+                },
+                structured: structured.as_ref().map(structured_to_web),
+            })
         }
         OutputBlock::SessionEvent(SessionEventBlock {
             event,
@@ -876,89 +1116,113 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
             summary,
             fields,
             body,
-        }) => json!({
-            "kind": "session_event",
-            "event": event,
-            "title": title,
-            "status": status,
-            "summary": summary,
-            "fields": fields.iter().map(|field| json!({
-                "label": field.label,
-                "value": field.value,
-                "tone": field.tone,
-            })).collect::<Vec<_>>(),
-            "body": body,
+        }) => to_value_or_null(WebSessionEventBlock {
+            kind: "session_event",
+            event: event.clone(),
+            title: title.clone(),
+            status: status.clone(),
+            summary: summary.clone(),
+            fields: fields
+                .iter()
+                .map(|field| WebSessionEventField {
+                    label: field.label.clone(),
+                    value: field.value.clone(),
+                    tone: field.tone.clone(),
+                })
+                .collect(),
+            body: body.clone(),
         }),
-        OutputBlock::QueueItem(QueueItemBlock { position, text }) => json!({
-            "kind": "queue_item",
-            "position": position,
-            "text": text,
-            "display": {
-                "summary": format!("Queued [{}] {}", position, text),
-            }
-        }),
-        OutputBlock::SchedulerStage(stage) => json!({
-            "kind": "scheduler_stage",
-            "stage_id": stage.stage_id,
-            "profile": stage.profile,
-            "stage": stage.stage,
-            "title": stage.title,
-            "text": stage.text,
-            "stage_index": stage.stage_index,
-            "stage_total": stage.stage_total,
-            "step": stage.step,
-            "status": stage.status,
-            "focus": stage.focus,
-            "last_event": stage.last_event,
-            "waiting_on": stage.waiting_on,
-            "activity": stage.activity,
-            "available_skill_count": stage.available_skill_count,
-            "available_agent_count": stage.available_agent_count,
-            "available_category_count": stage.available_category_count,
-            "active_skills": stage.active_skills,
-            "active_agents": stage.active_agents,
-            "active_categories": stage.active_categories,
-            "done_agent_count": stage.done_agent_count,
-            "total_agent_count": stage.total_agent_count,
-            "prompt_tokens": stage.prompt_tokens,
-            "completion_tokens": stage.completion_tokens,
-            "reasoning_tokens": stage.reasoning_tokens,
-            "cache_read_tokens": stage.cache_read_tokens,
-            "cache_write_tokens": stage.cache_write_tokens,
-            "child_session_id": stage.child_session_id,
-            "decision": stage.decision.as_ref().map(|decision| json!({
-                "kind": decision.kind,
-                "title": decision.title,
-                "spec": {
-                    "version": decision.spec.version,
-                    "show_header_divider": decision.spec.show_header_divider,
-                    "field_order": decision.spec.field_order,
-                    "field_label_emphasis": decision.spec.field_label_emphasis,
-                    "status_palette": decision.spec.status_palette,
-                    "section_spacing": decision.spec.section_spacing,
-                    "update_policy": decision.spec.update_policy,
+        OutputBlock::QueueItem(QueueItemBlock { position, text }) => {
+            to_value_or_null(WebQueueItemBlock {
+                kind: "queue_item",
+                position: *position,
+                text: text.clone(),
+                display: WebQueueItemDisplay {
+                    summary: format!("Queued [{}] {}", position, text),
                 },
-                "fields": decision.fields.iter().map(|field| json!({
-                    "label": field.label,
-                    "value": field.value,
-                    "tone": field.tone,
-                })).collect::<Vec<_>>(),
-                "sections": decision.sections.iter().map(|section| json!({
-                    "title": section.title,
-                    "body": section.body,
-                })).collect::<Vec<_>>(),
-            })),
-        }),
-        OutputBlock::Inspect(inspect) => json!({
-            "kind": "inspect",
-            "stage_ids": inspect.stage_ids,
-            "filter_stage_id": inspect.filter_stage_id,
-            "events": inspect.events.iter().map(|e| json!({
-                "ts": e.ts,
-                "event_type": e.event_type,
-                "execution_id": e.execution_id,
-                "stage_id": e.stage_id,
-            })).collect::<Vec<_>>(),
+            })
+        }
+        OutputBlock::SchedulerStage(stage) => {
+            let decision = stage
+                .decision
+                .as_ref()
+                .map(|decision| WebSchedulerDecision {
+                    kind: decision.kind.clone(),
+                    title: decision.title.clone(),
+                    spec: WebSchedulerDecisionSpec {
+                        version: decision.spec.version.clone(),
+                        show_header_divider: decision.spec.show_header_divider,
+                        field_order: decision.spec.field_order.clone(),
+                        field_label_emphasis: decision.spec.field_label_emphasis.clone(),
+                        status_palette: decision.spec.status_palette.clone(),
+                        section_spacing: decision.spec.section_spacing.clone(),
+                        update_policy: decision.spec.update_policy.clone(),
+                    },
+                    fields: decision
+                        .fields
+                        .iter()
+                        .map(|field| WebSchedulerDecisionField {
+                            label: field.label.clone(),
+                            value: field.value.clone(),
+                            tone: field.tone.clone(),
+                        })
+                        .collect(),
+                    sections: decision
+                        .sections
+                        .iter()
+                        .map(|section| WebSchedulerDecisionSection {
+                            title: section.title.clone(),
+                            body: section.body.clone(),
+                        })
+                        .collect(),
+                });
+
+            to_value_or_null(WebSchedulerStageBlock {
+                kind: "scheduler_stage",
+                stage_id: stage.stage_id.clone(),
+                profile: stage.profile.clone(),
+                stage: stage.stage.clone(),
+                title: stage.title.clone(),
+                text: stage.text.clone(),
+                stage_index: stage.stage_index,
+                stage_total: stage.stage_total,
+                step: stage.step,
+                status: stage.status.clone(),
+                focus: stage.focus.clone(),
+                last_event: stage.last_event.clone(),
+                waiting_on: stage.waiting_on.clone(),
+                activity: stage.activity.clone(),
+                available_skill_count: stage.available_skill_count,
+                available_agent_count: stage.available_agent_count,
+                available_category_count: stage.available_category_count,
+                active_skills: stage.active_skills.clone(),
+                active_agents: stage.active_agents.clone(),
+                active_categories: stage.active_categories.clone(),
+                done_agent_count: stage.done_agent_count,
+                total_agent_count: stage.total_agent_count,
+                prompt_tokens: stage.prompt_tokens,
+                completion_tokens: stage.completion_tokens,
+                reasoning_tokens: stage.reasoning_tokens,
+                cache_read_tokens: stage.cache_read_tokens,
+                cache_write_tokens: stage.cache_write_tokens,
+                child_session_id: stage.child_session_id.clone(),
+                decision,
+            })
+        }
+        OutputBlock::Inspect(inspect) => to_value_or_null(WebInspectBlock {
+            kind: "inspect",
+            stage_ids: inspect.stage_ids.clone(),
+            filter_stage_id: inspect.filter_stage_id.clone(),
+            events: inspect
+                .events
+                .iter()
+                .map(|e| WebInspectEvent {
+                    ts: e.ts,
+                    event_type: e.event_type.clone(),
+                    execution_id: e.execution_id.clone(),
+                    stage_id: e.stage_id.clone(),
+                })
+                .collect(),
         }),
     }
 }
@@ -1029,58 +1293,51 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
         ToolStructuredDetail::FileEdit {
             file_path,
             diff_preview,
-        } => json!({
-            "type": "file_edit",
-            "file_path": file_path,
-            "diff_preview": diff_preview,
+        } => to_value_or_null(WebToolStructuredDetail::FileEdit {
+            file_path: file_path.clone(),
+            diff_preview: diff_preview.clone(),
         }),
         ToolStructuredDetail::FileWrite {
             file_path,
             bytes,
             lines,
             diff_preview,
-        } => json!({
-            "type": "file_write",
-            "file_path": file_path,
-            "bytes": bytes,
-            "lines": lines,
-            "diff_preview": diff_preview,
+        } => to_value_or_null(WebToolStructuredDetail::FileWrite {
+            file_path: file_path.clone(),
+            bytes: *bytes,
+            lines: *lines,
+            diff_preview: diff_preview.clone(),
         }),
         ToolStructuredDetail::FileRead {
             file_path,
             total_lines,
             truncated,
-        } => json!({
-            "type": "file_read",
-            "file_path": file_path,
-            "total_lines": total_lines,
-            "truncated": truncated,
+        } => to_value_or_null(WebToolStructuredDetail::FileRead {
+            file_path: file_path.clone(),
+            total_lines: *total_lines,
+            truncated: *truncated,
         }),
         ToolStructuredDetail::BashExec {
             command_preview,
             exit_code,
             output_preview,
             truncated,
-        } => json!({
-            "type": "bash_exec",
-            "command_preview": command_preview,
-            "exit_code": exit_code,
-            "output_preview": output_preview,
-            "truncated": truncated,
+        } => to_value_or_null(WebToolStructuredDetail::BashExec {
+            command_preview: command_preview.clone(),
+            exit_code: *exit_code,
+            output_preview: output_preview.clone(),
+            truncated: *truncated,
         }),
         ToolStructuredDetail::Search {
             pattern,
             matches,
             truncated,
-        } => json!({
-            "type": "search",
-            "pattern": pattern,
-            "matches": matches,
-            "truncated": truncated,
+        } => to_value_or_null(WebToolStructuredDetail::Search {
+            pattern: pattern.clone(),
+            matches: *matches,
+            truncated: *truncated,
         }),
-        ToolStructuredDetail::Generic => json!({
-            "type": "generic",
-        }),
+        ToolStructuredDetail::Generic => to_value_or_null(WebToolStructuredDetail::Generic),
     }
 }
 

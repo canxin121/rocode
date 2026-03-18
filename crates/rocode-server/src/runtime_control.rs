@@ -59,6 +59,29 @@ struct ExecutionRecordMetadataWire {
     next: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+struct RetryMetadata {
+    attempt: u32,
+    message: String,
+    next: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolCallMetadata<'a> {
+    tool_call_id: &'a str,
+    tool_name: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentTaskMetadata<'a> {
+    task_id: &'a str,
+    agent_name: &'a str,
+}
+
+fn value_or_null<T: Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
 fn execution_record_metadata_wire(
     metadata: Option<&serde_json::Value>,
 ) -> ExecutionRecordMetadataWire {
@@ -350,10 +373,10 @@ impl RuntimeControlRegistry {
                     recent_event: Some(message.clone()),
                     started_at: now_millis(),
                     updated_at: now_millis(),
-                    metadata: Some(serde_json::json!({
-                        "attempt": attempt,
-                        "message": message,
-                        "next": next,
+                    metadata: Some(value_or_null(RetryMetadata {
+                        attempt,
+                        message: message.clone(),
+                        next,
                     })),
                 })
                 .await;
@@ -560,9 +583,9 @@ impl RuntimeControlRegistry {
             recent_event: Some(format!("{tool_name} running")),
             started_at: now_millis(),
             updated_at: now_millis(),
-            metadata: Some(serde_json::json!({
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
+            metadata: Some(value_or_null(ToolCallMetadata {
+                tool_call_id,
+                tool_name,
             })),
         })
         .await;
@@ -618,9 +641,9 @@ impl RuntimeControlRegistry {
             recent_event: Some(format!("{agent_name} started")),
             started_at: now_millis(),
             updated_at: now_millis(),
-            metadata: Some(serde_json::json!({
-                "task_id": task_id,
-                "agent_name": agent_name,
+            metadata: Some(value_or_null(AgentTaskMetadata {
+                task_id,
+                agent_name,
             })),
         })
         .await;

@@ -127,6 +127,81 @@ pub(super) struct MessageSummaryInfo {
     pub finish: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct SchedulerDecisionSpecView<'a> {
+    version: &'a str,
+    show_header_divider: bool,
+    field_order: &'a str,
+    field_label_emphasis: &'a str,
+    status_palette: &'a str,
+    section_spacing: &'a str,
+    update_policy: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct SchedulerDecisionFieldView<'a> {
+    label: &'a str,
+    value: &'a str,
+    tone: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct SchedulerDecisionSectionView<'a> {
+    title: &'a str,
+    body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct QuestionInteractionQuestion {
+    question: String,
+    header: Option<String>,
+    multiple: bool,
+    options: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PendingQuestionInteraction {
+    #[serde(rename = "type")]
+    interaction_type: &'static str,
+    status: &'static str,
+    request_id: String,
+    can_reply: bool,
+    can_reject: bool,
+    questions: Vec<QuestionInteractionQuestion>,
+}
+
+#[derive(Debug, Serialize)]
+struct MessagePartDbResponse {
+    row: serde_json::Value,
+    part: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct MessagePartMemoryResponse {
+    part: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MessageDeletedResponse {
+    deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AddPartResponse {
+    added: bool,
+    session_id: String,
+    message_id: String,
+    part_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DeletePartResponse {
+    deleted: bool,
+    session_id: String,
+    message_id: String,
+    part_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct ListMessageSummariesQuery {
     pub limit: Option<usize>,
@@ -425,10 +500,13 @@ pub(super) async fn get_message_part(
                 .as_deref()
                 .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
 
-            return Ok(Json(serde_json::json!({
-                "row": row,
-                "part": data_json,
-            })));
+            return Ok(Json(
+                serde_json::to_value(MessagePartDbResponse {
+                    row: serde_json::to_value(row).unwrap_or(serde_json::Value::Null),
+                    part: data_json,
+                })
+                .unwrap_or(serde_json::Value::Null),
+            ));
         }
     }
 
@@ -446,9 +524,12 @@ pub(super) async fn get_message_part(
         .find(|p| p.id == part_id)
         .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
 
-    Ok(Json(serde_json::json!({
-        "part": part,
-    })))
+    Ok(Json(
+        serde_json::to_value(MessagePartMemoryResponse {
+            part: serde_json::to_value(part).unwrap_or(serde_json::Value::Null),
+        })
+        .unwrap_or(serde_json::Value::Null),
+    ))
 }
 
 fn part_to_info(
@@ -831,54 +912,53 @@ fn augment_scheduler_decision_metadata_for_response(
 
     metadata.insert(
         "scheduler_decision_kind".to_string(),
-        serde_json::json!(decision.kind),
+        serde_json::to_value(decision.kind).unwrap_or(serde_json::Value::Null),
     );
     metadata.insert(
         "scheduler_decision_title".to_string(),
-        serde_json::json!(decision.title),
+        serde_json::to_value(decision.title).unwrap_or(serde_json::Value::Null),
     );
+    let spec = SchedulerDecisionSpecView {
+        version: &decision.spec.version,
+        show_header_divider: decision.spec.show_header_divider,
+        field_order: &decision.spec.field_order,
+        field_label_emphasis: &decision.spec.field_label_emphasis,
+        status_palette: &decision.spec.status_palette,
+        section_spacing: &decision.spec.section_spacing,
+        update_policy: &decision.spec.update_policy,
+    };
     metadata.insert(
         "scheduler_decision_spec".to_string(),
-        serde_json::json!({
-            "version": decision.spec.version,
-            "show_header_divider": decision.spec.show_header_divider,
-            "field_order": decision.spec.field_order,
-            "field_label_emphasis": decision.spec.field_label_emphasis,
-            "status_palette": decision.spec.status_palette,
-            "section_spacing": decision.spec.section_spacing,
-            "update_policy": decision.spec.update_policy,
-        }),
+        serde_json::to_value(spec).unwrap_or(serde_json::Value::Null),
     );
     metadata.insert(
         "scheduler_decision_fields".to_string(),
-        serde_json::Value::Array(
+        serde_json::to_value(
             decision
                 .fields
                 .iter()
-                .map(|field| {
-                    serde_json::json!({
-                        "label": field.label,
-                        "value": field.value,
-                        "tone": field.tone,
-                    })
+                .map(|field| SchedulerDecisionFieldView {
+                    label: &field.label,
+                    value: &field.value,
+                    tone: field.tone.as_deref(),
                 })
-                .collect(),
-        ),
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or(serde_json::Value::Null),
     );
     metadata.insert(
         "scheduler_decision_sections".to_string(),
-        serde_json::Value::Array(
+        serde_json::to_value(
             decision
                 .sections
                 .iter()
-                .map(|section| {
-                    serde_json::json!({
-                        "title": section.title,
-                        "body": section.body,
-                    })
+                .map(|section| SchedulerDecisionSectionView {
+                    title: &section.title,
+                    body: &section.body,
                 })
-                .collect(),
-        ),
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or(serde_json::Value::Null),
     );
 }
 
@@ -1134,22 +1214,24 @@ fn question_pending_interaction_json(
                         .and_then(|options| options.get(index).cloned())
                 })
                 .unwrap_or_default();
-            serde_json::json!({
-                "question": question.question.as_deref().unwrap_or_default(),
-                "header": question.header.as_deref(),
-                "multiple": question.multiple,
-                "options": options,
-            })
+            QuestionInteractionQuestion {
+                question: question.question.clone().unwrap_or_default(),
+                header: question.header.clone(),
+                multiple: question.multiple,
+                options,
+            }
         })
         .collect::<Vec<_>>();
-    serde_json::json!({
-        "type": "question",
-        "status": "pending",
-        "request_id": question_info.id,
-        "can_reply": true,
-        "can_reject": true,
-        "questions": questions,
+
+    serde_json::to_value(PendingQuestionInteraction {
+        interaction_type: "question",
+        status: "pending",
+        request_id: question_info.id,
+        can_reply: true,
+        can_reject: true,
+        questions,
     })
+    .unwrap_or(serde_json::Value::Null)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1162,7 +1244,7 @@ pub(super) struct ListMessagesQuery {
 pub(super) async fn delete_message(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<MessageDeletedResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&session_id)
@@ -1170,7 +1252,7 @@ pub(super) async fn delete_message(
     session.remove_message(&msg_id);
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(Json(MessageDeletedResponse { deleted: true }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1267,7 +1349,7 @@ pub(super) async fn add_message_part(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id)): Path<(String, String)>,
     Json(req): Json<AddPartRequest>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<AddPartResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&session_id)
@@ -1283,18 +1365,18 @@ pub(super) async fn add_message_part(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "added": true,
-        "session_id": session_id,
-        "message_id": msg_id,
-        "part_id": part_id,
-    })))
+    Ok(Json(AddPartResponse {
+        added: true,
+        session_id,
+        message_id: msg_id,
+        part_id,
+    }))
 }
 
 pub(super) async fn delete_part(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<DeletePartResponse>> {
     let mut sessions = state.sessions.lock().await;
     let session = sessions
         .get_mut(&session_id)
@@ -1312,10 +1394,10 @@ pub(super) async fn delete_part(
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
 
-    Ok(Json(serde_json::json!({
-        "deleted": true,
-        "session_id": session_id,
-        "message_id": msg_id,
-        "part_id": part_id,
-    })))
+    Ok(Json(DeletePartResponse {
+        deleted: true,
+        session_id,
+        message_id: msg_id,
+        part_id,
+    }))
 }

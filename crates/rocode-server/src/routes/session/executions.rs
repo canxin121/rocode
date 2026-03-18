@@ -5,12 +5,47 @@ use axum::Json;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
 use rocode_session::{PartType, Session, ToolCallStatus};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionExecutionTopology;
 use crate::{ApiError, Result, ServerState};
 
 use super::cancel::ensure_session_exists;
+
+#[derive(Debug, Serialize)]
+pub(super) struct AllExecutionsResponse {
+    active_count: usize,
+    active_session_ids: Vec<String>,
+    executions: Vec<crate::runtime_control::ExecutionRecord>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct CancelExecutionResponse {
+    cancelled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<crate::runtime_control::ExecutionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolExecutionMetadata<'a> {
+    tool_call_id: &'a str,
+    tool_name: &'a str,
+    input: &'a serde_json::Value,
+    message_id: &'a str,
+    status: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentTaskExecutionMetadata {
+    task_id: String,
+    agent_name: String,
+    prompt: String,
+    max_steps: Option<u32>,
+    step: Option<u32>,
+    output_tail: Vec<String>,
+}
 
 pub(super) async fn get_session_executions(
     State(state): State<Arc<ServerState>>,
@@ -42,20 +77,20 @@ pub(super) async fn get_session_executions(
 /// Global enumeration: list all active execution records across all sessions.
 pub(super) async fn list_all_executions(
     State(state): State<Arc<ServerState>>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<AllExecutionsResponse>> {
     let records = state.runtime_control.list_all_executions().await;
     let session_ids = state.runtime_control.list_active_session_ids().await;
-    Ok(Json(serde_json::json!({
-        "active_count": records.len(),
-        "active_session_ids": session_ids,
-        "executions": records,
-    })))
+    Ok(Json(AllExecutionsResponse {
+        active_count: records.len(),
+        active_session_ids: session_ids,
+        executions: records,
+    }))
 }
 
 pub(super) async fn cancel_session_execution(
     State(state): State<Arc<ServerState>>,
     Path((_session_id, execution_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>> {
+) -> Result<Json<CancelExecutionResponse>> {
     let result = state.runtime_control.cancel_execution(&execution_id).await;
     match result {
         Some(kind) => {
@@ -65,15 +100,17 @@ pub(super) async fn cancel_session_execution(
                     let _ = global_task_registry().cancel(task_id);
                 }
             }
-            Ok(Json(serde_json::json!({
-                "cancelled": true,
-                "kind": kind,
-            })))
+            Ok(Json(CancelExecutionResponse {
+                cancelled: true,
+                kind: Some(kind),
+                error: None,
+            }))
         }
-        None => Ok(Json(serde_json::json!({
-            "cancelled": false,
-            "error": "execution not found",
-        }))),
+        None => Ok(Json(CancelExecutionResponse {
+            cancelled: false,
+            kind: None,
+            error: Some("execution not found".to_string()),
+        })),
     }
 }
 
@@ -129,6 +166,19 @@ pub(super) fn collect_active_tool_execution_records(
                 ToolCallStatus::Completed | ToolCallStatus::Error => continue,
             };
 
+            let metadata = ToolExecutionMetadata {
+                tool_call_id: id,
+                tool_name: name,
+                input,
+                message_id: &message.id,
+                status: match status {
+                    ToolCallStatus::Pending => "pending",
+                    ToolCallStatus::Running => "running",
+                    ToolCallStatus::Completed => "completed",
+                    ToolCallStatus::Error => "error",
+                },
+            };
+
             records.push(crate::runtime_control::ExecutionRecord {
                 id: format!("tool_call:{id}"),
                 session_id: session.id.clone(),
@@ -149,18 +199,7 @@ pub(super) fn collect_active_tool_execution_records(
                 }),
                 started_at: part.created_at.timestamp_millis(),
                 updated_at: part.created_at.timestamp_millis(),
-                metadata: Some(serde_json::json!({
-                    "tool_call_id": id,
-                    "tool_name": name,
-                    "input": input,
-                    "message_id": message.id,
-                    "status": match status {
-                        ToolCallStatus::Pending => "pending",
-                        ToolCallStatus::Running => "running",
-                        ToolCallStatus::Completed => "completed",
-                        ToolCallStatus::Error => "error",
-                    },
-                })),
+                metadata: serde_json::to_value(metadata).ok(),
             });
         }
     }
@@ -222,6 +261,15 @@ fn agent_task_execution_record(
         ),
     };
 
+    let metadata = AgentTaskExecutionMetadata {
+        task_id: task.id.clone(),
+        agent_name: task.agent_name.clone(),
+        prompt: task.prompt.clone(),
+        max_steps: task.max_steps,
+        step,
+        output_tail: task.output_tail.iter().cloned().collect(),
+    };
+
     crate::runtime_control::ExecutionRecord {
         id: format!("agent_task:{}", task.id),
         session_id: session_id.to_string(),
@@ -234,14 +282,7 @@ fn agent_task_execution_record(
         recent_event,
         started_at: task.started_at.saturating_mul(1000),
         updated_at: chrono::Utc::now().timestamp_millis(),
-        metadata: Some(serde_json::json!({
-            "task_id": task.id,
-            "agent_name": task.agent_name,
-            "prompt": task.prompt,
-            "max_steps": task.max_steps,
-            "step": step,
-            "output_tail": task.output_tail,
-        })),
+        metadata: serde_json::to_value(metadata).ok(),
     }
 }
 

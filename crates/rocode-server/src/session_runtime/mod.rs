@@ -2591,31 +2591,49 @@ fn write_scheduler_decision_metadata(
     );
 }
 
+#[derive(serde::Serialize)]
+struct DecisionFieldView<'a> {
+    label: &'a str,
+    value: &'a str,
+    tone: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct DecisionSectionView<'a> {
+    title: &'a str,
+    body: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct DecisionRenderSpecView {
+    version: &'static str,
+    show_header_divider: bool,
+    field_order: &'static str,
+    field_label_emphasis: &'static str,
+    status_palette: &'static str,
+    section_spacing: &'static str,
+    update_policy: &'static str,
+}
+
 fn decision_field(label: &str, value: &str, tone: Option<&str>) -> serde_json::Value {
-    serde_json::json!({
-        "label": label,
-        "value": value,
-        "tone": tone,
-    })
+    serde_json::to_value(DecisionFieldView { label, value, tone }).unwrap_or(serde_json::Value::Null)
 }
 
 fn decision_section(title: &str, body: &str) -> serde_json::Value {
-    serde_json::json!({
-        "title": title,
-        "body": body,
-    })
+    serde_json::to_value(DecisionSectionView { title, body }).unwrap_or(serde_json::Value::Null)
 }
 
 fn scheduler_decision_render_spec_json() -> serde_json::Value {
-    serde_json::json!({
-        "version": "decision-card/v1",
-        "show_header_divider": true,
-        "field_order": "as-provided",
-        "field_label_emphasis": "bold",
-        "status_palette": "semantic",
-        "section_spacing": "loose",
-        "update_policy": "stable-shell-live-runtime-append-decision",
+    serde_json::to_value(DecisionRenderSpecView {
+        version: "decision-card/v1",
+        show_header_divider: true,
+        field_order: "as-provided",
+        field_label_emphasis: "bold",
+        status_palette: "semantic",
+        section_spacing: "loose",
+        update_policy: "stable-shell-live-runtime-append-decision",
     })
+    .unwrap_or(serde_json::Value::Null)
 }
 
 fn prettify_decision_value(raw: &str) -> String {

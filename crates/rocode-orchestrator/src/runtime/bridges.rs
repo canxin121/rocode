@@ -84,7 +84,10 @@ impl ToolDispatcher for ToolDispatcherBridge {
         let mut exec_ctx = self.exec_ctx.clone();
         exec_ctx
             .metadata
-            .insert("call_id".to_string(), serde_json::json!(call.id));
+            .insert(
+                "call_id".to_string(),
+                serde_json::Value::String(call.id.clone()),
+            );
         let output = self.tool_runner.execute_tool_call(input, &exec_ctx).await;
         ToolResult {
             tool_call_id: output.tool_call_id,

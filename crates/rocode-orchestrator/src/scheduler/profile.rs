@@ -754,15 +754,15 @@ impl SchedulerProfileOrchestrator {
         }
         metadata.insert(
             "scheduler_retry_budget_exhausted".to_string(),
-            serde_json::json!(true),
+            serde_json::Value::Bool(true),
         );
         metadata.insert(
             "scheduler_retry_round".to_string(),
-            serde_json::json!(round),
+            serde_json::Value::Number((round as u64).into()),
         );
         metadata.insert(
             "scheduler_retry_limit".to_string(),
-            serde_json::json!(max_rounds),
+            serde_json::Value::Number((max_rounds as u64).into()),
         );
 
         OrchestratorOutput {
