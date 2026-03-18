@@ -42,7 +42,11 @@ fn parse_glob_hints(pattern: &str) -> (Option<String>, Option<String>) {
         .and_then(|pos| {
             let before = &pattern[..pos];
             let trimmed = before.trim_end_matches('/');
-            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
         });
 
     (ext, prefix)
@@ -133,7 +137,11 @@ impl Tool for GlobTool {
         let search_root = match &prefix_hint {
             Some(prefix) => {
                 let candidate = base_dir.join(prefix);
-                if candidate.is_dir() { candidate } else { base_dir.to_path_buf() }
+                if candidate.is_dir() {
+                    candidate
+                } else {
+                    base_dir.to_path_buf()
+                }
             }
             None => base_dir.to_path_buf(),
         };

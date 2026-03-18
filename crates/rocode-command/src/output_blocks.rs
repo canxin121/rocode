@@ -72,7 +72,10 @@ fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
             if cleaned.is_empty() {
                 String::new()
             } else {
-                format!("[thinking]\n│ {}\n", indent_continuation_lines(&cleaned, "│ "))
+                format!(
+                    "[thinking]\n│ {}\n",
+                    indent_continuation_lines(&cleaned, "│ ")
+                )
             }
         }
     }

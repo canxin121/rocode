@@ -82,14 +82,34 @@ use FilterType::{Created, Custom, FileSize as FilterFileSize, Modified};
 use Ordering::{Equal, Greater, Less};
 
 impl FilterExt for SearchBuilder {
-    fn created_before(self, t: SystemTime) -> Self { self.filter(Created(Less, t)) }
-    fn created_at(self, t: SystemTime) -> Self { self.filter(Created(Equal, t)) }
-    fn created_after(self, t: SystemTime) -> Self { self.filter(Created(Greater, t)) }
-    fn modified_before(self, t: SystemTime) -> Self { self.filter(Modified(Less, t)) }
-    fn modified_at(self, t: SystemTime) -> Self { self.filter(Modified(Equal, t)) }
-    fn modified_after(self, t: SystemTime) -> Self { self.filter(Modified(Greater, t)) }
-    fn file_size_smaller(self, size: FileSize) -> Self { self.filter(FilterFileSize(Less, size.into())) }
-    fn file_size_equal(self, size: FileSize) -> Self { self.filter(FilterFileSize(Equal, size.into())) }
-    fn file_size_greater(self, size: FileSize) -> Self { self.filter(FilterFileSize(Greater, size.into())) }
-    fn custom_filter(self, f: FilterFn) -> Self { self.filter(Custom(f)) }
+    fn created_before(self, t: SystemTime) -> Self {
+        self.filter(Created(Less, t))
+    }
+    fn created_at(self, t: SystemTime) -> Self {
+        self.filter(Created(Equal, t))
+    }
+    fn created_after(self, t: SystemTime) -> Self {
+        self.filter(Created(Greater, t))
+    }
+    fn modified_before(self, t: SystemTime) -> Self {
+        self.filter(Modified(Less, t))
+    }
+    fn modified_at(self, t: SystemTime) -> Self {
+        self.filter(Modified(Equal, t))
+    }
+    fn modified_after(self, t: SystemTime) -> Self {
+        self.filter(Modified(Greater, t))
+    }
+    fn file_size_smaller(self, size: FileSize) -> Self {
+        self.filter(FilterFileSize(Less, size.into()))
+    }
+    fn file_size_equal(self, size: FileSize) -> Self {
+        self.filter(FilterFileSize(Equal, size.into()))
+    }
+    fn file_size_greater(self, size: FileSize) -> Self {
+        self.filter(FilterFileSize(Greater, size.into()))
+    }
+    fn custom_filter(self, f: FilterFn) -> Self {
+        self.filter(Custom(f))
+    }
 }

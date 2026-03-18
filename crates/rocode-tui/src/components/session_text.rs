@@ -111,26 +111,19 @@ pub fn render_reasoning_part(
 
     for line in content_lines.into_iter().take(visible_count) {
         let mut spans = vec![Span::styled("┆ ", body_prefix_style)];
-        spans.extend(
-            line.spans
-                .into_iter()
-                .map(|span| {
-                    Span::styled(
-                        span.content,
-                        span.style
-                            .fg(theme.text_muted)
-                            .add_modifier(Modifier::ITALIC),
-                    )
-                }),
-        );
+        spans.extend(line.spans.into_iter().map(|span| {
+            Span::styled(
+                span.content,
+                span.style
+                    .fg(theme.text_muted)
+                    .add_modifier(Modifier::ITALIC),
+            )
+        }));
         lines.push(Line::from(spans));
     }
 
     if collapsible {
-        lines.push(Line::from(Span::styled(
-            "┆ collapse",
-            body_style,
-        )));
+        lines.push(Line::from(Span::styled("┆ collapse", body_style)));
     }
 
     ReasoningRender { lines, collapsible }

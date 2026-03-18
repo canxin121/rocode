@@ -85,6 +85,8 @@ pub(crate) enum Commands {
         variant: Option<String>,
         #[arg(long, default_value_t = false)]
         thinking: bool,
+        #[arg(long = "interactive-mode", default_value = "rich")]
+        interactive_mode: InteractiveCliMode,
     },
     #[command(about = "Start HTTP server")]
     Serve {
@@ -231,6 +233,12 @@ pub(crate) enum Commands {
     Version,
     #[command(about = "Show build and environment info (compiler, target, profile)")]
     Info,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum InteractiveCliMode {
+    Rich,
+    Compact,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
