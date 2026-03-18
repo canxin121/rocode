@@ -411,10 +411,13 @@ mod tests {
 
         assert_eq!(language_enum.len(), 1);
         assert!(language_enum.iter().any(|v| v == "rust"));
-        assert!(schema["properties"].get("maxResults").is_some());
-        assert!(schema["properties"].get("max_results").is_some());
-        assert!(schema["properties"].get("contextLines").is_some());
-        assert!(schema["properties"].get("context_lines").is_some());
+        let properties = schema["properties"]
+            .as_object()
+            .expect("properties should be an object");
+        assert!(properties.contains_key("maxResults"));
+        assert!(properties.contains_key("max_results"));
+        assert!(properties.contains_key("contextLines"));
+        assert!(properties.contains_key("context_lines"));
     }
 
     #[test]
@@ -467,14 +470,28 @@ fn demo() {
         assert!(result.output.contains("Found 2 Rust AST matches"));
         assert!(result.output.contains("sample.rs:3"));
         assert!(result.output.contains("sample.rs:4"));
-        assert_eq!(
-            result.metadata.get("implemented"),
-            Some(&serde_json::json!(true))
-        );
-        assert_eq!(result.metadata.get("count"), Some(&serde_json::json!(2)));
-        assert_eq!(
-            result.metadata.get("engine"),
-            Some(&serde_json::json!("ast-grep"))
-        );
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SearchMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            implemented: Option<bool>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+            )]
+            count: Option<u64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            engine: Option<String>,
+        }
+
+        let metadata: SearchMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.implemented, Some(true));
+        assert_eq!(metadata.count, Some(2));
+        assert_eq!(metadata.engine.as_deref(), Some("ast-grep"));
     }
 }

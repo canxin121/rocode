@@ -263,15 +263,24 @@ fn build_media_prompt(
 
     if let Some(preflight) = preflight {
         let attachment_summary = summarize_attachment_payloads(&preflight.attachments);
+        #[derive(Debug, Deserialize, Default)]
+        struct PreflightMetadataWire {
+            #[serde(default)]
+            mime: Option<String>,
+            #[serde(default)]
+            size: Option<serde_json::Value>,
+        }
+        let meta: PreflightMetadataWire = rocode_types::parse_map_lossy(&preflight.metadata);
+
         prompt.push_str("\n\nPreflight media context from the authoritative `read` tool:\n");
         prompt.push_str(&format!(
             "- read output: {}\n",
             sanitize_prompt_line(&preflight.output)
         ));
-        if let Some(mime) = preflight.metadata.get("mime").and_then(|v| v.as_str()) {
+        if let Some(mime) = meta.mime.as_deref() {
             prompt.push_str(&format!("- mime: {}\n", mime));
         }
-        if let Some(size) = preflight.metadata.get("size") {
+        if let Some(size) = meta.size.as_ref() {
             prompt.push_str(&format!("- size: {}\n", size));
         }
         if let Some(summary) = attachment_summary {
@@ -291,17 +300,22 @@ fn build_media_prompt(
 
 fn summarize_attachment_payloads(attachments: &[serde_json::Value]) -> Option<String> {
     let first = attachments.first()?;
-    let mime = first
-        .get("mime")
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
-    let filename = first
-        .get("filename")
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
-    let url_kind = first
-        .get("url")
-        .and_then(|value| value.as_str())
+    #[derive(Debug, Deserialize, Default)]
+    struct AttachmentWire {
+        #[serde(default)]
+        mime: Option<String>,
+        #[serde(default)]
+        filename: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+    }
+
+    let wire: AttachmentWire = rocode_types::parse_value_lossy(first);
+    let mime = wire.mime.as_deref().unwrap_or("unknown");
+    let filename = wire.filename.as_deref().unwrap_or("unknown");
+    let url_kind = wire
+        .url
+        .as_deref()
         .map(|url| {
             if url.starts_with("data:") {
                 "data-url payload"
@@ -450,19 +464,31 @@ mod tests {
             .expect("media inspect should succeed");
 
         assert_eq!(result.output, "media findings");
-        assert_eq!(result.metadata["agent"], serde_json::json!("media-reader"));
-        assert_eq!(
-            result.metadata["sessionId"],
-            serde_json::json!("media_reader_session")
-        );
-        assert!(result.metadata.contains_key("preflight"));
-        let attachments = result
-            .metadata
-            .get("attachments")
-            .and_then(|value| value.as_array())
-            .expect("attachments should exist after preflight read");
-        assert_eq!(attachments.len(), 1);
-        assert_eq!(attachments[0]["mime"], serde_json::json!("application/pdf"));
+        #[derive(Debug, Deserialize, Default)]
+        struct MediaInspectMetadataWire {
+            #[serde(default)]
+            agent: Option<String>,
+            #[serde(default, alias = "sessionId", alias = "session_id")]
+            session_id: Option<String>,
+            #[serde(default)]
+            preflight: Option<serde_json::Value>,
+            #[serde(default, deserialize_with = "rocode_types::deserialize_vec_value_lossy")]
+            attachments: Vec<serde_json::Value>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct AttachmentWire {
+            #[serde(default)]
+            mime: Option<String>,
+        }
+
+        let metadata: MediaInspectMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.agent.as_deref(), Some("media-reader"));
+        assert_eq!(metadata.session_id.as_deref(), Some("media_reader_session"));
+        assert!(metadata.preflight.is_some());
+        assert_eq!(metadata.attachments.len(), 1);
+        let first: AttachmentWire = rocode_types::parse_value_lossy(&metadata.attachments[0]);
+        assert_eq!(first.mime.as_deref(), Some("application/pdf"));
 
         let create_calls = create_calls.lock().await.clone();
         assert_eq!(create_calls.len(), 1);

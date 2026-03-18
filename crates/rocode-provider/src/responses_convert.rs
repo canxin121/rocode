@@ -385,8 +385,17 @@ fn is_local_shell_tool_name(name: &str) -> bool {
 }
 
 fn local_shell_action_from_input(input: &Value) -> LocalShellAction {
-    if let Some(action) = input.get("action") {
-        if let Ok(parsed) = serde_json::from_value::<LocalShellAction>(action.clone()) {
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct LocalShellInputWire {
+        #[serde(default)]
+        action: Option<serde_json::Value>,
+        #[serde(default)]
+        command: Option<serde_json::Value>,
+    }
+
+    let LocalShellInputWire { action, command } = rocode_types::parse_value_lossy(input);
+    if let Some(action) = action {
+        if let Ok(parsed) = serde_json::from_value::<LocalShellAction>(action) {
             return parsed;
         }
     }
@@ -395,15 +404,13 @@ fn local_shell_action_from_input(input: &Value) -> LocalShellAction {
         return parsed;
     }
 
-    let command = input
-        .get("command")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let command = match command {
+        Some(Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(ToString::to_string))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
 
     LocalShellAction {
         action_type: "exec".to_string(),
@@ -536,9 +543,18 @@ mod tests {
         .await;
 
         assert!(warnings.is_empty());
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct ResponseItemTypeWire {
+            #[serde(default, rename = "type")]
+            item_type: Option<String>,
+        }
+
         let reasoning_items: Vec<_> = input
             .iter()
-            .filter(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+            .filter(|item| {
+                let wire: ResponseItemTypeWire = rocode_types::parse_value_lossy(item);
+                wire.item_type.as_deref() == Some("reasoning")
+            })
             .collect();
 
         assert_eq!(reasoning_items.len(), 1);
@@ -579,9 +595,18 @@ mod tests {
         .await;
 
         assert!(warnings.is_empty());
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct ResponseItemTypeWire {
+            #[serde(default, rename = "type")]
+            item_type: Option<String>,
+        }
+
         let shell_call = input
             .iter()
-            .find(|item| item.get("type").and_then(Value::as_str) == Some("local_shell_call"))
+            .find(|item| {
+                let wire: ResponseItemTypeWire = rocode_types::parse_value_lossy(item);
+                wire.item_type.as_deref() == Some("local_shell_call")
+            })
             .expect("local shell call must be emitted");
 
         assert_eq!(shell_call["call_id"], "call_123");

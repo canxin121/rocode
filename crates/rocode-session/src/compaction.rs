@@ -854,44 +854,48 @@ pub fn generate_continue_message() -> String {
 }
 
 fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>, Vec<String>) {
-    let source = payload
-        .get("data")
-        .filter(|value| value.is_object())
-        .unwrap_or(payload);
+    #[derive(Debug, Clone, Deserialize, Default)]
+    struct CompactionHookPayloadWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        prompt: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_vec_string_lossy"
+        )]
+        context: Vec<String>,
+    }
 
-    let prompt = source
-        .get("prompt")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            source
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        });
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(untagged)]
+    enum CompactionHookPayloadEnvelopeWire {
+        Data { data: CompactionHookPayloadWire },
+        Output { output: CompactionHookPayloadWire },
+        Body(CompactionHookPayloadWire),
+        Text(String),
+    }
 
-    let mut context = Vec::new();
-    if let Some(value) = source.get("context") {
-        if let Some(values) = value.as_array() {
-            context.extend(values.iter().filter_map(|item| {
-                item.as_str()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToString::to_string)
-            }));
-        } else if let Some(item) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-        {
-            context.push(item.to_string());
+    impl Default for CompactionHookPayloadEnvelopeWire {
+        fn default() -> Self {
+            Self::Body(CompactionHookPayloadWire::default())
         }
     }
 
-    (prompt, context)
+    let envelope =
+        serde_json::from_value::<CompactionHookPayloadEnvelopeWire>(payload.clone())
+            .unwrap_or_default();
+    match envelope {
+        CompactionHookPayloadEnvelopeWire::Data { data } => (data.prompt, data.context),
+        CompactionHookPayloadEnvelopeWire::Output { output } => (output.prompt, output.context),
+        CompactionHookPayloadEnvelopeWire::Body(body) => (body.prompt, body.context),
+        CompactionHookPayloadEnvelopeWire::Text(text) => {
+            let trimmed = text.trim();
+            let prompt = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            (prompt, Vec::new())
+        }
+    }
 }
 
 fn resolve_compaction_prompt(
@@ -1574,13 +1578,20 @@ mod tests {
         });
         let (text, metadata) = summary_text.expect("summary text part should be persisted");
         assert_eq!(text, "summary from stream");
-        assert_eq!(
-            metadata
-                .as_ref()
-                .and_then(|map| map.get("summary"))
-                .and_then(|value| value.as_bool()),
-            Some(true)
-        );
+        #[derive(Debug, Deserialize, Default)]
+        struct SummaryPartMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            summary: Option<bool>,
+        }
+
+        let summary_flag = metadata
+            .as_ref()
+            .map(|map| rocode_types::parse_map_lossy::<SummaryPartMetadataWire>(map).summary)
+            .flatten();
+        assert_eq!(summary_flag, Some(true));
 
         let message_updates = ops.message_updates().await;
         let has_completed_summary_message = message_updates.iter().any(|info| match info {

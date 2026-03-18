@@ -579,6 +579,7 @@ pub async fn trigger_session_event(event: HookEvent, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[tokio::test]
     async fn hook_new_supports_unit_result() {
@@ -622,10 +623,16 @@ mod tests {
             .payload
             .as_ref()
             .expect("payload should be present");
-        assert_eq!(
-            payload.get("prompt").and_then(|v| v.as_str()),
-            Some("override")
-        );
+
+        #[derive(Debug, Default, Deserialize)]
+        struct HookPayloadWire {
+            #[serde(default)]
+            prompt: Option<String>,
+        }
+
+        let wire =
+            serde_json::from_value::<HookPayloadWire>(payload.clone()).expect("valid hook payload");
+        assert_eq!(wire.prompt.as_deref(), Some("override"));
     }
 
     #[tokio::test]

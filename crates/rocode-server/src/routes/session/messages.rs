@@ -347,17 +347,63 @@ fn message_to_info(
     let mut metadata = message.metadata.clone();
     augment_scheduler_decision_metadata_for_response(&mut metadata, message);
     let usage = message.usage.clone().unwrap_or_default();
-    let model_id = message
-        .metadata
-        .get("model_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let model_provider = message
-        .metadata
-        .get("model_provider")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let model = match (model_provider.as_deref(), model_id.as_deref()) {
+
+    fn deserialize_opt_f64_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<f64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::Number(value)) => value.as_f64(),
+            Some(serde_json::Value::String(raw)) => raw.trim().parse::<f64>().ok(),
+            Some(serde_json::Value::Bool(value)) => Some(if value { 1.0 } else { 0.0 }),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct MessageInfoMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        model_id: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        model_provider: Option<String>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
+        completed_at: Option<i64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        agent: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        mode: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        finish_reason: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        error: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
+        cost: Option<f64>,
+    }
+
+    let meta: MessageInfoMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+    let model = match (meta.model_provider.as_deref(), meta.model_id.as_deref()) {
         (Some(provider), Some(model)) => Some(format!("{}/{}", provider, model)),
         (None, Some(model)) => Some(model.to_string()),
         _ => None,
@@ -365,11 +411,7 @@ fn message_to_info(
     let cost = if usage.total_cost > 0.0 {
         usage.total_cost
     } else {
-        message
-            .metadata
-            .get("cost")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
+        meta.cost.unwrap_or(0.0)
     };
 
     MessageInfo {
@@ -382,33 +424,12 @@ fn message_to_info(
             .map(|part| part_to_info(part, tool_names, pending_questions))
             .collect(),
         created_at: message.created_at.timestamp_millis(),
-        completed_at: message
-            .metadata
-            .get("completed_at")
-            .and_then(|v| v.as_i64()),
-        agent: message
-            .metadata
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        completed_at: meta.completed_at,
+        agent: meta.agent.clone(),
         model,
-        mode: message
-            .metadata
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        finish: message.finish.clone().or_else(|| {
-            message
-                .metadata
-                .get("finish_reason")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        }),
-        error: message
-            .metadata
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        mode: meta.mode,
+        finish: message.finish.clone().or(meta.finish_reason),
+        error: meta.error,
         cost,
         tokens: MessageTokensInfo {
             input: usage.input_tokens,
@@ -442,10 +463,17 @@ fn augment_scheduler_decision_metadata_for_response(
     if metadata.contains_key("scheduler_decision_title") {
         return;
     }
-    let Some(stage) = metadata
-        .get("scheduler_stage")
-        .and_then(|value| value.as_str())
-    else {
+    #[derive(Debug, Default, Deserialize)]
+    struct SchedulerStageMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage: Option<String>,
+    }
+
+    let meta: SchedulerStageMetadataWire = rocode_types::parse_map_lossy(metadata);
+    let Some(stage) = meta.scheduler_stage.as_deref() else {
         return;
     };
     let text = assistant_visible_text(message);

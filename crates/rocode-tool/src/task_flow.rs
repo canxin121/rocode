@@ -82,7 +82,7 @@ struct TaskFlowInput {
     limit: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct TaskFlowTaskView {
     task_id: String,
@@ -105,10 +105,12 @@ struct TaskFlowTaskView {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct TaskFlowModelView {
+    #[serde(alias = "providerID", alias = "provider_id")]
     provider_id: String,
+    #[serde(alias = "modelID", alias = "model_id")]
     model_id: String,
 }
 
@@ -304,13 +306,40 @@ async fn execute_delegate(
         .execute(serde_json::Value::Object(task_args), ctx)
         .await?;
 
-    let agent_task_id = delegated_metadata_string(&delegated.metadata, "agentTaskId")?;
-    let session_id = delegated_metadata_string(&delegated.metadata, "sessionId")?;
-    let has_text_output = delegated
-        .metadata
-        .get("hasTextOutput")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DelegatedTaskMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        agent_task_id: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        session_id: Option<String>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_bool_lossy")]
+        has_text_output: Option<bool>,
+        #[serde(default)]
+        model: Option<TaskFlowModelView>,
+        #[serde(default)]
+        loaded_skills: Option<serde_json::Value>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        loaded_skill_count: Option<u64>,
+    }
+
+    let delegated_meta: DelegatedTaskMetadataWire = rocode_types::parse_map_lossy(&delegated.metadata);
+    let agent_task_id = delegated_meta
+        .agent_task_id
+        .ok_or_else(|| ToolError::ExecutionError("delegated task metadata missing `agentTaskId`".to_string()))?;
+    let session_id = delegated_meta
+        .session_id
+        .ok_or_else(|| ToolError::ExecutionError("delegated task metadata missing `sessionId`".to_string()))?;
+    let has_text_output = delegated_meta.has_text_output.unwrap_or(false);
     let task = global_task_registry().get(&agent_task_id).ok_or_else(|| {
         ToolError::ExecutionError(format!(
             "delegated task `{}` completed but could not be reloaded from agent task registry",
@@ -330,65 +359,53 @@ async fn execute_delegate(
         serde_json::json!(operation.as_str()),
     );
     metadata.insert("delegated".to_string(), serde_json::json!(true));
-    metadata.insert("agentTaskId".to_string(), serde_json::json!(agent_task_id));
-    metadata.insert("sessionId".to_string(), serde_json::json!(session_id));
+    metadata.insert(
+        "agentTaskId".to_string(),
+        serde_json::Value::String(agent_task_id.clone()),
+    );
+    metadata.insert(
+        "sessionId".to_string(),
+        serde_json::Value::String(session_id.clone()),
+    );
     metadata.insert(
         "hasTextOutput".to_string(),
         serde_json::json!(has_text_output),
     );
     metadata.insert("todoSynced".to_string(), serde_json::json!(todo_synced));
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
-    if let Some(model) = delegated.metadata.get("model").and_then(parse_model_view) {
+    if let Some(model) = delegated_meta.model {
         metadata.insert("model".to_string(), serde_json::to_value(model).unwrap());
     }
-    if let Some(loaded_skills) = delegated.metadata.get("loadedSkills") {
-        metadata.insert("loadedSkills".to_string(), loaded_skills.clone());
+    if let Some(loaded_skills) = delegated_meta.loaded_skills {
+        metadata.insert("loadedSkills".to_string(), loaded_skills);
     }
-    if let Some(loaded_skill_count) = delegated.metadata.get("loadedSkillCount") {
-        metadata.insert("loadedSkillCount".to_string(), loaded_skill_count.clone());
+    if let Some(loaded_skill_count) = delegated_meta.loaded_skill_count {
+        metadata.insert(
+            "loadedSkillCount".to_string(),
+            serde_json::json!(loaded_skill_count),
+        );
     }
     metadata.insert(
         "display.summary".to_string(),
         serde_json::json!(format!(
             "Delegated {} task {} via session {}",
             operation.as_str(),
-            metadata["agentTaskId"].as_str().unwrap_or_default(),
-            metadata["sessionId"].as_str().unwrap_or_default()
+            agent_task_id,
+            session_id
         )),
     );
 
     Ok(ToolResult {
-        title: format!(
-            "{} Task {}",
-            title_case(operation.as_str()),
-            metadata["agentTaskId"].as_str().unwrap_or_default()
-        ),
+        title: format!("{} Task {}", title_case(operation.as_str()), agent_task_id),
         output: render_delegated_task_output(
             operation.as_str(),
-            metadata["agentTaskId"].as_str().unwrap_or_default(),
-            metadata["sessionId"].as_str().unwrap_or_default(),
+            &agent_task_id,
+            &session_id,
             &view.status,
             &delegated.output,
         ),
         metadata,
         truncated: delegated.truncated,
-    })
-}
-
-fn delegated_metadata_string(metadata: &Metadata, key: &str) -> Result<String, ToolError> {
-    metadata
-        .get(key)
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
-        .ok_or_else(|| {
-            ToolError::ExecutionError(format!("delegated task metadata missing `{}`", key))
-        })
-}
-
-fn parse_model_view(value: &serde_json::Value) -> Option<TaskFlowModelView> {
-    Some(TaskFlowModelView {
-        provider_id: value.get("providerID")?.as_str()?.to_string(),
-        model_id: value.get("modelID")?.as_str()?.to_string(),
     })
 }
 
@@ -807,6 +824,7 @@ fn validate_task_status_filter(status: &str) -> Result<(), ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1208,18 +1226,26 @@ mod tests {
             .iter()
             .find(|req| req.permission == "task_flow")
             .expect("task_flow permission request should exist");
-        assert_eq!(
-            task_flow_request.metadata.get("operation"),
-            Some(&serde_json::json!("create"))
-        );
-        assert_eq!(
-            task_flow_request.metadata.get("agent"),
-            Some(&serde_json::json!("build"))
-        );
-        assert_eq!(
-            task_flow_request.metadata.get("sync_todo"),
-            Some(&serde_json::json!(true))
-        );
+        #[derive(Debug, Deserialize, Default)]
+        struct TaskFlowPermissionMetadataWire {
+            #[serde(default)]
+            operation: Option<String>,
+            #[serde(default)]
+            agent: Option<String>,
+            #[serde(
+                default,
+                alias = "syncTodo",
+                alias = "sync_todo",
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            sync_todo: Option<bool>,
+        }
+
+        let metadata: TaskFlowPermissionMetadataWire =
+            rocode_types::parse_map_lossy(&task_flow_request.metadata);
+        assert_eq!(metadata.operation.as_deref(), Some("create"));
+        assert_eq!(metadata.agent.as_deref(), Some("build"));
+        assert_eq!(metadata.sync_todo, Some(true));
     }
 
     #[tokio::test]

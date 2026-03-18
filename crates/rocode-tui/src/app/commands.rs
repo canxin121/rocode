@@ -245,20 +245,30 @@ impl App {
                                 );
                             }
                             Ok(value) => {
-                                let message = value
-                                    .get("target")
-                                    .and_then(|value| value.as_str())
-                                    .map(|target| match target {
-                                        "stage" => {
-                                            let stage = value
-                                                .get("stage")
-                                                .and_then(|value| value.as_str())
-                                                .unwrap_or("current stage");
-                                            format!("Stage cancellation requested: {}", stage)
-                                        }
-                                        _ => "Run cancellation requested".to_string(),
-                                    })
-                                    .unwrap_or_else(|| "Run cancellation requested".to_string());
+                                #[derive(Debug, serde::Deserialize, Default)]
+                                struct AbortSessionResponseWire {
+                                    #[serde(
+                                        default,
+                                        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                                    )]
+                                    target: Option<String>,
+                                    #[serde(
+                                        default,
+                                        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                                    )]
+                                    stage: Option<String>,
+                                }
+
+                                let wire: AbortSessionResponseWire =
+                                    rocode_types::parse_value_lossy(&value);
+                                let message = match wire.target.as_deref() {
+                                    Some("stage") => {
+                                        let stage =
+                                            wire.stage.as_deref().unwrap_or("current stage");
+                                        format!("Stage cancellation requested: {}", stage)
+                                    }
+                                    _ => "Run cancellation requested".to_string(),
+                                };
                                 self.toast.show(ToastVariant::Info, &message, 3000);
                             }
                         }

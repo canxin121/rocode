@@ -133,11 +133,20 @@ impl ToolRegistryAdapter {
             base_ctx.ask = Some(callback.clone());
         }
 
-        base_ctx.call_id = exec_ctx
-            .metadata
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct ExecCtxMetadataWire {
+            #[serde(default, alias = "callId", alias = "callID")]
+            call_id: Option<String>,
+        }
+
+        let wire: ExecCtxMetadataWire = serde_json::to_value(&exec_ctx.metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<ExecCtxMetadataWire>(value).ok())
+            .unwrap_or_default();
+        base_ctx.call_id = wire
+            .call_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         base_ctx.extra = exec_ctx.metadata.clone();
 
         attach_subsession_callbacks(

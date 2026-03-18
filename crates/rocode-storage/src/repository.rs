@@ -1245,14 +1245,23 @@ mod tests {
         session_repo.upsert(&session).await.unwrap();
 
         let loaded = session_repo.get("s_meta").await.unwrap().unwrap();
-        assert_eq!(
-            loaded.metadata.get("scheduler_profile"),
-            Some(&serde_json::json!("sisyphus"))
-        );
-        assert_eq!(
-            loaded.metadata.get("scheduler_applied"),
-            Some(&serde_json::json!(true))
-        );
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SessionMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_profile: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            scheduler_applied: Option<bool>,
+        }
+
+        let metadata: SessionMetadataWire = rocode_types::parse_map_lossy(&loaded.metadata);
+        assert_eq!(metadata.scheduler_profile.as_deref(), Some("sisyphus"));
+        assert_eq!(metadata.scheduler_applied, Some(true));
     }
 
     #[tokio::test]
@@ -1279,18 +1288,35 @@ mod tests {
         message_repo.create(&message).await.unwrap();
 
         let loaded = message_repo.get("m_meta").await.unwrap().unwrap();
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct MessageMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            resolved_system_prompt: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            resolved_scheduler_profile: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            mode: Option<String>,
+        }
+
+        let metadata: MessageMetadataWire = rocode_types::parse_map_lossy(&loaded.metadata);
         assert_eq!(
-            loaded.metadata.get("resolved_system_prompt"),
-            Some(&serde_json::json!("You are Sisyphus"))
+            metadata.resolved_system_prompt.as_deref(),
+            Some("You are Sisyphus")
         );
         assert_eq!(
-            loaded.metadata.get("resolved_scheduler_profile"),
-            Some(&serde_json::json!("sisyphus"))
+            metadata.resolved_scheduler_profile.as_deref(),
+            Some("sisyphus")
         );
-        assert_eq!(
-            loaded.metadata.get("mode"),
-            Some(&serde_json::json!("sisyphus"))
-        );
+        assert_eq!(metadata.mode.as_deref(), Some("sisyphus"));
     }
 
     #[tokio::test]

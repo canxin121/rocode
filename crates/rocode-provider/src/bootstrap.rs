@@ -2234,11 +2234,16 @@ fn collect_provider_headers(provider: &ProviderState) -> HashMap<String, String>
         headers.extend(model.headers.clone());
     }
 
-    if let Some(serde_json::Value::Object(map)) = provider.options.get("headers") {
-        for (key, value) in map {
-            if let Some(s) = value.as_str() {
-                headers.insert(key.clone(), s.to_string());
-            }
+    #[derive(Debug, Deserialize, Default)]
+    struct ProviderOptionsWire {
+        #[serde(default)]
+        headers: serde_json::Map<String, serde_json::Value>,
+    }
+
+    let options: ProviderOptionsWire = rocode_types::parse_map_lossy(&provider.options);
+    for (key, value) in options.headers {
+        if let Some(s) = value.as_str() {
+            headers.insert(key, s.to_string());
         }
     }
 

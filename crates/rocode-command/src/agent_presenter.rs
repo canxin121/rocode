@@ -965,7 +965,92 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use rocode_agent::AgentToolOutput;
+    use serde::Deserialize;
     use std::collections::HashMap;
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebDisplayWire {
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        header: Option<String>,
+        #[serde(default)]
+        preview: Option<WebPreviewWire>,
+        #[serde(default)]
+        fields: Vec<WebFieldWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebPreviewWire {
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebFieldWire {
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        value: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebInteractionWire {
+        #[serde(default)]
+        status: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebDecisionWire {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        fields: Vec<WebFieldWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebStructuredWire {
+        #[serde(default, rename = "type")]
+        kind: Option<String>,
+        #[serde(default)]
+        file_path: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct WebBlockWire {
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        phase: Option<String>,
+        #[serde(default)]
+        role: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        position: Option<u64>,
+        #[serde(default)]
+        event: Option<String>,
+        #[serde(default)]
+        fields: Vec<WebFieldWire>,
+        #[serde(default)]
+        display: Option<WebDisplayWire>,
+        #[serde(default)]
+        decision: Option<WebDecisionWire>,
+        #[serde(default)]
+        interaction: Option<WebInteractionWire>,
+        #[serde(default)]
+        available_skill_count: Option<u64>,
+        #[serde(default)]
+        active_agents: Vec<String>,
+        #[serde(default)]
+        prompt_tokens: Option<u64>,
+        #[serde(default)]
+        completion_tokens: Option<u64>,
+        #[serde(default)]
+        structured: Option<WebStructuredWire>,
+    }
 
     #[test]
     fn maps_render_events_to_blocks() {
@@ -1022,39 +1107,35 @@ mod tests {
     #[test]
     fn converts_output_block_to_web_shape() {
         let block = OutputBlock::Message(MessageBlock::delta(MessageRole::Assistant, "hello"));
-        let web = output_block_to_web(&block);
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("message"));
-        assert_eq!(web.get("phase").and_then(|v| v.as_str()), Some("delta"));
-        assert_eq!(web.get("role").and_then(|v| v.as_str()), Some("assistant"));
+        let web_value = output_block_to_web(&block);
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("message"));
+        assert_eq!(web.phase.as_deref(), Some("delta"));
+        assert_eq!(web.role.as_deref(), Some("assistant"));
     }
 
     #[test]
     fn queue_item_block_to_web_shape() {
-        let web = output_block_to_web(&OutputBlock::QueueItem(
+        let web_value = output_block_to_web(&OutputBlock::QueueItem(
             crate::output_blocks::QueueItemBlock {
                 position: 4,
                 text: "finish docs sync".to_string(),
             },
         ));
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("queue_item"));
+        assert_eq!(web.position, Some(4));
         assert_eq!(
-            web.get("kind").and_then(|value| value.as_str()),
-            Some("queue_item")
-        );
-        assert_eq!(
-            web.get("position").and_then(|value| value.as_u64()),
-            Some(4)
-        );
-        assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("summary"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.summary.as_deref()),
             Some("Queued [4] finish docs sync")
         );
     }
 
     #[test]
     fn scheduler_stage_web_shape_includes_decision_block() {
-        let web = output_block_to_web(&OutputBlock::SchedulerStage(Box::new(
+        let web_value = output_block_to_web(&OutputBlock::SchedulerStage(Box::new(
             SchedulerStageBlock {
                 stage_id: None,
                 profile: Some("atlas".to_string()),
@@ -1100,50 +1181,26 @@ mod tests {
                 child_session_id: None,
             },
         )));
-        assert_eq!(
-            web.get("kind").and_then(|value| value.as_str()),
-            Some("scheduler_stage")
-        );
-        let decision = web.get("decision").expect("decision should exist");
-        assert_eq!(
-            web.get("available_skill_count")
-                .and_then(|value| value.as_u64()),
-            Some(4)
-        );
-        assert_eq!(
-            web.get("active_agents")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
-            Some("build")
-        );
-        assert_eq!(
-            web.get("prompt_tokens").and_then(|value| value.as_u64()),
-            Some(1200)
-        );
-        assert_eq!(
-            web.get("completion_tokens")
-                .and_then(|value| value.as_u64()),
-            Some(320)
-        );
-        assert_eq!(
-            decision.get("title").and_then(|value| value.as_str()),
-            Some("Decision")
-        );
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("scheduler_stage"));
+        let decision = web.decision.expect("decision should exist");
+        assert_eq!(web.available_skill_count, Some(4));
+        assert_eq!(web.active_agents.first().map(String::as_str), Some("build"));
+        assert_eq!(web.prompt_tokens, Some(1200));
+        assert_eq!(web.completion_tokens, Some(320));
+        assert_eq!(decision.title.as_deref(), Some("Decision"));
         assert_eq!(
             decision
-                .get("fields")
-                .and_then(|value| value.as_array())
-                .and_then(|fields| fields.first())
-                .and_then(|field| field.get("label"))
-                .and_then(|value| value.as_str()),
+                .fields
+                .first()
+                .and_then(|field| field.label.as_deref()),
             Some("Outcome")
         );
     }
 
     #[test]
     fn render_agent_event_to_web_includes_tool_id() {
-        let web = render_agent_event_to_web(
+        let web_value = render_agent_event_to_web(
             AgentRenderEvent::ToolStart {
                 id: "tool_123".to_string(),
                 name: "read".to_string(),
@@ -1151,13 +1208,14 @@ mod tests {
             AgentPresenterConfig::default(),
         )
         .expect("tool event should produce web block");
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("tool"));
-        assert_eq!(web.get("id").and_then(|v| v.as_str()), Some("tool_123"));
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("tool"));
+        assert_eq!(web.id.as_deref(), Some("tool_123"));
     }
 
     #[test]
     fn history_tool_result_to_web_preserves_tool_id() {
-        let web = history_tool_result_to_web(
+        let web_value = history_tool_result_to_web(
             "call_123",
             "bash",
             Some("stdout"),
@@ -1165,8 +1223,9 @@ mod tests {
             false,
             &HashMap::new(),
         );
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("tool"));
-        assert_eq!(web.get("id").and_then(|v| v.as_str()), Some("call_123"));
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("tool"));
+        assert_eq!(web.id.as_deref(), Some("call_123"));
     }
 
     #[test]
@@ -1178,7 +1237,7 @@ mod tests {
             json!([{ "key": "Scope", "value": "Proceed" }]),
         );
 
-        let web = history_tool_result_to_web(
+        let web_value = history_tool_result_to_web(
             "call_question_1",
             "question",
             Some("User response received"),
@@ -1187,19 +1246,18 @@ mod tests {
             &metadata,
         );
 
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
         assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("summary"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.summary.as_deref()),
             Some("1 question answered")
         );
         assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("fields"))
-                .and_then(|value| value.as_array())
-                .and_then(|fields| fields.first())
-                .and_then(|field| field.get("label"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.fields.first())
+                .and_then(|field| field.label.as_deref()),
             Some("Scope")
         );
     }
@@ -1216,7 +1274,7 @@ mod tests {
         );
         metadata.insert("count".to_string(), json!(2));
 
-        let web = history_tool_result_to_web(
+        let web_value = history_tool_result_to_web(
             "call_todo_1",
             "todo_write",
             Some("Updated Todo List (2 items)"),
@@ -1225,58 +1283,45 @@ mod tests {
             &metadata,
         );
 
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
         assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("summary"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.summary.as_deref()),
             Some("Updated Todo List (2 items)")
         );
         assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("preview"))
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.preview.as_ref())
+                .and_then(|preview| preview.text.as_deref()),
             Some("- [pending] Add tests\n- [completed] Refactor server route")
         );
     }
 
     #[test]
     fn history_session_event_to_web_serializes_event_card() {
-        let web = history_session_event_to_web(
+        let web_value = history_session_event_to_web(
             "subtask",
             "Subtask · inspect scheduler",
             Some("pending"),
             Some("Subtask `task_1` is `pending`.".to_string()),
             vec![
                 ("ID".to_string(), "task_1".to_string(), None),
-                (
-                    "Description".to_string(),
-                    "inspect scheduler".to_string(),
-                    None,
-                ),
+                ("Description".to_string(), "inspect scheduler".to_string(), None),
             ],
             None,
         );
 
-        assert_eq!(
-            web.get("kind").and_then(|value| value.as_str()),
-            Some("session_event")
-        );
-        assert_eq!(
-            web.get("event").and_then(|value| value.as_str()),
-            Some("subtask")
-        );
-        assert_eq!(
-            web.get("fields")
-                .and_then(|value| value.as_array())
-                .map(|fields| fields.len()),
-            Some(2)
-        );
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
+        assert_eq!(web.kind.as_deref(), Some("session_event"));
+        assert_eq!(web.event.as_deref(), Some("subtask"));
+        assert_eq!(web.fields.len(), 2);
     }
 
     #[test]
     fn history_question_result_to_web_marks_answered_interaction() {
-        let web = history_tool_result_to_web(
+        let web_value = history_tool_result_to_web(
             "call_question_2",
             "question",
             Some("User response received"),
@@ -1284,10 +1329,11 @@ mod tests {
             false,
             &HashMap::new(),
         );
+        let web: WebBlockWire = serde_json::from_value(web_value).expect("valid web block");
         assert_eq!(
-            web.get("interaction")
-                .and_then(|value| value.get("status"))
-                .and_then(|value| value.as_str()),
+            web.interaction
+                .as_ref()
+                .and_then(|interaction| interaction.status.as_deref()),
             Some("answered")
         );
     }
@@ -1606,28 +1652,21 @@ mod tests {
         .unwrap();
 
         let web = output_block_to_web(&block);
-        let structured = web
-            .get("structured")
-            .expect("web output should have structured");
+        let web: WebBlockWire = serde_json::from_value(web).expect("valid web block");
+        let structured = web.structured.expect("web output should have structured");
+        assert_eq!(structured.kind.as_deref(), Some("file_edit"));
+        assert_eq!(structured.file_path.as_deref(), Some("/src/main.rs"));
         assert_eq!(
-            structured.get("type").and_then(|v| v.as_str()),
-            Some("file_edit")
-        );
-        assert_eq!(
-            structured.get("file_path").and_then(|v| v.as_str()),
-            Some("/src/main.rs")
-        );
-        assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("header"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.header.as_deref()),
             Some("Edit(/src/main.rs)")
         );
         assert_eq!(
-            web.get("display")
-                .and_then(|value| value.get("preview"))
-                .and_then(|value| value.get("kind"))
-                .and_then(|value| value.as_str()),
+            web.display
+                .as_ref()
+                .and_then(|display| display.preview.as_ref())
+                .and_then(|preview| preview.kind.as_deref()),
             Some("diff")
         );
     }

@@ -71,17 +71,33 @@ impl ExecutionRecord {
     /// The protocol shape is defined in `rocode-command::stage_protocol` so
     /// that CLI, TUI, and Web can consume it without depending on server internals.
     pub fn to_node(&self) -> ExecutionNode {
+        #[derive(Debug, Default, Deserialize)]
+        struct ExecutionRecordMetadataWire {
+            #[serde(
+                default,
+                alias = "scheduler_stage_id",
+                alias = "schedulerStageId",
+                alias = "stage_id",
+                alias = "stageId"
+            )]
+            scheduler_stage_id: Option<String>,
+            #[serde(default, alias = "child_session_id", alias = "childSessionId")]
+            child_session_id: Option<String>,
+        }
+
+        let meta: ExecutionRecordMetadataWire = self
+            .metadata
+            .as_ref()
+            .map(rocode_types::parse_value_lossy)
+            .unwrap_or_default();
+        let stage_id = self.stage_id.clone().or(meta.scheduler_stage_id);
+        let child_session_id = meta.child_session_id;
+
         ExecutionNode {
             execution_id: self.id.clone(),
             parent_execution_id: self.parent_id.clone(),
             // Prefer first-class field; fall back to metadata for backward compat.
-            stage_id: self.stage_id.clone().or_else(|| {
-                self.metadata
-                    .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_id"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            }),
+            stage_id,
             kind: match self.kind {
                 ExecutionKind::SchedulerStage => ExecutionNodeKind::Stage,
                 ExecutionKind::AgentTask => ExecutionNodeKind::Agent,
@@ -102,12 +118,7 @@ impl ExecutionRecord {
             started_at: self.started_at,
             updated_at: self.updated_at,
             session_id: self.session_id.clone(),
-            child_session_id: self
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("child_session_id"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            child_session_id,
         }
     }
 }
@@ -307,22 +318,34 @@ impl RuntimeControlRegistry {
                     | ExecutionStatus::Waiting
                     | ExecutionStatus::Cancelling => SessionRunStatus::Busy,
                     ExecutionStatus::Retry => {
-                        let metadata = record.metadata.as_ref();
+                        #[derive(Debug, Default, Deserialize)]
+                        struct RetryMetadataWire {
+                            #[serde(
+                                default,
+                                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                            )]
+                            attempt: Option<u64>,
+                            #[serde(
+                                default,
+                                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                            )]
+                            message: Option<String>,
+                            #[serde(
+                                default,
+                                deserialize_with = "rocode_types::deserialize_opt_i64_lossy"
+                            )]
+                            next: Option<i64>,
+                        }
+
+                        let metadata: RetryMetadataWire = record
+                            .metadata
+                            .as_ref()
+                            .map(rocode_types::parse_value_lossy)
+                            .unwrap_or_default();
                         SessionRunStatus::Retry {
-                            attempt: metadata
-                                .and_then(|value| value.get("attempt"))
-                                .and_then(|value| value.as_u64())
-                                .map(|value| value as u32)
-                                .unwrap_or(1),
-                            message: metadata
-                                .and_then(|value| value.get("message"))
-                                .and_then(|value| value.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            next: metadata
-                                .and_then(|value| value.get("next"))
-                                .and_then(|value| value.as_i64())
-                                .unwrap_or_default(),
+                            attempt: metadata.attempt.unwrap_or(1) as u32,
+                            message: metadata.message.unwrap_or_default(),
+                            next: metadata.next.unwrap_or_default(),
                         }
                     }
                     // Done is filtered out above, but satisfy exhaustiveness.

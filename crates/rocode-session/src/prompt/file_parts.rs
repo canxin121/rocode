@@ -271,16 +271,14 @@ impl SessionPrompt {
     }
 
     pub(super) fn loaded_instruction_paths(msg: &SessionMessage) -> HashSet<String> {
-        msg.metadata
-            .get("loaded_instruction_files")
-            .and_then(|value| value.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct LoadedInstructionMetadataWire {
+            #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+            loaded_instruction_files: Vec<String>,
+        }
+
+        let meta: LoadedInstructionMetadataWire = rocode_types::parse_map_lossy(&msg.metadata);
+        meta.loaded_instruction_files.into_iter().collect()
     }
 
     pub(super) fn store_loaded_instruction_paths(

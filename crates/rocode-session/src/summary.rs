@@ -577,6 +577,7 @@ mod tests {
     use rocode_provider::{
         ChatRequest, ChatResponse, Choice, ModelInfo, ProviderError, StreamResult, Usage,
     };
+    use serde::Deserialize;
 
     struct MockProvider {
         model: ModelInfo,
@@ -825,13 +826,17 @@ mod tests {
         let updated = session
             .get_message(&message_id)
             .expect("message should still exist");
-        assert_eq!(
-            updated
-                .metadata
-                .get("summary_title")
-                .and_then(|value| value.as_str()),
-            Some("Summary Pipeline")
-        );
+        #[derive(Debug, Deserialize, Default)]
+        struct SummaryTitleMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            summary_title: Option<String>,
+        }
+
+        let metadata: SummaryTitleMetadataWire = rocode_types::parse_map_lossy(&updated.metadata);
+        assert_eq!(metadata.summary_title.as_deref(), Some("Summary Pipeline"));
         assert!(updated.metadata.contains_key("summary_diffs"));
     }
 
@@ -870,10 +875,19 @@ mod tests {
         let updated = session
             .get_message(&message_id)
             .expect("message should still exist");
-        let title = updated
-            .metadata
-            .get("summary_title")
-            .and_then(|value| value.as_str())
+        #[derive(Debug, Deserialize, Default)]
+        struct SummaryTitleMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            summary_title: Option<String>,
+        }
+
+        let metadata: SummaryTitleMetadataWire = rocode_types::parse_map_lossy(&updated.metadata);
+        let title = metadata
+            .summary_title
+            .as_deref()
             .expect("summary_title should be present");
         assert!(title.chars().count() <= 100);
         assert!(title.ends_with("..."));

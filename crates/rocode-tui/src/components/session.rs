@@ -615,17 +615,27 @@ impl SessionView {
                     let message_bg = user_bg;
                     let message_border = user_border_color_for_agent(msg.agent.as_deref(), &theme);
                     let show_system_prompt = !rendered_first_system_prompt
-                        && msg
-                            .metadata
-                            .as_ref()
-                            .and_then(|metadata| {
-                                metadata
-                                    .get("resolved_system_prompt_preview")
-                                    .or_else(|| metadata.get("resolved_system_prompt"))
-                            })
-                            .and_then(|value| value.as_str())
-                            .map(|value| !value.trim().is_empty())
-                            .unwrap_or(false);
+                        && msg.metadata.as_ref().is_some_and(|metadata| {
+                            #[derive(Debug, serde::Deserialize, Default)]
+                            struct SystemPromptMetadataWire {
+                                #[serde(
+                                    default,
+                                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                                )]
+                                resolved_system_prompt_preview: Option<String>,
+                                #[serde(
+                                    default,
+                                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                                )]
+                                resolved_system_prompt: Option<String>,
+                            }
+
+                            let wire: SystemPromptMetadataWire =
+                                rocode_types::parse_map_lossy(metadata);
+                            wire.resolved_system_prompt_preview
+                                .or(wire.resolved_system_prompt)
+                                .is_some()
+                        });
                     let user_lines = super::session_message::render_user_message(
                         msg,
                         &theme,

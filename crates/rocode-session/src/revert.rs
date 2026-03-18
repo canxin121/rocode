@@ -222,32 +222,43 @@ impl RevertManager {
         let mut to_snapshot: Option<String> = None;
 
         for msg in messages {
+            #[derive(Debug, Deserialize, Default)]
+            struct SnapshotMetadataWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                step_start_snapshot: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                step_finish_snapshot: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                snapshot: Option<String>,
+            }
+
+            let SnapshotMetadataWire {
+                step_start_snapshot,
+                step_finish_snapshot,
+                snapshot,
+            } = rocode_types::parse_map_lossy(&msg.metadata);
+
             // Check message-level metadata for snapshot hashes
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_start_snapshot")
-                {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
-                }
+                from_snapshot = step_start_snapshot.or(snapshot);
             }
-            if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_finish_snapshot") {
-                if !s.is_empty() {
-                    to_snapshot = Some(s.clone());
-                }
+            if let Some(finish) = step_finish_snapshot {
+                to_snapshot = Some(finish);
             }
 
             // Also scan parts: StepStart / StepFinish carry id+name / id+output,
             // but the metadata on the *message* is the canonical place for snapshots
             // in the v1 format. We also check part-level metadata stored in the
             // message metadata under "snapshot" as a generic key.
-            if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("snapshot") {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
-                }
-            }
         }
 
         if let (Some(ref from), Some(ref to)) = (&from_snapshot, &to_snapshot) {

@@ -1,4 +1,5 @@
 use crate::Metadata;
+use serde::Deserialize;
 
 pub(crate) fn collect_attachments_from_metadata(metadata: &Metadata) -> Vec<serde_json::Value> {
     let mut attachments = Vec::new();
@@ -9,18 +10,28 @@ pub(crate) fn collect_attachments_from_metadata(metadata: &Metadata) -> Vec<serd
         }
     };
 
-    if let Some(value) = metadata.get("attachments") {
+    #[derive(Debug, Deserialize, Default)]
+    struct AttachmentMetadataWire {
+        #[serde(default)]
+        attachments: Option<serde_json::Value>,
+        #[serde(default)]
+        attachment: Option<serde_json::Value>,
+    }
+
+    let wire: AttachmentMetadataWire = rocode_types::parse_map_lossy(metadata);
+
+    if let Some(value) = wire.attachments {
         match value {
             serde_json::Value::Array(array) => {
                 for item in array {
-                    push_unique(item.clone());
+                    push_unique(item);
                 }
             }
-            other => push_unique(other.clone()),
+            other => push_unique(other),
         }
     }
-    if let Some(value) = metadata.get("attachment") {
-        push_unique(value.clone());
+    if let Some(value) = wire.attachment {
+        push_unique(value);
     }
     attachments
 }
@@ -80,7 +91,14 @@ mod tests {
         );
 
         let sanitized = strip_attachments_from_metadata(&metadata);
-        assert_eq!(sanitized.get("foo").and_then(|v| v.as_str()), Some("bar"));
+        #[derive(Debug, Deserialize, Default)]
+        struct FooWire {
+            #[serde(default)]
+            foo: Option<String>,
+        }
+
+        let wire: FooWire = rocode_types::parse_map_lossy(&sanitized);
+        assert_eq!(wire.foo.as_deref(), Some("bar"));
         assert!(!sanitized.contains_key("attachments"));
         assert!(!sanitized.contains_key("attachment"));
     }

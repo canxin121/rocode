@@ -121,13 +121,17 @@ pub(crate) async fn stream_message(
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-        req.variant.clone().or_else(|| {
-            session
-                .metadata
-                .get("model_variant")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
-        })
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct VariantMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_variant: Option<String>,
+        }
+
+        let meta: VariantMetadataWire = rocode_types::parse_map_lossy(&session.metadata);
+        req.variant.clone().or(meta.model_variant)
     };
 
     let config = state.config_store.config();
@@ -288,11 +292,20 @@ pub(crate) async fn stream_message(
                 let sse_tx = sse_tx.clone();
                 let event_hook: QuestionEventHook = Arc::new(move |payload| {
                     let sse_tx = sse_tx.clone();
-                    let event_name = payload
-                        .get("type")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("question.event")
-                        .to_string();
+                    #[derive(Debug, serde::Deserialize, Default)]
+                    struct QuestionEventWire {
+                        #[serde(
+                            default,
+                            rename = "type",
+                            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                        )]
+                        event_type: Option<String>,
+                    }
+
+                    let wire: QuestionEventWire = rocode_types::parse_value_lossy(&payload);
+                    let event_name = wire
+                        .event_type
+                        .unwrap_or_else(|| "question.event".to_string());
                     tokio::spawn(async move {
                         if let Ok(event) = Event::default().event(&event_name).json_data(payload) {
                             let _ = sse_tx.send(Ok(event)).await;

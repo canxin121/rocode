@@ -728,11 +728,24 @@ pub(super) fn detect_tool(value: &Value, schemas: &[ToolSchema]) -> Option<Strin
     let obj = value.as_object()?;
 
     // Direct name field takes priority
-    if let Some(name_val) = obj.get("name").or_else(|| obj.get("tool")) {
-        if let Some(name_str) = name_val.as_str() {
-            if let Some(schema) = schemas.iter().find(|s| s.name == name_str) {
-                return Some(schema.name.clone());
-            }
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct ToolNameWire {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        tool: Option<String>,
+    }
+
+    let wire = serde_json::from_value::<ToolNameWire>(value.clone()).unwrap_or_default();
+    if let Some(name_str) = wire
+        .name
+        .as_deref()
+        .or(wire.tool.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(schema) = schemas.iter().find(|s| s.name == name_str) {
+            return Some(schema.name.clone());
         }
     }
 

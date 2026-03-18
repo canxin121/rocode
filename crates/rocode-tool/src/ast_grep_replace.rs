@@ -645,9 +645,12 @@ mod tests {
     fn schema_exposes_preview_and_apply_fields() {
         let tool = AstGrepReplaceTool::new();
         let schema = tool.parameters();
-        assert!(schema["properties"].get("replacement").is_some());
-        assert!(schema["properties"].get("apply").is_some());
-        assert!(schema["properties"].get("maxReplacements").is_some());
+        let properties = schema["properties"]
+            .as_object()
+            .expect("properties should be an object");
+        assert!(properties.contains_key("replacement"));
+        assert!(properties.contains_key("apply"));
+        assert!(properties.contains_key("maxReplacements"));
     }
 
     #[tokio::test]

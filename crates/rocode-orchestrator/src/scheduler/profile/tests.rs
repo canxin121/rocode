@@ -922,13 +922,17 @@ fn retry_budget_exhausted_output_marks_explicit_terminal_state() {
         .contains("exhausted its bounded retry budget"));
     assert!(output.content.contains("task B still lacks proof"));
     assert!(output.content.contains("verification evidence"));
-    assert_eq!(
-        output
-            .metadata
-            .get("scheduler_retry_budget_exhausted")
-            .and_then(|value| value.as_bool()),
-        Some(true)
-    );
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct RetryBudgetMetadataWire {
+        #[serde(default)]
+        scheduler_retry_budget_exhausted: Option<bool>,
+    }
+
+    let metadata = serde_json::to_value(&output.metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<RetryBudgetMetadataWire>(value).ok())
+        .unwrap_or_default();
+    assert_eq!(metadata.scheduler_retry_budget_exhausted, Some(true));
 }
 
 #[test]
@@ -1186,25 +1190,27 @@ fn finalize_output_emits_precise_prometheus_handoff_command_metadata() {
     };
 
     let output = orchestrator.finalize_output(state);
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct HandoffMetadataWire {
+        #[serde(default)]
+        scheduler_handoff_mode: Option<String>,
+        #[serde(default)]
+        scheduler_handoff_command: Option<String>,
+        #[serde(default)]
+        scheduler_handoff_plan_path: Option<String>,
+    }
+
+    let metadata = serde_json::to_value(&output.metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<HandoffMetadataWire>(value).ok())
+        .unwrap_or_default();
+    assert_eq!(metadata.scheduler_handoff_mode.as_deref(), Some("atlas"));
     assert_eq!(
-        output
-            .metadata
-            .get("scheduler_handoff_mode")
-            .and_then(|value| value.as_str()),
-        Some("atlas")
-    );
-    assert_eq!(
-        output
-            .metadata
-            .get("scheduler_handoff_command")
-            .and_then(|value| value.as_str()),
+        metadata.scheduler_handoff_command.as_deref(),
         Some("/start-work plan-demo-session")
     );
     assert_eq!(
-        output
-            .metadata
-            .get("scheduler_handoff_plan_path")
-            .and_then(|value| value.as_str()),
+        metadata.scheduler_handoff_plan_path.as_deref(),
         Some(".sisyphus/plans/plan-demo-session.md")
     );
 }

@@ -159,34 +159,63 @@ pub fn collect_child_sessions(messages: &[Message]) -> Vec<ChildSessionInfo> {
             Some(m) => m,
             None => continue,
         };
-        let child_id = match meta
-            .get("scheduler_stage_child_session_id")
-            .and_then(|v| v.as_str())
-        {
-            Some(id) => id.to_string(),
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ChildSessionMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_child_session_id: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_title: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+            )]
+            scheduler_stage_index: Option<u64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+            )]
+            scheduler_stage_total: Option<u64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_status: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            stage_id: Option<String>,
+        }
+
+        let meta: ChildSessionMetadataWire = rocode_types::parse_map_lossy(meta);
+        let child_id = match meta.scheduler_stage_child_session_id {
+            Some(id) => id,
             None => continue,
         };
         let stage_name = meta
-            .get("scheduler_stage")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+            .scheduler_stage
+            .unwrap_or_else(|| "unknown".to_string());
         let stage_title = meta
-            .get("scheduler_stage_title")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+            .scheduler_stage_title
             .unwrap_or_else(|| stage_name.clone());
-        let stage_index = meta.get("scheduler_stage_index").and_then(|v| v.as_u64());
-        let stage_total = meta.get("scheduler_stage_total").and_then(|v| v.as_u64());
+        let stage_index = meta.scheduler_stage_index;
+        let stage_total = meta.scheduler_stage_total;
         let status = meta
-            .get("scheduler_stage_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("running")
-            .to_string();
-        let stage_id = meta
-            .get("stage_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+            .scheduler_stage_status
+            .unwrap_or_else(|| "running".to_string());
+        let stage_id = meta.stage_id;
 
         let info = ChildSessionInfo {
             session_id: child_id.clone(),
@@ -978,12 +1007,17 @@ mod tests {
             .find(|message| message.id == "stage-message-1")
             .expect("stage message");
         let metadata = stage_message.metadata.as_ref().expect("stage metadata");
-        assert_eq!(
-            metadata
-                .get("scheduler_stage_child_session_id")
-                .and_then(|value| value.as_str()),
-            Some("child-1")
-        );
+        #[derive(Debug, Default, Deserialize)]
+        struct StageChildSessionMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_child_session_id: Option<String>,
+        }
+
+        let meta: StageChildSessionMetadataWire = rocode_types::parse_map_lossy(metadata);
+        assert_eq!(meta.scheduler_stage_child_session_id.as_deref(), Some("child-1"));
 
         let child = ctx.sessions.get("child-1").expect("child session created");
         assert_eq!(child.parent_id.as_deref(), Some("parent"));

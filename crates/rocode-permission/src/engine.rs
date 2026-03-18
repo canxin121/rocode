@@ -194,45 +194,31 @@ impl Default for PermissionEngine {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
-}
-
 fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
-    let object = hook_payload_object(payload)?;
-
     #[derive(Debug, Default, Deserialize)]
     struct PermissionStatusWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         status: Option<String>,
     }
 
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum PermissionStatusEnvelopeWire {
+        Body(PermissionStatusWire),
+        Output { output: PermissionStatusWire },
+        Data { data: PermissionStatusWire },
     }
 
-    let wire = serde_json::to_value(object)
+    let wire = serde_json::from_value::<PermissionStatusEnvelopeWire>(payload.clone())
         .ok()
-        .and_then(|value| serde_json::from_value::<PermissionStatusWire>(value).ok())
+        .map(|envelope| match envelope {
+            PermissionStatusEnvelopeWire::Body(body) => body,
+            PermissionStatusEnvelopeWire::Output { output } => output,
+            PermissionStatusEnvelopeWire::Data { data } => data,
+        })
         .unwrap_or_default();
 
     wire.status

@@ -76,6 +76,17 @@ impl App {
     /// Scans the current session's messages (most recent first) for one that
     /// carries `scheduler_stage_child_session_id` metadata and navigates to it.
     pub(super) fn navigate_to_child_session(&mut self) {
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SchedulerStageChildSessionMetadataWire {
+            #[serde(
+                default,
+                alias = "scheduler_stage_child_session_id",
+                alias = "schedulerStageChildSessionId",
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_child_session_id: Option<String>,
+        }
+
         let session_id = match self.current_session_id() {
             Some(id) => id,
             None => return,
@@ -84,11 +95,11 @@ impl App {
             let session_ctx = self.context.session.read();
             session_ctx.messages.get(&session_id).and_then(|msgs| {
                 msgs.iter().rev().find_map(|msg| {
-                    msg.metadata
-                        .as_ref()
-                        .and_then(|m| m.get("scheduler_stage_child_session_id"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(String::from)
+                    msg.metadata.as_ref().and_then(|metadata| {
+                        let wire: SchedulerStageChildSessionMetadataWire =
+                            rocode_types::parse_map_lossy(metadata);
+                        wire.scheduler_stage_child_session_id
+                    })
                 })
             })
         };
@@ -417,6 +428,24 @@ impl App {
 
     /// Check if a session has scheduler handoff metadata and auto-switch mode.
     pub(super) fn check_scheduler_handoff(&mut self, session_id: &str) {
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SchedulerHandoffMetadataWire {
+            #[serde(
+                default,
+                alias = "scheduler_handoff_mode",
+                alias = "schedulerHandoffMode",
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_handoff_mode: Option<String>,
+            #[serde(
+                default,
+                alias = "scheduler_handoff_command",
+                alias = "schedulerHandoffCommand",
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_handoff_command: Option<String>,
+        }
+
         if self.consumed_handoffs.contains(session_id) {
             return;
         }
@@ -425,15 +454,10 @@ impl App {
             let session_ctx = self.context.session.read();
             let session = session_ctx.sessions.get(session_id);
             let metadata = session.and_then(|s| s.metadata.as_ref());
-            let mode = metadata
-                .and_then(|m| m.get("scheduler_handoff_mode"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let command = metadata
-                .and_then(|m| m.get("scheduler_handoff_command"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            (mode, command)
+            let wire: SchedulerHandoffMetadataWire = metadata
+                .map(rocode_types::parse_map_lossy)
+                .unwrap_or_default();
+            (wire.scheduler_handoff_mode, wire.scheduler_handoff_command)
         };
 
         let Some(target_mode) = handoff_mode else {

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::components::{PermissionRequest, PermissionType};
+use serde::Deserialize;
 
 use super::App;
 
@@ -26,31 +27,46 @@ impl App {
     fn permission_request_to_prompt(
         permission: &crate::api::PermissionRequestInfo,
     ) -> PermissionRequest {
-        let input = permission.input.as_object().cloned().unwrap_or_default();
-        let permission_name = input
-            .get("permission")
-            .and_then(|value| value.as_str())
-            .unwrap_or(permission.tool.as_str());
-        let resource = input
-            .get("patterns")
-            .and_then(|value| value.as_array())
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .filter(|value| !value.is_empty())
+        #[derive(Debug, Default, Deserialize)]
+        struct PermissionRequestMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            command: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            filepath: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            path: Option<String>,
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct PermissionRequestInputWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            permission: Option<String>,
+            #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+            patterns: Vec<String>,
+            #[serde(default)]
+            metadata: Option<PermissionRequestMetadataWire>,
+        }
+
+        let input: PermissionRequestInputWire = rocode_types::parse_value_lossy(&permission.input);
+        let permission_name = input.permission.as_deref().unwrap_or(permission.tool.as_str());
+        let resource = (!input.patterns.is_empty())
+            .then(|| input.patterns.join(", "))
             .or_else(|| {
-                input.get("metadata").and_then(|value| {
-                    value
-                        .get("command")
-                        .and_then(|item| item.as_str())
-                        .or_else(|| value.get("filepath").and_then(|item| item.as_str()))
-                        .or_else(|| value.get("path").and_then(|item| item.as_str()))
-                        .map(str::to_string)
-                })
+                input
+                    .metadata
+                    .and_then(|metadata| metadata.command.or(metadata.filepath).or(metadata.path))
             })
             .unwrap_or_else(|| permission.message.clone());
 

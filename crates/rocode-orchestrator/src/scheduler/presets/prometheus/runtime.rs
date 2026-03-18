@@ -1,4 +1,5 @@
 use crate::scheduler::SchedulerAdvisoryReviewInput;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::super::super::{
@@ -134,11 +135,15 @@ pub fn prometheus_user_choice_payload() -> Value {
 }
 
 pub fn parse_prometheus_user_choice(output: &str) -> String {
-    serde_json::from_str::<Value>(output)
+    #[derive(Debug, Default, Deserialize)]
+    struct QuestionToolResultWire {
+        #[serde(default)]
+        answers: Vec<String>,
+    }
+
+    serde_json::from_str::<QuestionToolResultWire>(output)
         .ok()
-        .and_then(|value| value.get("answers").and_then(|v| v.as_array()).cloned())
-        .and_then(|answers| answers.first().cloned())
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .and_then(|wire| wire.answers.into_iter().next())
         .unwrap_or_else(|| PROMETHEUS_DEFAULT_HANDOFF_CHOICE.to_string())
 }
 

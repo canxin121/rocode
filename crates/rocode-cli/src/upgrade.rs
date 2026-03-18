@@ -110,12 +110,19 @@ async fn latest_version(method: InstallMethod) -> anyhow::Result<String> {
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("versions")
-                .and_then(|v| v.get("stable"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Unable to parse brew stable version"))?;
-            Ok(version.to_string())
+            #[derive(Debug, serde::Deserialize)]
+            struct BrewFormulaWire {
+                versions: BrewFormulaVersionsWire,
+            }
+
+            #[derive(Debug, serde::Deserialize)]
+            struct BrewFormulaVersionsWire {
+                stable: String,
+            }
+
+            let wire = serde_json::from_value::<BrewFormulaWire>(json)
+                .map_err(|e| anyhow::anyhow!("Unable to parse brew stable version: {}", e))?;
+            Ok(wire.versions.stable)
         }
         InstallMethod::Npm | InstallMethod::Pnpm | InstallMethod::Bun => {
             let response = client
@@ -123,11 +130,14 @@ async fn latest_version(method: InstallMethod) -> anyhow::Result<String> {
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("version")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Unable to parse npm latest version"))?;
-            Ok(version.to_string())
+            #[derive(Debug, serde::Deserialize)]
+            struct NpmLatestWire {
+                version: String,
+            }
+
+            let wire = serde_json::from_value::<NpmLatestWire>(json)
+                .map_err(|e| anyhow::anyhow!("Unable to parse npm latest version: {}", e))?;
+            Ok(wire.version)
         }
         InstallMethod::Scoop => {
             let response = client
@@ -135,11 +145,14 @@ async fn latest_version(method: InstallMethod) -> anyhow::Result<String> {
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("version")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Unable to parse scoop version"))?;
-            Ok(version.to_string())
+            #[derive(Debug, serde::Deserialize)]
+            struct ScoopManifestWire {
+                version: String,
+            }
+
+            let wire = serde_json::from_value::<ScoopManifestWire>(json)
+                .map_err(|e| anyhow::anyhow!("Unable to parse scoop version: {}", e))?;
+            Ok(wire.version)
         }
         _ => {
             let response = client
@@ -148,11 +161,14 @@ async fn latest_version(method: InstallMethod) -> anyhow::Result<String> {
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let tag = json
-                .get("tag_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Unable to parse latest GitHub release"))?;
-            Ok(tag.trim_start_matches('v').to_string())
+            #[derive(Debug, serde::Deserialize)]
+            struct GitHubReleaseWire {
+                tag_name: String,
+            }
+
+            let wire = serde_json::from_value::<GitHubReleaseWire>(json)
+                .map_err(|e| anyhow::anyhow!("Unable to parse latest GitHub release: {}", e))?;
+            Ok(wire.tag_name.trim_start_matches('v').to_string())
         }
     }
 }

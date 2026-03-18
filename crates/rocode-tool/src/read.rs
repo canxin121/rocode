@@ -589,6 +589,7 @@ async fn find_instruction_file(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[tokio::test]
     async fn read_rejects_empty_file_path() {
@@ -624,22 +625,31 @@ mod tests {
         );
         assert!(result.output.contains("PDF read successfully"));
 
-        let attachments = result
-            .metadata
-            .get("attachments")
-            .and_then(|v| v.as_array())
-            .expect("attachments should exist");
-        assert_eq!(attachments.len(), 1);
+        #[derive(Debug, Deserialize, Default)]
+        struct ReadMetadataWire {
+            #[serde(default)]
+            attachments: Vec<AttachmentWire>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct AttachmentWire {
+            #[serde(default)]
+            mime: Option<String>,
+            #[serde(default)]
+            url: Option<String>,
+        }
+
+        let metadata: ReadMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.attachments.len(), 1);
         assert_eq!(
-            attachments[0].get("mime").and_then(|v| v.as_str()),
+            metadata.attachments[0].mime.as_deref(),
             Some("application/pdf")
         );
         assert!(
-            attachments[0]
-                .get("url")
-                .and_then(|v| v.as_str())
-                .map(|v| v.starts_with("data:application/pdf;base64,"))
-                .unwrap_or(false),
+            metadata.attachments[0]
+                .url
+                .as_deref()
+                .is_some_and(|v| v.starts_with("data:application/pdf;base64,")),
             "attachment url should contain data-url"
         );
     }

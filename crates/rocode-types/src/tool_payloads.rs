@@ -1,6 +1,37 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Lossy JSON parse helper for loosely-typed JSON payloads.
+///
+/// Prefer this over ad-hoc `Value::get()` chains when the payload shape is
+/// known (or mostly known) and can be expressed as a Rust struct.
+pub fn parse_value_lossy<T>(value: &Value) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    serde_json::from_value::<T>(value.clone()).unwrap_or_default()
+}
+
+/// Lossy parse helper for JSON objects (`serde_json::Map`).
+pub fn parse_object_lossy<T>(object: &serde_json::Map<String, Value>) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    serde_json::from_value::<T>(Value::Object(object.clone())).unwrap_or_default()
+}
+
+/// Lossy parse helper for JSON object-like metadata maps.
+pub fn parse_map_lossy<T>(map: &HashMap<String, Value>) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    serde_json::to_value(map)
+        .ok()
+        .and_then(|value| serde_json::from_value::<T>(value).ok())
+        .unwrap_or_default()
+}
 
 /// Deserialize an optional string from a JSON value, accepting string/number/bool.
 ///

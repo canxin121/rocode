@@ -312,10 +312,20 @@ impl Default for TodoWriteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoWriteMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+        )]
+        no_op: Option<bool>,
+    }
 
     #[tokio::test]
     async fn todowrite_skips_duplicate_updates() {
@@ -363,7 +373,8 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        let metadata: TodoWriteMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.no_op, Some(true));
         assert!(
             result.output.contains("No todo changes detected"),
             "expected no-op output"
@@ -416,7 +427,8 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 1);
-        assert_ne!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        let metadata: TodoWriteMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_ne!(metadata.no_op, Some(true));
     }
 
     #[tokio::test]
@@ -465,6 +477,7 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        let metadata: TodoWriteMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.no_op, Some(true));
     }
 }

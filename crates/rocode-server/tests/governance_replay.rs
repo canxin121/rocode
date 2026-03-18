@@ -11,6 +11,7 @@
 use rocode_command::governance_fixtures::multi_agent_replay_fixture;
 use rocode_command::stage_protocol::*;
 use rocode_server::stage_event_log::{EventFilter, StageEventLog};
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -323,10 +324,15 @@ async fn fixture_event_log_combined_stage_and_type_filter() {
         )
         .await;
     assert_eq!(impl_tools.len(), 1);
-    assert_eq!(
-        impl_tools[0].payload.get("tool").and_then(|v| v.as_str()),
-        Some("write_file")
-    );
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolStartedPayloadWire {
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+        tool: Option<String>,
+    }
+
+    let payload: ToolStartedPayloadWire = rocode_types::parse_value_lossy(&impl_tools[0].payload);
+    assert_eq!(payload.tool.as_deref(), Some("write_file"));
 }
 
 #[tokio::test]

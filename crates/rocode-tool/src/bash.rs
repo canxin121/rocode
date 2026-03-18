@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -142,7 +144,14 @@ impl Tool for BashTool {
         for (key, value) in std::env::vars() {
             env_vars.insert(key, value);
         }
-        if let Some(extra_env) = ctx.extra.get("env") {
+        #[derive(Debug, Deserialize, Default)]
+        struct BashToolExtraWire {
+            #[serde(default)]
+            env: Option<serde_json::Value>,
+        }
+
+        let extra: BashToolExtraWire = rocode_types::parse_map_lossy(&ctx.extra);
+        if let Some(extra_env) = extra.env.as_ref() {
             if let Some(env_obj) = extra_env.as_object() {
                 for (key, value) in env_obj {
                     if let Some(val_str) = value.as_str() {
@@ -164,19 +173,39 @@ impl Tool for BashTool {
             let Some(payload) = output.payload.as_ref() else {
                 continue;
             };
-            let Some(object) = payload
-                .get("output")
-                .and_then(|value| value.as_object())
-                .or_else(|| payload.as_object())
-            else {
-                continue;
-            };
-            let Some(env) = object.get("env").and_then(|value| value.as_object()) else {
-                continue;
-            };
-            for (key, value) in env {
+
+            #[derive(Debug, Deserialize)]
+            #[serde(untagged)]
+            enum HookPayloadEnvelopeWire<T> {
+                Body(T),
+                Output { output: T },
+                Data { data: T },
+            }
+
+            fn parse_hook_payload_lossy<T>(payload: &serde_json::Value) -> T
+            where
+                T: DeserializeOwned + Default,
+            {
+                let envelope =
+                    serde_json::from_value::<HookPayloadEnvelopeWire<T>>(payload.clone())
+                        .unwrap_or_else(|_| HookPayloadEnvelopeWire::Body(T::default()));
+                match envelope {
+                    HookPayloadEnvelopeWire::Body(body) => body,
+                    HookPayloadEnvelopeWire::Output { output } => output,
+                    HookPayloadEnvelopeWire::Data { data } => data,
+                }
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct ShellEnvHookPayloadWire {
+                #[serde(default)]
+                env: serde_json::Map<String, serde_json::Value>,
+            }
+
+            let wire: ShellEnvHookPayloadWire = parse_hook_payload_lossy(payload);
+            for (key, value) in wire.env {
                 if let Some(value_str) = value.as_str() {
-                    env_vars.insert(key.clone(), value_str.to_string());
+                    env_vars.insert(key, value_str.to_string());
                 }
             }
         }

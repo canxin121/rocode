@@ -24,19 +24,28 @@ const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 // ===========================================================================
 
 fn organization_from_config(config: &ProviderConfig) -> Option<String> {
-    config
-        .options
-        .get("organization")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    #[derive(Debug, Deserialize, Default)]
+    struct OpenAIOptionsWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        organization: Option<String>,
+    }
+
+    let opts: OpenAIOptionsWire = rocode_types::parse_map_lossy(&config.options);
+    opts.organization
 }
 
 fn is_legacy_only(config: &ProviderConfig) -> bool {
-    config
-        .options
-        .get("legacy_only")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    #[derive(Debug, Deserialize, Default)]
+    struct OpenAIOptionsWire {
+        #[serde(default, deserialize_with = "rocode_types::deserialize_bool_lossy")]
+        legacy_only: bool,
+    }
+
+    let opts: OpenAIOptionsWire = rocode_types::parse_map_lossy(&config.options);
+    opts.legacy_only
 }
 
 fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
@@ -307,13 +316,26 @@ fn normalize_tool_call_arguments_for_request(
     input: &Value,
 ) -> NormalizedHistoricalToolCall {
     match input {
-        Value::Object(obj) => {
-            let is_legacy_unrecoverable = obj
-                .get("_rocode_unrecoverable_tool_args")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+        Value::Object(_) => {
+            #[derive(Debug, serde::Deserialize, Default)]
+            struct LegacyUnrecoverableArgsWire {
+                #[serde(default, rename = "_rocode_unrecoverable_tool_args")]
+                unrecoverable: bool,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                raw_len: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                raw_preview: Option<String>,
+            }
 
-            if !is_legacy_unrecoverable {
+            let wire: LegacyUnrecoverableArgsWire = rocode_types::parse_value_lossy(input);
+
+            if !wire.unrecoverable {
                 return NormalizedHistoricalToolCall {
                     tool_name: tool_name.to_string(),
                     arguments: input.to_string(),
@@ -323,8 +345,8 @@ fn normalize_tool_call_arguments_for_request(
             let received_args = json!({
                 "type": "object",
                 "source": "legacy-unrecoverable-sentinel",
-                "raw_len": obj.get("raw_len").and_then(Value::as_u64),
-                "preview": obj.get("raw_preview").and_then(Value::as_str),
+                "raw_len": wire.raw_len,
+                "preview": wire.raw_preview,
             });
             let payload = invalid_tool_payload_for_history(
                 tool_name,

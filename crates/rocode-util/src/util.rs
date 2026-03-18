@@ -1144,7 +1144,9 @@ mod tests {
             .expect("edit payload should be recoverable");
         assert_eq!(recovered["file_path"], "/tmp/t2.html");
         assert_eq!(recovered["new_string"], ".class { color: red; }");
-        assert!(recovered.get("old_string").is_none());
+        assert!(!recovered
+            .as_object()
+            .is_some_and(|object| object.contains_key("old_string")));
     }
 
     // -- Ultra recovery tests -----------------------------------------------

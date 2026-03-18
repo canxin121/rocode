@@ -388,21 +388,7 @@ impl CommandRegistry {
     }
 }
 
-fn command_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
-}
-
 fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value) {
-    let Some(object) = command_payload_object(payload) else {
-        return;
-    };
-
     #[derive(Debug, Default, Deserialize)]
     struct CommandHookPartWire {
         #[serde(
@@ -450,9 +436,21 @@ fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value
         parts: Vec<CommandHookPartWire>,
     }
 
-    let wire = serde_json::to_value(object)
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum CommandHookEnvelopeWire {
+        Body(CommandHookPayloadWire),
+        Output { output: CommandHookPayloadWire },
+        Data { data: CommandHookPayloadWire },
+    }
+
+    let wire = serde_json::from_value::<CommandHookEnvelopeWire>(payload.clone())
         .ok()
-        .and_then(|value| serde_json::from_value::<CommandHookPayloadWire>(value).ok())
+        .map(|envelope| match envelope {
+            CommandHookEnvelopeWire::Body(body) => body,
+            CommandHookEnvelopeWire::Output { output } => output,
+            CommandHookEnvelopeWire::Data { data } => data,
+        })
         .unwrap_or_default();
 
     if let Some(text) = wire.output.or(wire.template) {

@@ -3033,8 +3033,94 @@ mod tests {
         ChatRequest, ChatResponse, Choice, Content, Message, ModelInfo, Provider, ProviderError,
         Role, StreamResult,
     };
+    use serde::Deserialize;
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
+
+    #[derive(Debug, Default, Deserialize)]
+    struct SchedulerStageMessageMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_projection: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_loop_budget: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_step: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_status: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_focus: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_last_event: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_waiting_on: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_activity: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_prompt_tokens: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_completion_tokens: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_available_skill_count: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_available_agent_count: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        scheduler_stage_available_category_count: Option<u64>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+        scheduler_stage_active_agents: Vec<String>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+        scheduler_stage_active_skills: Vec<String>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+        scheduler_stage_active_categories: Vec<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        scheduler_stage_child_session_id: Option<String>,
+    }
 
     #[derive(Debug)]
     struct MockProvider {
@@ -3135,28 +3221,11 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
         assert_eq!(message.get_text(), "## Plan\n- step");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage")
-                .and_then(|value| value.as_str()),
-            Some("plan")
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_projection")
-                .and_then(|value| value.as_str()),
-            Some("transcript")
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_loop_budget")
-                .and_then(|value| value.as_str()),
-            Some("unbounded")
-        );
+        assert_eq!(meta.scheduler_stage.as_deref(), Some("plan"));
+        assert_eq!(meta.scheduler_stage_projection.as_deref(), Some("transcript"));
+        assert_eq!(meta.scheduler_stage_loop_budget.as_deref(), Some("unbounded"));
     }
 
     #[tokio::test]
@@ -3189,15 +3258,13 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
         assert_eq!(
             message.get_text(),
             "## Coordination Verification\n\nMissing proof for task B."
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage.as_deref(),
             Some("coordination-verification")
         );
         assert!(!message.metadata.contains_key("scheduler_stage_projection"));
@@ -3264,46 +3331,20 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_step, Some(1));
+        assert_eq!(meta.scheduler_stage_status.as_deref(), Some("done"));
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_step")
-                .and_then(|value| value.as_u64()),
-            Some(1)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_status")
-                .and_then(|value| value.as_str()),
-            Some("done")
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_focus")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_focus.as_deref(),
             Some("Draft the executable plan and its guardrails.")
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_last_event")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_last_event.as_deref(),
             Some("Stage completed")
         );
+        assert_eq!(meta.scheduler_stage_waiting_on.as_deref(), Some("none"));
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_waiting_on")
-                .and_then(|value| value.as_str()),
-            Some("none")
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_activity")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_activity.as_deref(),
             Some("Answered (1)\n- Proceed with schema migration?: Yes")
         );
     }
@@ -3361,20 +3402,9 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_prompt_tokens")
-                .and_then(|value| value.as_u64()),
-            Some(1300)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_completion_tokens")
-                .and_then(|value| value.as_u64()),
-            Some(340)
-        );
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_prompt_tokens, Some(1300));
+        assert_eq!(meta.scheduler_stage_completion_tokens, Some(340));
         let usage = message.usage.as_ref().expect("usage should exist");
         assert_eq!(usage.input_tokens, 1300);
         assert_eq!(usage.output_tokens, 340);
@@ -3494,20 +3524,9 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_prompt_tokens")
-                .and_then(|value| value.as_u64()),
-            Some(1200)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_completion_tokens")
-                .and_then(|value| value.as_u64()),
-            Some(320)
-        );
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_prompt_tokens, Some(1200));
+        assert_eq!(meta.scheduler_stage_completion_tokens, Some(320));
         let usage = message.usage.as_ref().expect("usage should exist");
         assert_eq!(usage.input_tokens, 1200);
         assert_eq!(usage.output_tokens, 320);
@@ -3566,52 +3585,20 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_available_skill_count, Some(2));
+        assert_eq!(meta.scheduler_stage_available_agent_count, Some(2));
+        assert_eq!(meta.scheduler_stage_available_category_count, Some(1));
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_available_skill_count")
-                .and_then(|value| value.as_u64()),
-            Some(2)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_available_agent_count")
-                .and_then(|value| value.as_u64()),
-            Some(2)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_available_category_count")
-                .and_then(|value| value.as_u64()),
-            Some(1)
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_active_agents")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_active_agents.first().map(String::as_str),
             Some("build")
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_active_skills")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_active_skills.first().map(String::as_str),
             Some("frontend-ui-ux")
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_active_categories")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_active_categories.first().map(String::as_str),
             Some("frontend")
         );
     }
@@ -3688,12 +3675,11 @@ mod tests {
             .get(&session_id)
             .expect("parent session should exist");
         let parent_stage_message = parent.messages.last().expect("parent stage message");
-        let child_session_id = parent_stage_message
-            .metadata
-            .get("scheduler_stage_child_session_id")
-            .and_then(|value| value.as_str())
-            .expect("child session id")
-            .to_string();
+        let parent_meta: SchedulerStageMessageMetadataWire =
+            rocode_types::parse_map_lossy(&parent_stage_message.metadata);
+        let child_session_id = parent_meta
+            .scheduler_stage_child_session_id
+            .expect("child session id");
 
         let child = sessions
             .get(&child_session_id)
@@ -3878,22 +3864,13 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_active_agents")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_active_agents.first().map(String::as_str),
             Some("build")
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_active_skills")
-                .and_then(|value| value.as_array())
-                .and_then(|values| values.first())
-                .and_then(|value| value.as_str()),
+            meta.scheduler_stage_active_skills.first().map(String::as_str),
             Some("frontend-ui-ux")
         );
     }
@@ -3928,13 +3905,8 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_status")
-                .and_then(|value| value.as_str()),
-            Some("cancelling")
-        );
+        let meta: SchedulerStageMessageMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_status.as_deref(), Some("cancelling"));
     }
 
     #[tokio::test]
@@ -3967,13 +3939,17 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_stage_status")
-                .and_then(|value| value.as_str()),
-            Some("cancelled")
-        );
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct SchedulerStageStatusWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage_status: Option<String>,
+        }
+
+        let meta: SchedulerStageStatusWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_stage_status.as_deref(), Some("cancelled"));
         assert!(!message.metadata.contains_key("scheduler_stage_streaming"));
     }
 
@@ -4011,21 +3987,29 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_decision_kind")
-                .and_then(|value| value.as_str()),
-            Some("route")
-        );
-        let fields = message
-            .metadata
-            .get("scheduler_decision_fields")
-            .and_then(|value| value.as_array())
-            .expect("decision fields should exist");
-        assert!(fields.iter().any(|field| {
-            field.get("label").and_then(|value| value.as_str()) == Some("Outcome")
-                && field.get("value").and_then(|value| value.as_str()) == Some("Orchestrate")
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct DecisionFieldWire {
+            #[serde(default)]
+            label: Option<String>,
+            #[serde(default)]
+            value: Option<String>,
+        }
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct RouteDecisionMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_decision_kind: Option<String>,
+            #[serde(default)]
+            scheduler_decision_fields: Vec<DecisionFieldWire>,
+        }
+
+        let meta: RouteDecisionMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_decision_kind.as_deref(), Some("route"));
+        assert!(meta.scheduler_decision_fields.iter().any(|field| {
+            field.label.as_deref() == Some("Outcome") && field.value.as_deref() == Some("Orchestrate")
         }));
     }
 
@@ -4063,25 +4047,33 @@ mod tests {
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
         let message = session.messages.last().expect("stage message should exist");
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct GateDecisionMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_gate_status: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_gate_summary: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_gate_next_input: Option<String>,
+        }
+
+        let meta: GateDecisionMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        assert_eq!(meta.scheduler_gate_status.as_deref(), Some("continue"));
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_gate_status")
-                .and_then(|value| value.as_str()),
-            Some("continue")
-        );
-        assert_eq!(
-            message
-                .metadata
-                .get("scheduler_gate_summary")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_gate_summary.as_deref(),
             Some("Task B still lacks evidence.")
         );
         assert_eq!(
-            message
-                .metadata
-                .get("scheduler_gate_next_input")
-                .and_then(|value| value.as_str()),
+            meta.scheduler_gate_next_input.as_deref(),
             Some("Run one more worker round on task B.")
         );
     }

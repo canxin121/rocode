@@ -113,10 +113,17 @@ impl CliApiClient {
         let url = server_url(&self.base_url, &format!("/session/{}", session_id));
         let resp = self.client.delete(&url).send().await?;
         let value: serde_json::Value = Self::json_ok(resp, "delete session").await?;
-        Ok(value
-            .get("deleted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct DeleteSessionWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            deleted: Option<bool>,
+        }
+
+        let wire: DeleteSessionWire = rocode_types::parse_value_lossy(&value);
+        Ok(wire.deleted.unwrap_or(true))
     }
 
     // ── Prompt ───────────────────────────────────────────────────────
@@ -387,10 +394,17 @@ impl CliApiClient {
         let resp = self.client.delete(&url).send().await?;
         let value: serde_json::Value =
             Self::json_ok(resp, &format!("remove MCP auth `{}`", name)).await?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SuccessWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            success: Option<bool>,
+        }
+
+        let wire: SuccessWire = rocode_types::parse_value_lossy(&value);
+        Ok(wire.success.unwrap_or(true))
     }
 
     pub async fn connect_mcp(&self, name: &str) -> anyhow::Result<bool> {
@@ -413,18 +427,28 @@ impl CliApiClient {
         let url = server_url(&self.base_url, "/lsp");
         let resp = self.client.get(&url).send().await?;
         let v: serde_json::Value = Self::json_ok(resp, "get LSP status").await?;
-        Ok(v.get("servers")
-            .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
-            .unwrap_or_default())
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct LspServersWire {
+            #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+            servers: Vec<String>,
+        }
+
+        let wire: LspServersWire = rocode_types::parse_value_lossy(&v);
+        Ok(wire.servers)
     }
 
     pub async fn get_formatters(&self) -> anyhow::Result<Vec<String>> {
         let url = server_url(&self.base_url, "/formatter");
         let resp = self.client.get(&url).send().await?;
         let v: serde_json::Value = Self::json_ok(resp, "get formatters").await?;
-        Ok(v.get("formatters")
-            .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
-            .unwrap_or_default())
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct FormattersWire {
+            #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+            formatters: Vec<String>,
+        }
+
+        let wire: FormattersWire = rocode_types::parse_value_lossy(&v);
+        Ok(wire.formatters)
     }
 
     // ── Session sharing / compact / revert / fork ────────────────────
@@ -440,10 +464,17 @@ impl CliApiClient {
         let resp = self.client.delete(&url).send().await?;
         let value: serde_json::Value =
             Self::json_ok(resp, &format!("unshare session `{}`", session_id)).await?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct SuccessWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            success: Option<bool>,
+        }
+
+        let wire: SuccessWire = rocode_types::parse_value_lossy(&value);
+        Ok(wire.success.unwrap_or(true))
     }
 
     pub async fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {

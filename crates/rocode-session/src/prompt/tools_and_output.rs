@@ -128,12 +128,18 @@ pub fn insert_reminders(
 }
 
 pub fn was_plan_agent(messages: &[SessionMessage]) -> bool {
-    messages.iter().any(|m| {
-        if let Some(agent) = m.metadata.get("agent") {
-            agent.as_str() == Some("plan")
-        } else {
-            false
-        }
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct AgentMetadataWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        agent: Option<String>,
+    }
+
+    messages.iter().any(|message| {
+        let meta: AgentMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        meta.agent.as_deref() == Some("plan")
     })
 }
 

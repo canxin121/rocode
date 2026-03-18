@@ -972,13 +972,21 @@ mod tests {
         assert_eq!(compiled.temperature, Some(0.1));
         assert_eq!(compiled.top_p, Some(0.8));
         assert_eq!(compiled.variant.as_deref(), Some("fast"));
-        assert_eq!(
-            compiled
-                .provider_options
-                .as_ref()
-                .and_then(|options| options.get("thinking")),
-            Some(&serde_json::json!(false))
-        );
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct ThinkingOptionsWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+            )]
+            thinking: Option<bool>,
+        }
+
+        let options: ThinkingOptionsWire = compiled
+            .provider_options
+            .as_ref()
+            .map(rocode_types::parse_map_lossy)
+            .unwrap_or_default();
+        assert_eq!(options.thinking, Some(false));
     }
 
     #[test]

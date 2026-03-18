@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use rocode_storage::{Database, MessageRepository, SessionRepository};
+use serde::Deserialize;
 
 use crate::cli::{DbCommands, DbOutputFormat};
 
@@ -112,12 +113,23 @@ pub(crate) async fn handle_stats_command(
         total_messages += messages.len();
 
         for message in messages {
-            if let Some(provider) = message.metadata.get("provider_id").and_then(|v| v.as_str()) {
-                let model = message
-                    .metadata
-                    .get("model_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+            #[derive(Debug, Default, Deserialize)]
+            struct ProviderModelMetadataWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                provider_id: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                model_id: Option<String>,
+            }
+
+            let meta: ProviderModelMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+            if let Some(provider) = meta.provider_id.as_deref() {
+                let model = meta.model_id.as_deref().unwrap_or("unknown");
                 *model_usage
                     .entry(format!("{}/{}", provider, model))
                     .or_insert(0) += 1;

@@ -441,43 +441,56 @@ impl SessionPrompt {
     }
 
     pub(super) fn mcp_tools_from_session(session: &Session) -> Vec<ToolDefinition> {
-        session
-            .metadata
-            .get("mcp_tools")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let name = item.get("name").and_then(|v| v.as_str())?.to_string();
-                        let description = item
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        let parameters = item
-                            .get("parameters")
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({"type":"object"}));
-                        Some(ToolDefinition {
-                            name,
-                            description,
-                            parameters,
-                        })
-                    })
-                    .collect()
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct McpToolWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            name: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            description: Option<String>,
+            #[serde(default)]
+            parameters: Option<serde_json::Value>,
+        }
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct SessionMetadataWire {
+            #[serde(default)]
+            mcp_tools: Vec<McpToolWire>,
+        }
+
+        let meta: SessionMetadataWire = rocode_types::parse_map_lossy(&session.metadata);
+        meta.mcp_tools
+            .into_iter()
+            .filter_map(|tool| {
+                let name = tool.name?;
+                let parameters =
+                    tool.parameters
+                        .unwrap_or_else(|| serde_json::json!({"type":"object"}));
+                Some(ToolDefinition {
+                    name,
+                    description: tool.description,
+                    parameters,
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     pub(super) fn load_persisted_subsessions(
         session: &Session,
     ) -> HashMap<String, PersistedSubsession> {
-        session
-            .metadata
-            .get("subsessions")
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct SubsessionsMetadataWire {
+            #[serde(default)]
+            subsessions: HashMap<String, PersistedSubsession>,
+        }
+
+        let meta: SubsessionsMetadataWire = rocode_types::parse_map_lossy(&session.metadata);
+        meta.subsessions
     }
 
     pub(super) fn save_persisted_subsessions(
@@ -1016,13 +1029,17 @@ mod tests {
             .last()
             .expect("synthetic user message should be appended");
         assert!(matches!(synthetic_msg.role, MessageRole::User));
-        assert_eq!(
-            synthetic_msg
-                .metadata
-                .get("synthetic_agent")
-                .and_then(|value| value.as_str()),
-            Some("docs-researcher")
-        );
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct SyntheticAgentMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            synthetic_agent: Option<String>,
+        }
+
+        let meta: SyntheticAgentMetadataWire = rocode_types::parse_map_lossy(&synthetic_msg.metadata);
+        assert_eq!(meta.synthetic_agent.as_deref(), Some("docs-researcher"));
 
         let text_part = synthetic_msg
             .parts

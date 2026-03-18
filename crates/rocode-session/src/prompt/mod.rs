@@ -143,6 +143,24 @@ struct PendingSubtask {
     description: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct PendingSubtaskMetadataEntry {
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    agent: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    prompt: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    description: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct PendingSubtasksMetadataWire {
+    #[serde(default)]
+    pending_subtasks: Vec<PendingSubtaskMetadataEntry>,
+}
+
 #[derive(Debug, Clone)]
 struct StreamToolState {
     name: String,
@@ -1313,22 +1331,17 @@ impl SessionPrompt {
                     let subtask_id = format!("sub_{}", uuid::Uuid::new_v4());
                     let description = description.clone().unwrap_or_else(|| prompt.clone());
                     msg.add_subtask(subtask_id.clone(), description.clone());
-                    let mut pending = msg
-                        .metadata
-                        .get("pending_subtasks")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    pending.push(serde_json::json!({
-                        "id": subtask_id,
-                        "agent": agent,
-                        "prompt": prompt,
-                        "description": description,
-                    }));
-                    msg.metadata.insert(
-                        "pending_subtasks".to_string(),
-                        serde_json::Value::Array(pending),
-                    );
+                    let mut meta: PendingSubtasksMetadataWire =
+                        rocode_types::parse_map_lossy(&msg.metadata);
+                    meta.pending_subtasks.push(PendingSubtaskMetadataEntry {
+                        id: Some(subtask_id),
+                        agent: Some(agent.clone()),
+                        prompt: Some(prompt.clone()),
+                        description: Some(description),
+                    });
+                    if let Ok(value) = serde_json::to_value(&meta.pending_subtasks) {
+                        msg.metadata.insert("pending_subtasks".to_string(), value);
+                    }
                 }
             }
         }
@@ -1527,15 +1540,39 @@ impl SessionPrompt {
             }
         };
 
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct SessionResumeMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_provider: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_id: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            agent: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_variant: Option<String>,
+        }
+
+        let meta: SessionResumeMetadataWire = rocode_types::parse_map_lossy(&session.metadata);
         let model = session.messages.iter().rev().find_map(|m| match m.role {
-            MessageRole::User => session
-                .metadata
-                .get("model_provider")
-                .and_then(|p| p.as_str())
-                .zip(session.metadata.get("model_id").and_then(|i| i.as_str()))
+            MessageRole::User => meta
+                .model_provider
+                .clone()
+                .zip(meta.model_id.clone())
                 .map(|(provider_id, model_id)| ModelRef {
-                    provider_id: provider_id.to_string(),
-                    model_id: model_id.to_string(),
+                    provider_id,
+                    model_id,
                 }),
             _ => None,
         });
@@ -1550,17 +1587,9 @@ impl SessionPrompt {
             .unwrap_or_else(|| "anthropic".to_string());
 
         let session_id = session_id.to_string();
-        let resume_agent = session
-            .metadata
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let resume_agent = meta.agent;
         let compiled_request = compiled_request.inherit_missing(&session_runtime_request_defaults(
-            session
-                .metadata
-                .get("model_variant")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            meta.model_variant,
         ));
 
         {
@@ -2193,35 +2222,23 @@ impl SessionPrompt {
     }
 
     fn collect_pending_subtasks(message: &SessionMessage) -> Vec<PendingSubtask> {
-        let metadata_by_id: HashMap<String, (String, String, String)> = message
-            .metadata
-            .get("pending_subtasks")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str())?.to_string();
-                        let agent = item
-                            .get("agent")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("general")
-                            .to_string();
-                        let prompt = item
-                            .get("prompt")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let description = item
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        Some((id, (agent, prompt, description)))
-                    })
-                    .collect()
+        let meta: PendingSubtasksMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+        let metadata_by_id: HashMap<String, (String, String, String)> = meta
+            .pending_subtasks
+            .into_iter()
+            .filter_map(|item| {
+                let id = item
+                    .id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())?
+                    .to_string();
+                let agent = item.agent.unwrap_or_else(|| "general".to_string());
+                let prompt = item.prompt.unwrap_or_default();
+                let description = item.description.unwrap_or_default();
+                Some((id, (agent, prompt, description)))
             })
-            .unwrap_or_default();
+            .collect();
 
         message
             .parts
@@ -3233,18 +3250,11 @@ mod tests {
             .expect("create_user_message should succeed");
 
         let msg = session.messages.last().expect("user message should exist");
-        let pending = msg
-            .metadata
-            .get("pending_subtasks")
-            .and_then(|v| v.as_array())
-            .expect("pending_subtasks metadata should exist");
-        assert_eq!(pending.len(), 1);
+        let meta: PendingSubtasksMetadataWire = rocode_types::parse_map_lossy(&msg.metadata);
+        assert_eq!(meta.pending_subtasks.len(), 1);
+        assert_eq!(meta.pending_subtasks[0].agent.as_deref(), Some("explore"));
         assert_eq!(
-            pending[0].get("agent").and_then(|v| v.as_str()),
-            Some("explore")
-        );
-        assert_eq!(
-            pending[0].get("prompt").and_then(|v| v.as_str()),
+            meta.pending_subtasks[0].prompt.as_deref(),
             Some("Inspect codegen path")
         );
         assert!(msg.parts.iter().any(|p| match &p.part_type {
@@ -3458,14 +3468,24 @@ mod tests {
                     ..
                 } if id == "call_invalid" => Some((name, input, status)),
                 _ => None,
-            })
+        })
             .expect("tool call should exist");
         assert_eq!(tool_call.0, "invalid");
-        assert_eq!(
-            tool_call.1.get("tool").and_then(|v| v.as_str()),
-            Some("needs_path")
-        );
-        assert!(tool_call.1.get("receivedArgs").is_none());
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct InvalidToolInputWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            tool: Option<String>,
+            #[serde(default)]
+            received_args: Option<serde_json::Value>,
+        }
+
+        let wire: InvalidToolInputWire = rocode_types::parse_value_lossy(tool_call.1);
+        assert_eq!(wire.tool.as_deref(), Some("needs_path"));
+        assert!(wire.received_args.is_none());
         assert!(matches!(tool_call.2, crate::ToolCallStatus::Completed));
 
         let tool_msg = session
@@ -3718,8 +3738,9 @@ mod tests {
             mime: None,
         };
         let json = serde_json::to_value(&part).unwrap();
-        assert!(json.get("filename").is_none());
-        assert!(json.get("mime").is_none());
+        let obj = json.as_object().expect("file part should serialize to object");
+        assert!(!obj.contains_key("filename"));
+        assert!(!obj.contains_key("mime"));
     }
 
     // ── resolve_prompt_parts tests ──

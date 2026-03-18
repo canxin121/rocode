@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use rocode_config::Config;
 use rocode_plugin::{HookContext, HookEvent};
-use serde_json::Value;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,9 +54,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     let matched = results.into_iter().any(|result| match result {
-        Ok(output) => output
-            .payload
-            .is_some_and(|payload| payload.get("native_demo_loaded") == Some(&Value::Bool(true))),
+        Ok(output) => output.payload.as_ref().is_some_and(|payload| {
+            #[derive(Debug, serde::Deserialize, Default)]
+            struct NativeDemoLoadedWire {
+                #[serde(default)]
+                native_demo_loaded: Option<bool>,
+            }
+
+            let wire =
+                serde_json::from_value::<NativeDemoLoadedWire>(payload.clone()).unwrap_or_default();
+            wire.native_demo_loaded == Some(true)
+        }),
         Err(_) => false,
     });
 

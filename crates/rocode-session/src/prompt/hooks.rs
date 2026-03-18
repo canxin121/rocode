@@ -1,13 +1,71 @@
 use crate::{MessageRole, SessionMessage};
+use serde::Deserialize;
 
-pub(crate) fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum HookPayloadEnvelopeWire {
+    Body(HookPayloadBodyWire),
+    Output { output: HookPayloadBodyWire },
+    Data { data: HookPayloadBodyWire },
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HookPayloadBodyWire {
+    #[serde(default, deserialize_with = "deserialize_opt_messages_lossy")]
+    messages: Option<Vec<SessionMessage>>,
+    #[serde(default, deserialize_with = "deserialize_opt_message_lossy")]
+    message: Option<SessionMessage>,
+    #[serde(default, deserialize_with = "deserialize_opt_parts_lossy")]
+    parts: Option<Vec<crate::MessagePart>>,
+}
+
+fn deserialize_opt_messages_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<SessionMessage>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<Vec<SessionMessage>>(value).ok())
+}
+
+fn deserialize_opt_message_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<SessionMessage>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<SessionMessage>(value).ok())
+}
+
+fn deserialize_opt_parts_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<crate::MessagePart>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<Vec<crate::MessagePart>>(value).ok())
+}
+
+fn parse_hook_payload(payload: &serde_json::Value) -> Option<HookPayloadBodyWire> {
+    serde_json::from_value::<HookPayloadEnvelopeWire>(payload.clone())
+        .ok()
+        .map(|envelope| match envelope {
+            HookPayloadEnvelopeWire::Body(body) => body,
+            HookPayloadEnvelopeWire::Output { output } => output,
+            HookPayloadEnvelopeWire::Data { data } => data,
+        })
 }
 
 pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_json::Value {
@@ -46,18 +104,13 @@ pub(crate) fn apply_chat_messages_hook_outputs(
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(body) = parse_hook_payload(payload) else {
             continue;
         };
-        let Some(next_messages) = object.get("messages").and_then(|value| value.as_array()) else {
+        let Some(next_messages) = body.messages else {
             continue;
         };
-        let parsed = serde_json::from_value::<Vec<SessionMessage>>(serde_json::Value::Array(
-            next_messages.clone(),
-        ));
-        if let Ok(next) = parsed {
-            *messages = next;
-        }
+        *messages = next_messages;
     }
 }
 
@@ -69,21 +122,14 @@ pub(crate) fn apply_chat_message_hook_outputs(
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(body) = parse_hook_payload(payload) else {
             continue;
         };
-        if let Some(next_message) = object.get("message") {
-            if let Ok(parsed) = serde_json::from_value::<SessionMessage>(next_message.clone()) {
-                *message = parsed;
-            }
+        if let Some(next_message) = body.message {
+            *message = next_message;
         }
-        if let Some(next_parts) = object.get("parts").and_then(|value| value.as_array()) {
-            let parsed = serde_json::from_value::<Vec<crate::MessagePart>>(
-                serde_json::Value::Array(next_parts.clone()),
-            );
-            if let Ok(parts) = parsed {
-                message.parts = parts;
-            }
+        if let Some(next_parts) = body.parts {
+            message.parts = next_parts;
         }
     }
 }

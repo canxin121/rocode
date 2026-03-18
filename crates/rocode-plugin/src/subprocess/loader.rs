@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
@@ -435,10 +436,15 @@ impl PluginLoader {
         };
 
         // Extract call_id for tracking before moving context into invoke_tool.
-        let call_id = context
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        #[derive(Debug, Default, Deserialize)]
+        struct PluginInvokeContextWire {
+            #[serde(default, alias = "callId", alias = "callID")]
+            call_id: Option<String>,
+        }
+
+        let call_id = serde_json::from_value::<PluginInvokeContextWire>(context.clone())
+            .ok()
+            .and_then(|wire| wire.call_id);
         let plugin_name = client.plugin_id().to_string();
 
         // The on_sent callback registers tracking AFTER the RPC request is
@@ -583,11 +589,27 @@ impl PluginLoader {
         // Read existing deps if present
         if pkg_json.exists() {
             if let Ok(content) = std::fs::read_to_string(&pkg_json) {
-                if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(obj) = existing.get("dependencies").and_then(|d| d.as_object()) {
-                        deps = obj.clone();
-                    }
+                #[derive(Debug, Default, Deserialize)]
+                struct PackageJsonWire {
+                    #[serde(default, deserialize_with = "deserialize_dependencies_lossy")]
+                    dependencies: serde_json::Map<String, serde_json::Value>,
                 }
+
+                fn deserialize_dependencies_lossy<'de, D>(
+                    deserializer: D,
+                ) -> Result<serde_json::Map<String, serde_json::Value>, D::Error>
+                where
+                    D: serde::Deserializer<'de>,
+                {
+                    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+                    Ok(match value {
+                        Some(serde_json::Value::Object(map)) => map,
+                        _ => serde_json::Map::new(),
+                    })
+                }
+
+                let existing = serde_json::from_str::<PackageJsonWire>(&content).unwrap_or_default();
+                deps = existing.dependencies;
             }
         }
 

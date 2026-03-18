@@ -6,6 +6,7 @@ use std::sync::Arc;
 use rocode_provider::{
     get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider, Role,
 };
+use serde::Deserialize;
 
 use crate::compaction::{
     CompactionConfig, CompactionEngine, MessageForPrune, ModelLimits, PruneToolPart, TokenUsage,
@@ -360,23 +361,73 @@ impl SessionPrompt {
             }
 
             // Fallback to metadata for backward compatibility with legacy snapshots.
-            let read_metadata_u64 = |key: &str, usage_key: &str| -> u64 {
-                msg.metadata
-                    .get(key)
-                    .and_then(|v| v.as_u64())
-                    .or_else(|| {
-                        msg.metadata
-                            .get("usage")
-                            .and_then(|v| v.get(usage_key))
-                            .and_then(|v| v.as_u64())
-                    })
-                    .unwrap_or(0)
-            };
+            #[derive(Debug, Default, serde::Deserialize)]
+            struct LegacyUsageWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                prompt_tokens: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                completion_tokens: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                cache_read_tokens: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                cache_write_tokens: Option<u64>,
+            }
 
-            usage.input += read_metadata_u64("tokens_input", "prompt_tokens");
-            usage.output += read_metadata_u64("tokens_output", "completion_tokens");
-            usage.cache_read += read_metadata_u64("tokens_cache_read", "cache_read_tokens");
-            usage.cache_write += read_metadata_u64("tokens_cache_write", "cache_write_tokens");
+            #[derive(Debug, Default, serde::Deserialize)]
+            struct LegacyUsageMetadataWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                tokens_input: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                tokens_output: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                tokens_cache_read: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                tokens_cache_write: Option<u64>,
+                #[serde(default)]
+                usage: LegacyUsageWire,
+            }
+
+            let meta: LegacyUsageMetadataWire = rocode_types::parse_map_lossy(&msg.metadata);
+            usage.input += meta
+                .tokens_input
+                .or(meta.usage.prompt_tokens)
+                .unwrap_or(0);
+            usage.output += meta
+                .tokens_output
+                .or(meta.usage.completion_tokens)
+                .unwrap_or(0);
+            usage.cache_read += meta
+                .tokens_cache_read
+                .or(meta.usage.cache_read_tokens)
+                .unwrap_or(0);
+            usage.cache_write += meta
+                .tokens_cache_write
+                .or(meta.usage.cache_write_tokens)
+                .unwrap_or(0);
         }
         usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
         usage
@@ -489,8 +540,86 @@ impl SessionPrompt {
         let mut out = Vec::with_capacity(messages.len());
         let mut last_user_id = String::new();
 
+        fn deserialize_opt_f64_lossy<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Number(value)) => value.as_f64(),
+                Some(serde_json::Value::String(raw)) => raw.trim().parse::<f64>().ok(),
+                Some(serde_json::Value::Bool(value)) => Some(if value { 1.0 } else { 0.0 }),
+                _ => None,
+            })
+        }
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct MessageMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_preserve"
+            )]
+            step_start_snapshot: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_preserve"
+            )]
+            snapshot: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_preserve"
+            )]
+            step_finish_snapshot: Option<String>,
+            #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
+            tokens_input: Option<i64>,
+            #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
+            tokens_output: Option<i64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            finish_reason: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
+            cost: Option<f64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            agent: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_provider: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            model_id: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            variant: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            mode: Option<String>,
+        }
+
         for msg in messages {
             let created = msg.created_at.timestamp_millis();
+            let meta: MessageMetadataWire = rocode_types::parse_map_lossy(&msg.metadata);
+            let input_tokens = meta
+                .tokens_input
+                .unwrap_or(0)
+                .clamp(0, i32::MAX as i64) as i32;
+            let output_tokens = meta
+                .tokens_output
+                .unwrap_or(0)
+                .clamp(0, i32::MAX as i64) as i32;
             let mut parts: Vec<V2Part> = msg
                 .parts
                 .iter()
@@ -558,11 +687,10 @@ impl SessionPrompt {
                 })
                 .collect();
 
-            if let Some(snapshot) = msg
-                .metadata
-                .get("step_start_snapshot")
-                .or_else(|| msg.metadata.get("snapshot"))
-                .and_then(|v| v.as_str())
+            if let Some(snapshot) = meta
+                .step_start_snapshot
+                .as_deref()
+                .or(meta.snapshot.as_deref())
             {
                 parts.push(V2Part::StepStart(StepStartPart {
                     id: format!("prt_{}", uuid::Uuid::new_v4()),
@@ -571,23 +699,7 @@ impl SessionPrompt {
                     snapshot: Some(snapshot.to_string()),
                 }));
             }
-            if let Some(snapshot) = msg
-                .metadata
-                .get("step_finish_snapshot")
-                .and_then(|v| v.as_str())
-            {
-                let input = msg
-                    .metadata
-                    .get("tokens_input")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0)
-                    .clamp(0, i32::MAX as i64) as i32;
-                let output = msg
-                    .metadata
-                    .get("tokens_output")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0)
-                    .clamp(0, i32::MAX as i64) as i32;
+            if let Some(snapshot) = meta.step_finish_snapshot.as_deref() {
                 parts.push(V2Part::StepFinish(StepFinishPart {
                     id: format!("prt_{}", uuid::Uuid::new_v4()),
                     session_id: msg.session_id.clone(),
@@ -595,19 +707,15 @@ impl SessionPrompt {
                     reason: msg
                         .finish
                         .as_deref()
-                        .or_else(|| msg.metadata.get("finish_reason").and_then(|v| v.as_str()))
+                        .or(meta.finish_reason.as_deref())
                         .unwrap_or("stop")
                         .to_string(),
                     snapshot: Some(snapshot.to_string()),
-                    cost: msg
-                        .metadata
-                        .get("cost")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0),
+                    cost: meta.cost.unwrap_or(0.0),
                     tokens: StepTokens {
-                        total: Some(input.saturating_add(output)),
-                        input,
-                        output,
+                        total: Some(input_tokens.saturating_add(output_tokens)),
+                        input: input_tokens,
+                        output: output_tokens,
                         reasoning: 0,
                         cache: CacheTokens { read: 0, write: 0 },
                     },
@@ -621,50 +729,27 @@ impl SessionPrompt {
                         id: msg.id.clone(),
                         session_id: msg.session_id.clone(),
                         time: UserTime { created },
-                        agent: msg
-                            .metadata
-                            .get("agent")
-                            .and_then(|v| v.as_str())
+                        agent: meta
+                            .agent
+                            .as_deref()
                             .unwrap_or("general")
                             .to_string(),
                         model: V2ModelRef {
-                            provider_id: msg
-                                .metadata
-                                .get("model_provider")
-                                .and_then(|v| v.as_str())
+                            provider_id: meta
+                                .model_provider
+                                .as_deref()
                                 .unwrap_or(provider_id)
                                 .to_string(),
-                            model_id: msg
-                                .metadata
-                                .get("model_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(model_id)
-                                .to_string(),
+                            model_id: meta.model_id.as_deref().unwrap_or(model_id).to_string(),
                         },
                         format: None,
                         summary: None,
                         system: None,
                         tools: None,
-                        variant: msg
-                            .metadata
-                            .get("variant")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                        variant: meta.variant.clone(),
                     }
                 }
                 _ => {
-                    let input = msg
-                        .metadata
-                        .get("tokens_input")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0)
-                        .clamp(0, i32::MAX as i64) as i32;
-                    let output = msg
-                        .metadata
-                        .get("tokens_output")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0)
-                        .clamp(0, i32::MAX as i64) as i32;
                     MessageInfo::Assistant {
                         id: msg.id.clone(),
                         session_id: msg.session_id.clone(),
@@ -677,28 +762,16 @@ impl SessionPrompt {
                         } else {
                             last_user_id.clone()
                         },
-                        model_id: msg
-                            .metadata
-                            .get("model_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(model_id)
-                            .to_string(),
-                        provider_id: msg
-                            .metadata
-                            .get("model_provider")
-                            .and_then(|v| v.as_str())
+                        model_id: meta.model_id.as_deref().unwrap_or(model_id).to_string(),
+                        provider_id: meta
+                            .model_provider
+                            .as_deref()
                             .unwrap_or(provider_id)
                             .to_string(),
-                        mode: msg
-                            .metadata
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default")
-                            .to_string(),
-                        agent: msg
-                            .metadata
-                            .get("agent")
-                            .and_then(|v| v.as_str())
+                        mode: meta.mode.as_deref().unwrap_or("default").to_string(),
+                        agent: meta
+                            .agent
+                            .as_deref()
                             .unwrap_or("general")
                             .to_string(),
                         path: MessagePath {
@@ -706,31 +779,18 @@ impl SessionPrompt {
                             root: session_directory.to_string(),
                         },
                         summary: None,
-                        cost: msg
-                            .metadata
-                            .get("cost")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0),
+                        cost: meta.cost.unwrap_or(0.0),
                         tokens: AssistantTokens {
-                            total: Some(input.saturating_add(output)),
-                            input,
-                            output,
+                            total: Some(input_tokens.saturating_add(output_tokens)),
+                            input: input_tokens,
+                            output: output_tokens,
                             reasoning: 0,
                             cache: CacheTokens { read: 0, write: 0 },
                         },
                         error: None,
                         structured: None,
-                        variant: msg
-                            .metadata
-                            .get("variant")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        finish: msg.finish.clone().or_else(|| {
-                            msg.metadata
-                                .get("finish_reason")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        }),
+                        variant: meta.variant.clone(),
+                        finish: msg.finish.clone().or(meta.finish_reason.clone()),
                     }
                 }
             };

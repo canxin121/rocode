@@ -1040,10 +1040,15 @@ mod tests {
         let ServerEvent::OutputBlock { block, .. } = current else {
             panic!("expected output block");
         };
-        assert_eq!(
-            block.get("text").and_then(|value| value.as_str()),
-            Some("hello")
-        );
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct OutputBlockTextWire {
+            #[serde(default)]
+            text: Option<String>,
+        }
+
+        let wire: OutputBlockTextWire = serde_json::from_value(block).expect("valid output block");
+        assert_eq!(wire.text.as_deref(), Some("hello"));
     }
 
     #[test]

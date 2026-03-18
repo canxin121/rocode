@@ -791,12 +791,27 @@ mod tests {
     #[test]
     fn invalid_tool_payload_is_ts_shape() {
         let payload = SessionPrompt::invalid_tool_payload("read", "missing filePath");
-        assert_eq!(payload.get("tool").and_then(|v| v.as_str()), Some("read"));
-        assert_eq!(
-            payload.get("error").and_then(|v| v.as_str()),
-            Some("missing filePath")
-        );
-        assert!(payload.get("receivedArgs").is_none());
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct InvalidToolPayloadWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            tool: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            error: Option<String>,
+            #[serde(default)]
+            received_args: Option<serde_json::Value>,
+        }
+
+        let wire: InvalidToolPayloadWire = rocode_types::parse_value_lossy(&payload);
+        assert_eq!(wire.tool.as_deref(), Some("read"));
+        assert_eq!(wire.error.as_deref(), Some("missing filePath"));
+        assert!(wire.received_args.is_none());
     }
 
     #[test]
@@ -808,9 +823,37 @@ mod tests {
             Some("Invalid arguments"),
         );
         assert!(sanitized.is_object());
-        assert_eq!(sanitized["tool"], "write");
-        assert_eq!(sanitized["error"], "Invalid arguments");
-        assert_eq!(sanitized["receivedArgs"]["type"], "string");
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ReceivedArgsWire {
+            #[serde(default, rename = "type")]
+            kind: Option<String>,
+        }
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SanitizedToolInputWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            tool: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            error: Option<String>,
+            #[serde(default, rename = "receivedArgs")]
+            received_args: Option<ReceivedArgsWire>,
+        }
+
+        let wire: SanitizedToolInputWire = rocode_types::parse_value_lossy(&sanitized);
+        assert_eq!(wire.tool.as_deref(), Some("write"));
+        assert_eq!(wire.error.as_deref(), Some("Invalid arguments"));
+        assert_eq!(
+            wire.received_args.and_then(|args| args.kind).as_deref(),
+            Some("string")
+        );
     }
 
     #[test]
@@ -921,7 +964,17 @@ mod tests {
         let (attachments, file_parts) =
             SessionPrompt::extract_tool_attachments_from_metadata(&mut metadata, "ses_1", "msg_1");
 
-        assert_eq!(metadata.get("note").and_then(|v| v.as_str()), Some("ok"));
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct NoteMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            note: Option<String>,
+        }
+
+        let wire: NoteMetadataWire = rocode_types::parse_map_lossy(&metadata);
+        assert_eq!(wire.note.as_deref(), Some("ok"));
         assert!(!metadata.contains_key("attachments"));
         assert!(!metadata.contains_key("attachment"));
         assert_eq!(attachments.as_ref().map(|v| v.len()), Some(2));

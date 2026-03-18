@@ -68,7 +68,23 @@ impl ProtocolLoader {
         provider_id: &str,
         options: &HashMap<String, serde_json::Value>,
     ) -> Option<ProtocolManifest> {
-        if let Some(path) = options.get("protocol_path").and_then(|v| v.as_str()) {
+        #[derive(Debug, Default, Deserialize)]
+        struct ProtocolLoaderOptionsWire {
+            #[serde(default)]
+            protocol_path: Option<String>,
+        }
+
+        let options_wire = serde_json::to_value(options)
+            .ok()
+            .and_then(|value| serde_json::from_value::<ProtocolLoaderOptionsWire>(value).ok())
+            .unwrap_or_default();
+
+        if let Some(path) = options_wire
+            .protocol_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if let Ok(manifest) = self.load_from_file(Path::new(path)) {
                 return Some(manifest);
             }

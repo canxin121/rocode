@@ -345,12 +345,30 @@ fn thinking_flag_disabled_value(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Bool(false) => true,
         serde_json::Value::String(text) => thinking_flag_disabled_string(text),
-        serde_json::Value::Object(map) => {
-            map.get("enabled").is_some_and(thinking_flag_disabled_value)
-                || map
-                    .get("includeThoughts")
+        serde_json::Value::Object(_) => {
+            #[derive(Debug, serde::Deserialize, Default)]
+            struct ThinkingFlagWire {
+                #[serde(default)]
+                enabled: Option<serde_json::Value>,
+                #[serde(default, alias = "includeThoughts", alias = "include_thoughts")]
+                include_thoughts: Option<serde_json::Value>,
+                #[serde(default, rename = "type")]
+                thinking_type: Option<serde_json::Value>,
+            }
+
+            let wire =
+                serde_json::from_value::<ThinkingFlagWire>(value.clone()).unwrap_or_default();
+            wire.enabled
+                .as_ref()
+                .is_some_and(thinking_flag_disabled_value)
+                || wire
+                    .include_thoughts
+                    .as_ref()
                     .is_some_and(thinking_flag_disabled_value)
-                || map.get("type").is_some_and(thinking_flag_disabled_value)
+                || wire
+                    .thinking_type
+                    .as_ref()
+                    .is_some_and(thinking_flag_disabled_value)
         }
         _ => false,
     }
@@ -407,7 +425,12 @@ mod tests {
             inherited
                 .provider_options
                 .as_ref()
-                .and_then(|options| options.get("thinking")),
+                .and_then(|options| {
+                    options
+                        .iter()
+                        .find(|(key, _)| key.as_str() == "thinking")
+                        .map(|(_, value)| value)
+                }),
             Some(&json!(true))
         );
     }
@@ -516,7 +539,12 @@ mod tests {
         assert_eq!(
             chat.provider_options
                 .as_ref()
-                .and_then(|o| o.get("thinking")),
+                .and_then(|options| {
+                    options
+                        .iter()
+                        .find(|(key, _)| key.as_str() == "thinking")
+                        .map(|(_, value)| value)
+                }),
             Some(&json!({"enabled": true}))
         );
     }

@@ -3064,10 +3064,19 @@ async fn cli_trigger_abort(handle: CliActiveAbortHandle) -> bool {
             api_client,
             session_id,
         } => match api_client.abort_session(&session_id).await {
-            Ok(result) => result
-                .get("aborted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            Ok(result) => {
+                #[derive(Debug, serde::Deserialize, Default)]
+                struct AbortResponseWire {
+                    #[serde(
+                        default,
+                        deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+                    )]
+                    aborted: Option<bool>,
+                }
+
+                let wire: AbortResponseWire = rocode_types::parse_value_lossy(&result);
+                wire.aborted.unwrap_or(true)
+            }
             Err(e) => {
                 tracing::error!("Failed to abort server session: {}", e);
                 false
@@ -4980,31 +4989,26 @@ async fn handle_permission_from_sse(
             }
         };
 
-    let input = info.input.as_object().cloned().unwrap_or_default();
-    let permission = input
-        .get("permission")
-        .and_then(|value| value.as_str())
-        .unwrap_or(info.tool.as_str())
-        .to_string();
-    let patterns = input
-        .get("patterns")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let metadata = input
-        .get("metadata")
-        .and_then(|value| value.as_object())
-        .map(|map| {
-            map.iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct PermissionInputWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        permission: Option<String>,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_vec_string_lossy")]
+        patterns: Vec<String>,
+        #[serde(default)]
+        metadata: Option<serde_json::Value>,
+    }
+
+    let wire: PermissionInputWire = rocode_types::parse_value_lossy(&info.input);
+    let permission = wire.permission.unwrap_or_else(|| info.tool.to_string());
+    let patterns = wire.patterns;
+    let metadata = match wire.metadata {
+        Some(serde_json::Value::Object(map)) => map.into_iter().collect::<HashMap<_, _>>(),
+        _ => HashMap::new(),
+    };
 
     {
         let memory = runtime.permission_memory.lock().await;

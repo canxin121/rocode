@@ -14,6 +14,7 @@ mod tests {
     };
     use crate::output_blocks::SchedulerStageBlock;
     use crate::stage_protocol::*;
+    use serde::Deserialize;
     use std::collections::HashSet;
 
     fn load_fixture() -> MultiAgentReplayFixture {
@@ -550,10 +551,15 @@ mod tests {
             1,
             "implementation stage should have 1 tool_started event"
         );
-        assert_eq!(
-            impl_tools[0].payload.get("tool").and_then(|v| v.as_str()),
-            Some("write_file")
-        );
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ToolStartedPayloadWire {
+            #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+            tool: Option<String>,
+        }
+
+        let payload: ToolStartedPayloadWire = rocode_types::parse_value_lossy(&impl_tools[0].payload);
+        assert_eq!(payload.tool.as_deref(), Some("write_file"));
     }
 
     // ── 10. InspectBlock construction from events ────────────────────

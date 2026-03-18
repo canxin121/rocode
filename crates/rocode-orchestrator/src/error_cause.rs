@@ -80,6 +80,7 @@ pub fn with_error_cause_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn classifies_common_timeout_and_permission_errors() {
@@ -235,10 +236,18 @@ mod tests {
             "foo": "bar"
         });
         let out = with_error_cause_metadata(Some(existing), "timeout", None);
-        assert_eq!(
-            out.get("errorCause").and_then(|v| v.as_str()),
-            Some("custom_cause")
-        );
-        assert_eq!(out.get("foo").and_then(|v| v.as_str()), Some("bar"));
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ErrorCauseMetadataWire {
+            #[serde(default, rename = "errorCause")]
+            error_cause: Option<String>,
+            #[serde(default)]
+            foo: Option<String>,
+        }
+
+        let wire: ErrorCauseMetadataWire =
+            serde_json::from_value(out).expect("valid error metadata");
+        assert_eq!(wire.error_cause.as_deref(), Some("custom_cause"));
+        assert_eq!(wire.foo.as_deref(), Some("bar"));
     }
 }

@@ -236,11 +236,19 @@ impl Tool for TaskTool {
 
         let dispatch_label = input.dispatch.label().to_string();
 
-        let bypass_check = ctx
-            .extra
-            .get("bypassAgentCheck")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        #[derive(Debug, Deserialize, Default)]
+        struct TaskToolExtraWire {
+            #[serde(
+                default,
+                alias = "bypassAgentCheck",
+                alias = "bypass_agent_check",
+                deserialize_with = "rocode_types::deserialize_bool_lossy"
+            )]
+            bypass_agent_check: bool,
+        }
+
+        let extra: TaskToolExtraWire = rocode_types::parse_map_lossy(&ctx.extra);
+        let bypass_check = extra.bypass_agent_check;
 
         if !bypass_check {
             ctx.ask_permission(
@@ -464,10 +472,62 @@ fn parse_model_ref(raw: Option<&str>) -> TaskAgentModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::Mutex;
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TaskToolMetadataWire {
+        #[serde(default, alias = "sessionId", alias = "session_id")]
+        session_id: Option<String>,
+        #[serde(default, alias = "agentTaskId", alias = "agent_task_id")]
+        agent_task_id: Option<String>,
+        #[serde(default)]
+        model: Option<TaskToolModelWire>,
+        #[serde(
+            default,
+            alias = "taskStatus",
+            alias = "task_status",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        task_status: Option<String>,
+        #[serde(
+            default,
+            alias = "hasTextOutput",
+            alias = "has_text_output",
+            deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+        )]
+        has_text_output: Option<bool>,
+        #[serde(
+            default,
+            alias = "loadedSkillCount",
+            alias = "loaded_skill_count",
+            deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+        )]
+        loaded_skill_count: Option<u64>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TaskToolModelWire {
+        #[serde(
+            default,
+            alias = "modelID",
+            alias = "modelId",
+            alias = "model_id",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        model_id: Option<String>,
+        #[serde(
+            default,
+            alias = "providerID",
+            alias = "providerId",
+            alias = "provider_id",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        provider_id: Option<String>,
+    }
 
     #[test]
     fn task_description_directs_lifecycle_semantics_to_task_flow() {
@@ -544,21 +604,25 @@ mod tests {
         assert!(result
             .output
             .contains("<task_result>\nsubagent output\n</task_result>"));
-        assert_eq!(
-            result.metadata.get("sessionId"),
-            Some(&serde_json::json!("task_build_123"))
-        );
-        assert!(result
-            .metadata
-            .get("agentTaskId")
-            .and_then(|value| value.as_str())
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.session_id.as_deref(), Some("task_build_123"));
+        assert!(metadata
+            .agent_task_id
+            .as_deref()
             .is_some_and(|value| value.starts_with('a')));
         assert_eq!(
-            result.metadata.get("model"),
-            Some(&serde_json::json!({
-                "modelID": "model-y",
-                "providerID": "provider-x"
-            }))
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.provider_id.as_deref()),
+            Some("provider-x")
+        );
+        assert_eq!(
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.model_id.as_deref()),
+            Some("model-y")
         );
 
         let create_calls = create_calls.lock().await.clone();
@@ -632,10 +696,10 @@ mod tests {
         let result = TaskTool::new().execute(args, ctx).await.unwrap();
 
         assert!(!(*created.lock().await));
-        assert!(result
-            .metadata
-            .get("agentTaskId")
-            .and_then(|value| value.as_str())
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert!(metadata
+            .agent_task_id
+            .as_deref()
             .is_some_and(|value| value.starts_with('a')));
         let prompted = prompted.lock().await.clone();
         assert_eq!(prompted.len(), 1);
@@ -703,12 +767,20 @@ mod tests {
         let result = TaskTool::new().execute(args, ctx).await.unwrap();
 
         // Agent's own model should be preferred over get_last_model fallback
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
         assert_eq!(
-            result.metadata.get("model"),
-            Some(&serde_json::json!({
-                "modelID": "gpt-4o",
-                "providerID": "openai"
-            }))
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.provider_id.as_deref()),
+            Some("openai")
+        );
+        assert_eq!(
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.model_id.as_deref()),
+            Some("gpt-4o")
         );
 
         let create_calls = create_calls.lock().await.clone();
@@ -760,12 +832,20 @@ mod tests {
         let result = TaskTool::new().execute(args, ctx).await.unwrap();
 
         // Should fall back to get_last_model
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
         assert_eq!(
-            result.metadata.get("model"),
-            Some(&serde_json::json!({
-                "modelID": "claude",
-                "providerID": "anthropic"
-            }))
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.provider_id.as_deref()),
+            Some("anthropic")
+        );
+        assert_eq!(
+            metadata
+                .model
+                .as_ref()
+                .and_then(|model| model.model_id.as_deref()),
+            Some("claude")
         );
 
         let create_calls = create_calls.lock().await.clone();
@@ -990,14 +1070,9 @@ mod tests {
 
         assert!(result.output.contains("task_status: completed"));
         assert!(result.output.contains(TASK_NO_TEXT_OUTPUT_MESSAGE));
-        assert_eq!(
-            result.metadata.get("taskStatus"),
-            Some(&serde_json::json!(TASK_STATUS_COMPLETED))
-        );
-        assert_eq!(
-            result.metadata.get("hasTextOutput"),
-            Some(&serde_json::json!(false))
-        );
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.task_status.as_deref(), Some(TASK_STATUS_COMPLETED));
+        assert_eq!(metadata.has_text_output, Some(false));
     }
 
     #[tokio::test]
@@ -1077,9 +1152,7 @@ Use clear visual hierarchy.
         assert!(prompted[0].1.contains("frontend-ui-ux"));
         assert!(prompted[0].1.contains("Use clear visual hierarchy."));
         assert!(prompted[0].1.contains("Redesign dashboard layout"));
-        assert_eq!(
-            result.metadata.get("loadedSkillCount"),
-            Some(&serde_json::json!(1))
-        );
+        let metadata: TaskToolMetadataWire = rocode_types::parse_map_lossy(&result.metadata);
+        assert_eq!(metadata.loaded_skill_count, Some(1));
     }
 }

@@ -280,8 +280,12 @@ mod tests {
         .await;
         assert!(spec.model.capabilities.reasoning);
         let compiled = spec.compile().provider_options.expect("compiled");
+        let thinking = compiled
+            .iter()
+            .find(|(key, _)| key.as_str() == "thinking")
+            .map(|(_, value)| value);
         assert_eq!(
-            compiled.get("thinking"),
+            thinking,
             Some(&json!({"type": "enabled", "clear_thinking": false}))
         );
     }
@@ -305,7 +309,11 @@ mod tests {
         .await
         .provider_options
         .expect("compiled");
-        assert_eq!(compiled.get("thinking"), Some(&json!(false)));
+        let thinking = compiled
+            .iter()
+            .find(|(key, _)| key.as_str() == "thinking")
+            .map(|(_, value)| value);
+        assert_eq!(thinking, Some(&json!(false)));
     }
 
     #[tokio::test]
@@ -331,12 +339,22 @@ mod tests {
             },
         )
         .await;
+        let prompt_cache_key = spec
+            .request_options
+            .iter()
+            .find(|(key, _)| key.as_str() == "promptCacheKey")
+            .map(|(_, value)| value);
         assert_eq!(
-            spec.request_options.get("promptCacheKey"),
+            prompt_cache_key,
             Some(&json!("root"))
         );
+        let temperature_mode = spec
+            .request_options
+            .iter()
+            .find(|(key, _)| key.as_str() == "temperature_mode")
+            .map(|(_, value)| value);
         assert_eq!(
-            spec.request_options.get("temperature_mode"),
+            temperature_mode,
             Some(&json!("fixed"))
         );
     }

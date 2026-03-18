@@ -521,6 +521,7 @@ async fn submit_tui_response(Json(body): Json<serde_json::Value>) -> Json<bool> 
 mod tests {
     use super::*;
     use crate::ServerState;
+    use rocode_types::{QuestionResolutionKind, ServerEvent};
     use std::sync::{Arc, Mutex as StdMutex};
 
     fn sample_question() -> rocode_tool::QuestionDef {
@@ -551,16 +552,12 @@ mod tests {
             loop {
                 let maybe_request_id = {
                     let events = captured_for_answer.lock().expect("capture lock");
-                    events.iter().find_map(|event| {
-                        let ty = event.get("type").and_then(|value| value.as_str())?;
-                        if ty == "question.created" {
-                            event
-                                .get("requestID")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        } else {
-                            None
-                        }
+                    events.iter().find_map(|event| match serde_json::from_value::<ServerEvent>(
+                        event.clone(),
+                    )
+                    .ok()? {
+                        ServerEvent::QuestionCreated { request_id, .. } => Some(request_id),
+                        _ => None,
                     })
                 };
                 if let Some(request_id) = maybe_request_id.as_deref() {
@@ -587,14 +584,19 @@ mod tests {
         assert_eq!(answers, vec![vec!["Yes".to_string()]]);
 
         let events = captured.lock().expect("capture lock");
-        assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.created")
-                && event.get("sessionID").and_then(|value| value.as_str())
-                    == Some(session_id.as_str())
+        assert!(events.iter().any(|event| match serde_json::from_value::<ServerEvent>(
+            event.clone(),
+        ) {
+            Ok(ServerEvent::QuestionCreated { session_id: sid, .. }) => sid == session_id,
+            _ => false,
         }));
-        assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
-                && event.get("resolution").and_then(|value| value.as_str()) == Some("answered")
+        assert!(events.iter().any(|event| match serde_json::from_value::<ServerEvent>(
+            event.clone(),
+        ) {
+            Ok(ServerEvent::QuestionResolved { resolution, .. }) => {
+                resolution == Some(QuestionResolutionKind::Answered)
+            }
+            _ => false,
         }));
     }
 
@@ -613,16 +615,12 @@ mod tests {
             loop {
                 let maybe_request_id = {
                     let events = captured_for_reject.lock().expect("capture lock");
-                    events.iter().find_map(|event| {
-                        let ty = event.get("type").and_then(|value| value.as_str())?;
-                        if ty == "question.created" {
-                            event
-                                .get("requestID")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        } else {
-                            None
-                        }
+                    events.iter().find_map(|event| match serde_json::from_value::<ServerEvent>(
+                        event.clone(),
+                    )
+                    .ok()? {
+                        ServerEvent::QuestionCreated { request_id, .. } => Some(request_id),
+                        _ => None,
                     })
                 };
                 if let Some(request_id) = maybe_request_id.as_deref() {
@@ -651,9 +649,13 @@ mod tests {
         ));
 
         let events = captured.lock().expect("capture lock");
-        assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
-                && event.get("resolution").and_then(|value| value.as_str()) == Some("rejected")
+        assert!(events.iter().any(|event| match serde_json::from_value::<ServerEvent>(
+            event.clone(),
+        ) {
+            Ok(ServerEvent::QuestionResolved { resolution, .. }) => {
+                resolution == Some(QuestionResolutionKind::Rejected)
+            }
+            _ => false,
         }));
     }
 }

@@ -48,6 +48,144 @@ use super::{
     SchedulerTransitionTarget, SchedulerTransitionTrigger, StageToolPolicy,
 };
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_vec_string_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(parse_vec_string_value_lossy(value)),
+    })
+}
+
+fn parse_vec_string_value_lossy(value: Value) -> Vec<String> {
+    match value {
+        Value::Null => Vec::new(),
+        Value::Array(values) => values
+            .into_iter()
+            .filter_map(|value| match value {
+                Value::String(value) => {
+                    let trimmed = value.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                }
+                Value::Number(value) => Some(value.to_string()),
+                Value::Bool(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Vec::new();
+            }
+            serde_json::from_str::<Value>(trimmed)
+                .ok()
+                .map(parse_vec_string_value_lossy)
+                .unwrap_or_else(|| vec![trimmed.to_string()])
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn deserialize_opt_object_map_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Map<String, Value>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Object(map)) if !map.is_empty() => Some(map),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct LegacyExecutionGateCandidateWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    status: Option<String>,
+    #[serde(
+        default,
+        alias = "gate_decision",
+        alias = "gateDecision",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    gate_decision: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    reasoning: Option<String>,
+    #[serde(
+        default,
+        alias = "execution_fidelity",
+        alias = "executionFidelity",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    execution_fidelity: Option<String>,
+    #[serde(
+        default,
+        alias = "next_input",
+        alias = "nextInput",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    next_input: Option<String>,
+    #[serde(
+        default,
+        alias = "next_actions",
+        alias = "nextActions",
+        deserialize_with = "deserialize_opt_vec_string_lossy"
+    )]
+    next_actions: Option<Vec<String>>,
+    #[serde(
+        default,
+        alias = "final_response",
+        alias = "finalResponse",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    final_response: Option<String>,
+    #[serde(
+        default,
+        alias = "verification_summary",
+        alias = "verificationSummary",
+        deserialize_with = "deserialize_opt_object_map_lossy"
+    )]
+    verification_summary: Option<serde_json::Map<String, Value>>,
+    #[serde(
+        default,
+        alias = "task_status",
+        alias = "taskStatus",
+        deserialize_with = "deserialize_opt_object_map_lossy"
+    )]
+    task_status: Option<serde_json::Map<String, Value>>,
+    #[serde(
+        default,
+        alias = "minor_issues",
+        alias = "minorIssues",
+        deserialize_with = "deserialize_opt_vec_string_lossy"
+    )]
+    minor_issues: Option<Vec<String>>,
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -2008,30 +2146,30 @@ fn parse_execution_gate_candidate(candidate: &str) -> Option<SchedulerExecutionG
         return Some(normalize_execution_gate_decision(decision));
     }
 
-    let value = serde_json::from_str::<Value>(candidate).ok()?;
-    let status = value
-        .get("status")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("gate_decision").and_then(Value::as_str))
-        .and_then(parse_execution_gate_status_token)?;
+    let wire = serde_json::from_str::<LegacyExecutionGateCandidateWire>(candidate).ok()?;
+
+    let status_token = first_non_empty_string(&[wire.status.as_deref(), wire.gate_decision.as_deref()])?;
+    let status = parse_execution_gate_status_token(status_token)?;
 
     let summary = first_non_empty_string(&[
-        value.get("summary").and_then(Value::as_str),
-        value.get("reasoning").and_then(Value::as_str),
-        value.get("execution_fidelity").and_then(Value::as_str),
+        wire.summary.as_deref(),
+        wire.reasoning.as_deref(),
+        wire.execution_fidelity.as_deref(),
     ])
     .unwrap_or_default()
     .to_string();
 
+    let next_actions_markdown = joined_string_array(wire.next_actions.as_deref());
     let next_input = first_non_empty_string(&[
-        value.get("next_input").and_then(Value::as_str),
-        joined_string_array(value.get("next_actions")).as_deref(),
+        wire.next_input.as_deref(),
+        next_actions_markdown.as_deref(),
     ])
     .map(str::to_string);
 
+    let legacy_details = build_legacy_gate_details_markdown(&wire);
     let final_response = first_non_empty_string(&[
-        value.get("final_response").and_then(Value::as_str),
-        build_legacy_gate_details_markdown(&value).as_deref(),
+        wire.final_response.as_deref(),
+        legacy_details.as_deref(),
     ])
     .map(str::to_string);
 
@@ -2064,24 +2202,24 @@ fn first_non_empty_string<'a>(candidates: &[Option<&'a str>]) -> Option<&'a str>
         .find(|value| !value.is_empty())
 }
 
-fn joined_string_array(value: Option<&Value>) -> Option<String> {
-    let items = value?.as_array()?;
-    let lines = items
+fn joined_string_array(items: Option<&[String]>) -> Option<String> {
+    let lines = items?
         .iter()
-        .filter_map(Value::as_str)
-        .map(str::trim)
+        .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| format!("- {value}"))
         .collect::<Vec<_>>();
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
+fn build_legacy_gate_details_markdown(
+    wire: &LegacyExecutionGateCandidateWire,
+) -> Option<String> {
     let mut sections = Vec::new();
 
-    if let Some(summary) = value
-        .get("verification_summary")
-        .and_then(Value::as_object)
+    if let Some(summary) = wire
+        .verification_summary
+        .as_ref()
         .filter(|summary| !summary.is_empty())
     {
         let mut lines = Vec::new();
@@ -2097,15 +2235,11 @@ fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
         }
     }
 
-    if let Some(task_status) = value
-        .get("task_status")
-        .and_then(Value::as_object)
-        .filter(|status| !status.is_empty())
-    {
+    if let Some(task_status) = wire.task_status.as_ref().filter(|status| !status.is_empty()) {
         let mut lines = Vec::new();
         for (key, raw) in task_status {
-            let rendered = raw.as_str().unwrap_or_default().trim();
-            if !rendered.is_empty() {
+            if let Some(rendered) = raw.as_str().map(str::trim).filter(|value| !value.is_empty())
+            {
                 lines.push(format!("- {}: {}", key.replace('_', " "), rendered));
             }
         }
@@ -2114,20 +2248,20 @@ fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
         }
     }
 
-    if let Some(execution_fidelity) = value
-        .get("execution_fidelity")
-        .and_then(Value::as_str)
+    if let Some(execution_fidelity) = wire
+        .execution_fidelity
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         sections.push(format!("### Execution Fidelity\n{}", execution_fidelity));
     }
 
-    if let Some(minor_issues) = joined_string_array(value.get("minor_issues")) {
+    if let Some(minor_issues) = joined_string_array(wire.minor_issues.as_deref()) {
         sections.push(format!("### Minor Issues\n{}", minor_issues));
     }
 
-    if let Some(next_actions) = joined_string_array(value.get("next_actions")) {
+    if let Some(next_actions) = joined_string_array(wire.next_actions.as_deref()) {
         sections.push(format!("### Next Actions\n{}", next_actions));
     }
 

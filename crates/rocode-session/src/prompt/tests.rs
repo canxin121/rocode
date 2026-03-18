@@ -508,18 +508,31 @@ async fn create_user_message_persists_pending_subtask_payload() {
         .expect("create_user_message should succeed");
 
     let msg = session.messages.last().expect("user message should exist");
-    let pending = msg
-        .metadata
-        .get("pending_subtasks")
-        .and_then(|v| v.as_array())
-        .expect("pending_subtasks metadata should exist");
-    assert_eq!(pending.len(), 1);
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct PendingSubtaskWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        agent: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        prompt: Option<String>,
+    }
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct PendingSubtasksWire {
+        #[serde(default)]
+        pending_subtasks: Vec<PendingSubtaskWire>,
+    }
+
+    let meta: PendingSubtasksWire = rocode_types::parse_map_lossy(&msg.metadata);
+    assert_eq!(meta.pending_subtasks.len(), 1);
+    assert_eq!(meta.pending_subtasks[0].agent.as_deref(), Some("explore"));
     assert_eq!(
-        pending[0].get("agent").and_then(|v| v.as_str()),
-        Some("explore")
-    );
-    assert_eq!(
-        pending[0].get("prompt").and_then(|v| v.as_str()),
+        meta.pending_subtasks[0].prompt.as_deref(),
         Some("Inspect codegen path")
     );
     assert!(msg.parts.iter().any(|p| match &p.part_type {
@@ -736,11 +749,21 @@ async fn execute_tool_calls_routes_invalid_arguments_to_invalid_tool() {
         })
         .expect("tool call should exist");
     assert_eq!(tool_call.0, "invalid");
-    assert_eq!(
-        tool_call.1.get("tool").and_then(|v| v.as_str()),
-        Some("needs_path")
-    );
-    assert!(tool_call.1.get("receivedArgs").is_none());
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct InvalidToolInputWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        tool: Option<String>,
+        #[serde(default)]
+        received_args: Option<serde_json::Value>,
+    }
+
+    let wire: InvalidToolInputWire = rocode_types::parse_value_lossy(tool_call.1);
+    assert_eq!(wire.tool.as_deref(), Some("needs_path"));
+    assert!(wire.received_args.is_none());
     assert!(matches!(tool_call.2, crate::ToolCallStatus::Completed));
 
     let tool_msg = session
@@ -993,8 +1016,9 @@ fn part_input_file_skips_none_fields_in_json() {
         mime: None,
     };
     let json = serde_json::to_value(&part).unwrap();
-    assert!(json.get("filename").is_none());
-    assert!(json.get("mime").is_none());
+    let obj = json.as_object().expect("file part should serialize to object");
+    assert!(!obj.contains_key("filename"));
+    assert!(!obj.contains_key("mime"));
 }
 
 // ── resolve_prompt_parts tests ──

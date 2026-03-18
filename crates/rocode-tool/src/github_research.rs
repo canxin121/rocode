@@ -1271,9 +1271,7 @@ impl GitHubResearchTool {
         repo: &str,
         ctx: &ToolContext,
     ) -> Result<GitHubRepoResponse, ToolError> {
-        if let Some(default_branch) =
-            configured_repo_override(ctx, "github_research_default_branch_overrides", repo)
-        {
+        if let Some(default_branch) = configured_repo_default_branch_override(ctx, repo) {
             return Ok(GitHubRepoResponse { default_branch });
         }
         let url = format!("{}/repos/{}", API_BASE_URL, repo);
@@ -1286,9 +1284,7 @@ impl GitHubResearchTool {
         reference: &str,
         ctx: &ToolContext,
     ) -> Result<GitHubCommitResponse, ToolError> {
-        if let Some(sha) =
-            configured_repo_ref_override(ctx, "github_research_commit_overrides", repo, reference)
-        {
+        if let Some(sha) = configured_repo_commit_override(ctx, repo, reference) {
             return Ok(GitHubCommitResponse { sha });
         }
         let url = format!(
@@ -2419,40 +2415,72 @@ fn ensure_git_available() -> Result<(), ToolError> {
     crate::git_runtime::ensure_git_available()
 }
 
-fn configured_repo_override(ctx: &ToolContext, key: &str, repo: &str) -> Option<String> {
-    ctx.extra
-        .get(key)
-        .and_then(|value| value.as_object())
-        .and_then(|map| map.get(repo))
+#[derive(Debug, Deserialize, Default)]
+struct GitHubResearchExtraWire {
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    github_research_cache_root: Option<String>,
+    #[serde(default)]
+    github_research_remote_url_overrides: Option<serde_json::Value>,
+    #[serde(default)]
+    github_research_default_branch_overrides: Option<serde_json::Value>,
+    #[serde(default)]
+    github_research_commit_overrides: Option<serde_json::Value>,
+}
+
+fn github_research_extra(ctx: &ToolContext) -> GitHubResearchExtraWire {
+    rocode_types::parse_map_lossy(&ctx.extra)
+}
+
+fn map_lookup_value<'a>(
+    map: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    map.iter()
+        .find(|(k, _)| k.as_str() == key)
+        .map(|(_, value)| value)
+}
+
+fn map_lookup_str(map: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+    map_lookup_value(map, key)
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
 }
 
-fn configured_repo_ref_override(
+fn configured_repo_remote_url_override(ctx: &ToolContext, repo: &str) -> Option<String> {
+    let extra = github_research_extra(ctx);
+    let overrides = extra.github_research_remote_url_overrides.as_ref()?.as_object()?;
+    map_lookup_str(overrides, repo)
+}
+
+fn configured_repo_default_branch_override(ctx: &ToolContext, repo: &str) -> Option<String> {
+    let extra = github_research_extra(ctx);
+    let overrides = extra
+        .github_research_default_branch_overrides
+        .as_ref()?
+        .as_object()?;
+    map_lookup_str(overrides, repo)
+}
+
+fn configured_repo_commit_override(
     ctx: &ToolContext,
-    key: &str,
     repo: &str,
     reference: &str,
 ) -> Option<String> {
-    ctx.extra
-        .get(key)
-        .and_then(|value| value.as_object())
-        .and_then(|repos| repos.get(repo))
-        .and_then(|value| value.as_object())
-        .and_then(|refs| refs.get(reference))
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
+    let extra = github_research_extra(ctx);
+    let repos = extra.github_research_commit_overrides.as_ref()?.as_object()?;
+    let repo_overrides = map_lookup_value(repos, repo)?.as_object()?;
+    map_lookup_str(repo_overrides, reference)
 }
 
 fn remote_url_for_repo(repo: &str, ctx: &ToolContext) -> String {
-    configured_repo_override(ctx, "github_research_remote_url_overrides", repo)
+    configured_repo_remote_url_override(ctx, repo)
         .unwrap_or_else(|| format!("https://github.com/{}.git", repo))
 }
 
 fn local_repo_root(ctx: &ToolContext) -> PathBuf {
-    ctx.extra
-        .get("github_research_cache_root")
-        .and_then(|value| value.as_str())
+    let extra = github_research_extra(ctx);
+    extra
+        .github_research_cache_root
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::cache_dir()

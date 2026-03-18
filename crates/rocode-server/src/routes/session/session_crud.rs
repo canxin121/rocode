@@ -258,45 +258,59 @@ pub(crate) fn resolved_session_directory(raw: &str) -> String {
         .to_string()
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct SessionOverrideMetadataWire {
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    model_provider: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    model_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    model_variant: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_string_lossy")]
+    agent: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    scheduler_profile: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    resolved_scheduler_profile: Option<String>,
+}
+
+fn session_override_metadata(session: &rocode_session::Session) -> SessionOverrideMetadataWire {
+    rocode_types::parse_map_lossy(&session.metadata)
+}
+
 pub(super) fn session_model_override(session: &rocode_session::Session) -> Option<String> {
-    session
-        .metadata
-        .get("model_provider")
-        .and_then(|value| value.as_str())
-        .zip(
-            session
-                .metadata
-                .get("model_id")
-                .and_then(|value| value.as_str()),
-        )
+    let wire = session_override_metadata(session);
+    wire.model_provider
+        .as_deref()
+        .zip(wire.model_id.as_deref())
         .map(|(provider, model)| format!("{provider}/{model}"))
 }
 
 pub(super) fn session_variant_override(session: &rocode_session::Session) -> Option<String> {
-    session
-        .metadata
-        .get("model_variant")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
+    session_override_metadata(session).model_variant
 }
 
 pub(super) fn session_agent_override(session: &rocode_session::Session) -> Option<String> {
-    session
-        .metadata
-        .get("agent")
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
+    session_override_metadata(session).agent
 }
 
 pub(super) fn session_scheduler_profile_override(
     session: &rocode_session::Session,
 ) -> Option<String> {
-    session
-        .metadata
-        .get("scheduler_profile")
-        .or_else(|| session.metadata.get("resolved_scheduler_profile"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
+    let wire = session_override_metadata(session);
+    wire.scheduler_profile.or(wire.resolved_scheduler_profile)
 }
 
 pub(super) async fn set_session_run_status(

@@ -164,12 +164,23 @@ pub(crate) fn latest_user_prompt(session: &rocode_session::Session) -> Option<St
         if !matches!(message.role, rocode_session::MessageRole::User) {
             return None;
         }
-        message
-            .metadata
-            .get("resolved_user_prompt")
-            .and_then(|value| value.as_str())
-            .map(|value| value.trim().to_string())
+
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct UserPromptMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_preserve"
+            )]
+            resolved_user_prompt: Option<String>,
+        }
+
+        let meta: UserPromptMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+
+        meta.resolved_user_prompt
+            .as_deref()
+            .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
             .or_else(|| {
                 let text = message.get_text().trim().to_string();
                 if text.is_empty() {
@@ -202,28 +213,59 @@ pub(crate) fn collect_stage_recovery_targets(
         .iter()
         .rev()
         .filter_map(|message| {
-            let metadata = &message.metadata;
-            let stage = metadata.get("scheduler_stage")?.as_str()?.to_string();
-            let profile = metadata
-                .get("resolved_scheduler_profile")
-                .or_else(|| metadata.get("scheduler_profile"))
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string());
-            let status = metadata
-                .get("scheduler_stage_status")
-                .and_then(|value| value.as_str())
-                .unwrap_or("done")
-                .to_string();
-            let label = metadata
-                .get("scheduler_stage_title")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
-                .or_else(|| {
-                    metadata
-                        .get("scheduler_stage_focus")
-                        .and_then(|value| value.as_str())
-                        .map(|focus| format!("{stage} · {focus}"))
-                })
+            #[derive(Debug, Default, serde::Deserialize)]
+            struct StageRecoveryMetadataWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                scheduler_stage: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                resolved_scheduler_profile: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                scheduler_profile: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                scheduler_stage_status: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                scheduler_stage_title: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                scheduler_stage_focus: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                scheduler_stage_index: Option<u64>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+                )]
+                scheduler_stage_total: Option<u64>,
+            }
+
+            let meta: StageRecoveryMetadataWire = rocode_types::parse_map_lossy(&message.metadata);
+            let stage = meta.scheduler_stage?;
+            let profile = meta.resolved_scheduler_profile.or(meta.scheduler_profile);
+            let status = meta
+                .scheduler_stage_status
+                .unwrap_or_else(|| "done".to_string());
+            let label = meta
+                .scheduler_stage_title
+                .or_else(|| meta.scheduler_stage_focus.map(|focus| format!("{stage} · {focus}")))
                 .unwrap_or_else(|| stage.clone());
             let body = assistant_visible_text_from_message(message);
             Some(StageRecoveryTarget {
@@ -235,14 +277,8 @@ pub(crate) fn collect_stage_recovery_targets(
                     summary: short_recovery_text(&body, 240),
                     scheduler_profile: profile,
                     stage: Some(stage),
-                    stage_index: metadata
-                        .get("scheduler_stage_index")
-                        .and_then(|value| value.as_u64())
-                        .map(|value| value as u32),
-                    stage_total: metadata
-                        .get("scheduler_stage_total")
-                        .and_then(|value| value.as_u64())
-                        .map(|value| value as u32),
+                    stage_index: meta.scheduler_stage_index.map(|value| value as u32),
+                    stage_total: meta.scheduler_stage_total.map(|value| value as u32),
                 },
                 body,
             })
@@ -325,7 +361,38 @@ pub(crate) fn find_active_scheduler_stage_checkpoint(
     for root in &topology.roots {
         visit(root, &mut best);
     }
-    best.map(|node| RecoveryCheckpointInfo {
+    best.map(|node| {
+        #[derive(Debug, Default, serde::Deserialize)]
+        struct StageNodeMetadataWire {
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_profile: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
+            scheduler_stage: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+            )]
+            scheduler_stage_index: Option<u64>,
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_u64_lossy"
+            )]
+            scheduler_stage_total: Option<u64>,
+        }
+
+        let meta: StageNodeMetadataWire = node
+            .metadata
+            .as_ref()
+            .map(rocode_types::parse_value_lossy)
+            .unwrap_or_default();
+
+        RecoveryCheckpointInfo {
         id: node.id.clone(),
         kind: "stage".to_string(),
         label: node.label.clone().unwrap_or_else(|| node.id.clone()),
@@ -338,30 +405,11 @@ pub(crate) fn find_active_scheduler_stage_checkpoint(
         }
         .to_string(),
         summary: node.recent_event.clone(),
-        scheduler_profile: node
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("scheduler_profile"))
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string()),
-        stage: node
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("scheduler_stage"))
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string()),
-        stage_index: node
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("scheduler_stage_index"))
-            .and_then(|value| value.as_u64())
-            .map(|value| value as u32),
-        stage_total: node
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("scheduler_stage_total"))
-            .and_then(|value| value.as_u64())
-            .map(|value| value as u32),
+        scheduler_profile: meta.scheduler_profile,
+        stage: meta.scheduler_stage,
+        stage_index: meta.scheduler_stage_index.map(|value| value as u32),
+        stage_total: meta.scheduler_stage_total.map(|value| value as u32),
+        }
     })
 }
 

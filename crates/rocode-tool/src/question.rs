@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::{self, BufRead, Write};
 
 use crate::{Tool, ToolContext, ToolError, ToolResult};
@@ -10,37 +10,6 @@ impl QuestionTool {
     pub fn new() -> Self {
         Self
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuestionInput {
-    #[serde(rename = "questions")]
-    questions: Vec<QuestionDef>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuestionDef {
-    #[serde(rename = "question")]
-    question: String,
-    #[serde(rename = "header")]
-    header: Option<String>,
-    #[serde(rename = "options", default)]
-    options: Vec<QuestionOption>,
-    #[serde(rename = "multiple", default)]
-    multiple: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuestionOption {
-    #[serde(rename = "label")]
-    label: String,
-    #[serde(rename = "description", default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuestionResponse {
-    answers: Vec<String>,
 }
 
 #[async_trait]
@@ -103,7 +72,7 @@ impl Tool for QuestionTool {
     ) -> Result<ToolResult, ToolError> {
         let input = parse_question_input(args)?;
 
-        let context_questions = input
+        let questions = input
             .questions
             .iter()
             .map(|q| crate::QuestionDef {
@@ -121,13 +90,13 @@ impl Tool for QuestionTool {
             })
             .collect::<Vec<_>>();
 
-        let answers_by_question = match ctx.question(context_questions).await {
+        let answers_by_question = match ctx.question(questions.clone()).await {
             Ok(answers) => answers,
             Err(ToolError::ExecutionError(msg))
                 if msg.contains("Question callback not configured") =>
             {
-                let mut manual_answers = Vec::with_capacity(input.questions.len());
-                for q in &input.questions {
+                let mut manual_answers = Vec::with_capacity(questions.len());
+                for q in &questions {
                     manual_answers.push(ask_question(q)?);
                 }
                 manual_answers
@@ -137,7 +106,7 @@ impl Tool for QuestionTool {
 
         let mut all_answers: Vec<String> = Vec::new();
         let mut display_fields = Vec::new();
-        for (idx, q) in input.questions.iter().enumerate() {
+        for (idx, q) in questions.iter().enumerate() {
             let answers = answers_by_question.get(idx).cloned().unwrap_or_default();
             let answer_text = answers.join(", ");
             all_answers.extend(answers);
@@ -147,7 +116,7 @@ impl Tool for QuestionTool {
             }));
         }
 
-        let response = QuestionResponse {
+        let response = rocode_types::QuestionToolResult {
             answers: all_answers.clone(),
         };
 
@@ -163,10 +132,10 @@ impl Tool for QuestionTool {
         );
 
         // display.summary
-        let summary = if input.questions.len() == 1 {
+        let summary = if questions.len() == 1 {
             "1 question answered".to_string()
         } else {
-            format!("{} questions answered", input.questions.len())
+            format!("{} questions answered", questions.len())
         };
         metadata.insert(
             "display.summary".to_string(),
@@ -182,7 +151,39 @@ impl Tool for QuestionTool {
     }
 }
 
-fn ask_question(q: &QuestionDef) -> Result<Vec<String>, ToolError> {
+fn parse_question_input(args: serde_json::Value) -> Result<rocode_types::QuestionToolInput, ToolError> {
+    #[derive(Debug, Deserialize, Default)]
+    struct RawQuestionInputWire {
+        #[serde(default)]
+        questions: Option<serde_json::Value>,
+    }
+
+    let raw: RawQuestionInputWire = serde_json::from_value(args.clone()).unwrap_or_default();
+    let mut input = rocode_types::QuestionToolInput::from_value(&args);
+    input.questions.retain(|q| !q.question.trim().is_empty());
+    if !input.questions.is_empty() {
+        return Ok(input);
+    }
+
+    match raw.questions {
+        None | Some(serde_json::Value::Null) => Err(ToolError::InvalidArguments(
+            "questions is required".to_string(),
+        )),
+        Some(serde_json::Value::Array(array)) if array.is_empty() => Err(ToolError::InvalidArguments(
+            "questions must not be empty".to_string(),
+        )),
+        Some(serde_json::Value::Bool(_)) | Some(serde_json::Value::Number(_)) => {
+            Err(ToolError::InvalidArguments(
+                "questions must be an array/object or a JSON string representing them".to_string(),
+            ))
+        }
+        _ => Err(ToolError::InvalidArguments(
+            "questions must contain at least one valid question".to_string(),
+        )),
+    }
+}
+
+fn ask_question(q: &crate::QuestionDef) -> Result<Vec<String>, ToolError> {
     println!();
 
     if let Some(ref header) = q.header {
@@ -272,47 +273,9 @@ impl Default for QuestionTool {
     }
 }
 
-fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
-    if let Ok(input) = serde_json::from_value::<QuestionInput>(args.clone()) {
-        return Ok(input);
-    }
-
-    let obj = args
-        .as_object()
-        .ok_or_else(|| ToolError::InvalidArguments("question input must be an object".into()))?;
-    let questions_value = obj
-        .get("questions")
-        .ok_or_else(|| ToolError::InvalidArguments("questions is required".into()))?;
-    let questions = parse_questions_value(questions_value).map_err(ToolError::InvalidArguments)?;
-    Ok(QuestionInput { questions })
-}
-
-fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, String> {
-    match value {
-        serde_json::Value::Array(_) => serde_json::from_value::<Vec<QuestionDef>>(value.clone())
-            .map_err(|e| format!("failed to parse questions array: {}", e)),
-        serde_json::Value::Object(_) => serde_json::from_value::<QuestionDef>(value.clone())
-            .map(|q| vec![q])
-            .map_err(|e| format!("failed to parse question object: {}", e)),
-        serde_json::Value::String(raw) => {
-            if let Ok(list) = serde_json::from_str::<Vec<QuestionDef>>(raw) {
-                return Ok(list);
-            }
-            if let Ok(single) = serde_json::from_str::<QuestionDef>(raw) {
-                return Ok(vec![single]);
-            }
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
-                return parse_questions_value(&parsed);
-            }
-            Err("questions must be an array/object or a JSON string representing them".into())
-        }
-        _ => Err("questions must be an array/object or a JSON string".into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_question_input, QuestionInput, QuestionTool};
+    use super::{parse_question_input, QuestionTool};
     use crate::{Tool, ToolContext};
 
     #[test]
@@ -348,7 +311,7 @@ mod tests {
 
     #[test]
     fn parse_question_input_still_parses_direct_shape() {
-        let parsed: QuestionInput = parse_question_input(serde_json::json!({
+        let parsed: rocode_types::QuestionToolInput = parse_question_input(serde_json::json!({
             "questions": [{ "question": "Q1" }]
         }))
         .expect("direct shape should parse");
@@ -380,13 +343,7 @@ mod tests {
             .expect("question execution should succeed");
 
         assert!(result.output.contains("确认计划"));
-        assert_eq!(
-            result
-                .metadata
-                .get("display.summary")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default(),
-            "1 question answered"
-        );
+        let display = rocode_types::DisplayOverrideMetadata::from_map(&result.metadata);
+        assert_eq!(display.summary.as_deref(), Some("1 question answered"));
     }
 }

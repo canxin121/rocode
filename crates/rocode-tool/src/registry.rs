@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 use rocode_plugin::{HookContext, HookEvent};
 
@@ -303,13 +306,14 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
 
     // Normalize bash schema defaults regardless of which recovery path succeeded.
     if tool_id == "bash" {
-        if let Some(obj) = args.as_object_mut() {
-            let needs_description = obj
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim().is_empty())
-                .unwrap_or(true);
-            if needs_description {
+        let needs_description = rocode_types::BashToolInput::from_value(&args)
+            .description
+            .as_deref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true);
+
+        if needs_description {
+            if let Some(obj) = args.as_object_mut() {
                 obj.insert(
                     "description".to_string(),
                     serde_json::Value::String("Execute shell command".to_string()),
@@ -537,56 +541,102 @@ impl ToolRegistry {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+fn parse_hook_payload_lossy<T>(payload: &serde_json::Value) -> T
+where
+    T: DeserializeOwned + Default,
+{
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookPayloadEnvelopeWire<T> {
+        Body(T),
+        Output { output: T },
+        Data { data: T },
+    }
+
+    serde_json::from_value::<HookPayloadEnvelopeWire<T>>(payload.clone())
+        .ok()
+        .map(|envelope| match envelope {
+            HookPayloadEnvelopeWire::Body(body) => body,
+            HookPayloadEnvelopeWire::Output { output } => output,
+            HookPayloadEnvelopeWire::Data { data } => data,
+        })
+        .unwrap_or_default()
 }
 
 fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
-        return;
-    };
-    if let Some(description) = object.get("description").and_then(|value| value.as_str()) {
-        schema.description = description.to_string();
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolDefinitionHookPayloadWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        description: Option<String>,
+        #[serde(default)]
+        parameters: Option<serde_json::Value>,
     }
-    if let Some(parameters) = object.get("parameters") {
-        schema.parameters = parameters.clone();
+
+    let wire: ToolDefinitionHookPayloadWire = parse_hook_payload_lossy(payload);
+    if let Some(description) = wire.description {
+        schema.description = description;
+    }
+    if let Some(parameters) = wire.parameters {
+        schema.parameters = parameters;
     }
 }
 
 fn apply_tool_before_payload(args: &mut serde_json::Value, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
-        return;
-    };
-    if let Some(next_args) = object.get("args") {
-        *args = next_args.clone();
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolBeforeHookPayloadWire {
+        #[serde(default)]
+        args: Option<serde_json::Value>,
+    }
+
+    let wire: ToolBeforeHookPayloadWire = parse_hook_payload_lossy(payload);
+    if let Some(next_args) = wire.args {
+        *args = next_args;
     }
 }
 
 fn apply_tool_after_payload(result: &mut ToolResult, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
-        return;
-    };
-    if let Some(title) = object.get("title").and_then(|value| value.as_str()) {
-        result.title = title.to_string();
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolAfterHookPayloadWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        title: Option<String>,
+        #[serde(default)]
+        output: Option<serde_json::Value>,
+        #[serde(default, deserialize_with = "deserialize_opt_object_lossy")]
+        metadata: Option<serde_json::Map<String, serde_json::Value>>,
     }
-    if let Some(output) = object.get("output") {
-        if let Some(output_str) = output.as_str() {
-            result.output = output_str.to_string();
-        } else if !output.is_null() {
-            result.output = output.to_string();
+
+    fn deserialize_opt_object_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Object(map)) => Some(map),
+            _ => None,
+        })
+    }
+
+    let wire: ToolAfterHookPayloadWire = parse_hook_payload_lossy(payload);
+    if let Some(title) = wire.title {
+        result.title = title;
+    }
+    if let Some(output) = wire.output {
+        match output {
+            serde_json::Value::String(text) => result.output = text,
+            serde_json::Value::Null => {}
+            other => result.output = other.to_string(),
         }
     }
-    if let Some(metadata) = object.get("metadata").and_then(|value| value.as_object()) {
-        result.metadata = metadata
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
+    if let Some(metadata) = wire.metadata {
+        result.metadata = metadata.into_iter().collect();
     }
 }
 
@@ -745,14 +795,16 @@ mod tests {
             _ctx: ToolContext,
         ) -> Result<ToolResult, ToolError> {
             *self.captured.lock().expect("lock should succeed") = Some(args.clone());
-            let primary = args
-                .get("file_path")
-                .or_else(|| args.get("filePath"))
-                .or_else(|| args.get("command"))
-                .or_else(|| args.get("cmd"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
+
+            #[derive(Debug, Default, Deserialize)]
+            struct CaptureArgsWire {
+                #[serde(default, alias = "filePath", alias = "command", alias = "cmd")]
+                file_path: Option<String>,
+            }
+
+            let wire =
+                serde_json::from_value::<CaptureArgsWire>(args).unwrap_or_default();
+            let primary = wire.file_path.unwrap_or_default();
             Ok(ToolResult::simple("ok", primary))
         }
     }

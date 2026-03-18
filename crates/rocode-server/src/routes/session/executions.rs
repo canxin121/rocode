@@ -253,17 +253,28 @@ fn select_active_tool_parent_id(
 fn select_active_agent_task_parent_id(
     records: &[crate::runtime_control::ExecutionRecord],
 ) -> Option<String> {
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct ToolCallMetadataWire {
+        #[serde(
+            default,
+            alias = "tool_name",
+            alias = "toolName",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        tool_name: Option<String>,
+    }
+
     records
         .iter()
         .filter(|record| matches!(record.kind, crate::runtime_control::ExecutionKind::ToolCall))
         .filter(|record| {
-            record
-                .metadata
-                .as_ref()
-                .and_then(|value| value.get("tool_name"))
-                .and_then(|value| value.as_str())
-                .map(|name| matches!(name, "task" | "task_flow"))
-                .unwrap_or(false)
+            let Some(metadata) = record.metadata.as_ref() else {
+                return false;
+            };
+            let wire: ToolCallMetadataWire = rocode_types::parse_value_lossy(metadata);
+            wire.tool_name
+                .as_deref()
+                .is_some_and(|name| matches!(name, "task" | "task_flow"))
         })
         .max_by_key(|record| record.updated_at)
         .map(|record| record.id.clone())
