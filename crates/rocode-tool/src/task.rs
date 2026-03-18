@@ -7,7 +7,8 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::task::{
-    TaskResultEnvelope, TASK_NO_TEXT_OUTPUT_MESSAGE, TASK_STATUS_COMPLETED,
+    metadata_keys as task_metadata_keys, TaskResultEnvelope, TASK_NO_TEXT_OUTPUT_MESSAGE,
+    TASK_STATUS_COMPLETED,
 };
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_core::contracts::wire::aliases as wire_aliases;
@@ -409,15 +410,18 @@ impl Tool for TaskTool {
             serde_json::json!(session_id),
         );
         metadata.insert(
-            "taskStatus".into(),
+            task_metadata_keys::TASK_STATUS.into(),
             serde_json::json!(TASK_STATUS_COMPLETED),
         );
-        metadata.insert("hasTextOutput".into(), serde_json::json!(has_text_output));
         metadata.insert(
-            "model".into(),
+            task_metadata_keys::HAS_TEXT_OUTPUT.into(),
+            serde_json::json!(has_text_output),
+        );
+        metadata.insert(
+            task_metadata_keys::MODEL.into(),
             serde_json::json!({
-                "modelID": model.model_id,
-                "providerID": model.provider_id,
+                task_metadata_keys::MODEL_ID_CAMEL: model.model_id,
+                task_metadata_keys::MODEL_PROVIDER_ID_CAMEL: model.provider_id,
             }),
         );
         if !loaded_skill_names.is_empty() {
@@ -426,7 +430,7 @@ impl Tool for TaskTool {
                 serde_json::json!(loaded_skill_names),
             );
             metadata.insert(
-                "loadedSkillCount".into(),
+                task_metadata_keys::LOADED_SKILL_COUNT.into(),
                 serde_json::json!(loaded_skill_names.len()),
             );
         }

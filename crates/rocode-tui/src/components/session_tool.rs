@@ -9,8 +9,12 @@ use serde_json::Value;
 use rocode_core::contracts::output_blocks::keys as output_keys;
 use rocode_core::contracts::output_blocks::DisplayModeWire;
 use rocode_core::contracts::patch::{keys as patch_keys, FileChangeType};
-use rocode_core::contracts::task::{TaskResultEnvelope, TASK_STATUS_COMPLETED};
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::task::{
+    metadata_keys as task_metadata_keys, TaskResultEnvelope, TASK_STATUS_COMPLETED,
+};
+use rocode_core::contracts::todo::keys as todo_keys;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::fields as wire_fields;
 
 use super::markdown::MarkdownRenderer;
 use crate::theme::Theme;
@@ -95,12 +99,12 @@ fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
     match BuiltinToolName::parse(normalized.as_str()) {
         Some(
             BuiltinToolName::Bash
-                | BuiltinToolName::ApplyPatch
-                | BuiltinToolName::Batch
-                | BuiltinToolName::Question
-                | BuiltinToolName::Task
-                | BuiltinToolName::TaskFlow
-                | BuiltinToolName::TodoWrite,
+            | BuiltinToolName::ApplyPatch
+            | BuiltinToolName::Batch
+            | BuiltinToolName::Question
+            | BuiltinToolName::Task
+            | BuiltinToolName::TaskFlow
+            | BuiltinToolName::TodoWrite,
         ) => return true,
         Some(BuiltinToolName::Skill) => return false,
         _ => {}
@@ -135,7 +139,10 @@ fn is_read_tool(normalized_name: &str) -> bool {
 }
 
 fn is_list_tool(normalized_name: &str) -> bool {
-    matches!(BuiltinToolName::parse(normalized_name), Some(BuiltinToolName::Ls))
+    matches!(
+        BuiltinToolName::parse(normalized_name),
+        Some(BuiltinToolName::Ls)
+    )
 }
 
 fn is_write_tool(normalized_name: &str) -> bool {
@@ -185,7 +192,10 @@ pub fn render_tool_call(
     let tool_kind = BuiltinToolName::parse(normalized.as_str());
     if matches!(state, ToolState::Completed)
         && !show_tool_details
-        && !matches!(tool_kind, Some(BuiltinToolName::Task | BuiltinToolName::TodoWrite))
+        && !matches!(
+            tool_kind,
+            Some(BuiltinToolName::Task | BuiltinToolName::TodoWrite)
+        )
     {
         return Vec::new();
     }
@@ -585,7 +595,10 @@ fn render_batch_result_block(
     let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
     let calls = arg_parsed
         .as_ref()
-        .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
+        .and_then(|v| {
+            v.get(tool_arg_keys::TOOL_CALLS_CAMEL)
+                .or_else(|| v.get(tool_arg_keys::TOOL_CALLS))
+        })
         .and_then(|v| v.as_array());
 
     // Try to parse the result as JSON array.
@@ -598,14 +611,18 @@ fn render_batch_result_block(
     let result_parsed = serde_json::from_str::<Value>(json_text).ok();
     let result_array = result_parsed.as_ref().and_then(|v| {
         v.as_array()
-            .or_else(|| v.get("results").and_then(|r| r.as_array()))
+            .or_else(|| v.get(tool_arg_keys::RESULTS).and_then(|r| r.as_array()))
     });
 
     if let Some(results) = result_array {
         let total = results.len();
         let ok_count = results
             .iter()
-            .filter(|r| r.get("success").and_then(|v| v.as_bool()).unwrap_or(true))
+            .filter(|r| {
+                r.get(tool_arg_keys::SUCCESS)
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true)
+            })
             .count();
         let fail_count = total - ok_count;
 
@@ -636,16 +653,16 @@ fn render_batch_result_block(
             let sub_name = calls
                 .and_then(|c| c.get(i))
                 .and_then(|c| {
-                    c.get("tool")
-                        .or_else(|| c.get("name"))
-                        .or_else(|| c.get("tool_name"))
+                    c.get(tool_arg_keys::TOOL)
+                        .or_else(|| c.get(tool_arg_keys::NAME))
+                        .or_else(|| c.get(tool_arg_keys::TOOL_NAME))
                         .and_then(|v| v.as_str())
                 })
                 .unwrap_or("?");
             let sub_glyph = tool_glyph(sub_name);
 
             let is_ok = result_entry
-                .get("success")
+                .get(tool_arg_keys::SUCCESS)
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
             let (icon, icon_color) = if is_ok {
@@ -656,9 +673,9 @@ fn render_batch_result_block(
 
             // Extract a short preview of the sub-tool result
             let sub_result = result_entry
-                .get("output")
-                .or_else(|| result_entry.get("result"))
-                .or_else(|| result_entry.get("error"))
+                .get(tool_arg_keys::OUTPUT)
+                .or_else(|| result_entry.get(tool_arg_keys::RESULT))
+                .or_else(|| result_entry.get(tool_arg_keys::ERROR))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let first_line = sub_result
@@ -686,7 +703,9 @@ fn render_batch_result_block(
 
             // Add sub-tool argument preview if available
             if let Some(call_args) = calls.and_then(|c| c.get(i)) {
-                let sub_args_str = call_args.get("parameters").map(|v| v.to_string());
+                let sub_args_str = call_args
+                    .get(tool_arg_keys::PARAMETERS)
+                    .map(|v| v.to_string());
                 if let Some(ref args_json) = sub_args_str {
                     let sub_normalized = normalize_tool_name(sub_name);
                     if let Some(preview) = tool_argument_preview(&sub_normalized, args_json) {
@@ -757,19 +776,22 @@ fn render_question_result_block(
     let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
     let questions = arg_parsed
         .as_ref()
-        .and_then(|v| v.get("questions"))
+        .and_then(|v| v.get(wire_fields::QUESTIONS))
         .and_then(|v| v.as_array());
 
     // Parse answers from result
     let result_parsed = serde_json::from_str::<Value>(result_text).ok();
     let answers = result_parsed
         .as_ref()
-        .and_then(|v| v.get("answers"))
+        .and_then(|v| v.get(tool_arg_keys::ANSWERS))
         .and_then(|v| v.as_array());
 
     if let Some(qs) = questions {
         for (i, q) in qs.iter().enumerate() {
-            let q_text = q.get("question").and_then(|v| v.as_str()).unwrap_or("?");
+            let q_text = q
+                .get(wire_fields::QUESTION)
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             // Show question
             lines.push(block_content_line(
                 format!("Q: {}", format_preview_line(q_text, 88)),
@@ -778,10 +800,13 @@ fn render_question_result_block(
                 bg,
             ));
             // Show options if any
-            if let Some(opts) = q.get("options").and_then(|v| v.as_array()) {
+            if let Some(opts) = q.get(wire_fields::OPTIONS).and_then(|v| v.as_array()) {
                 for opt in opts.iter() {
-                    let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("?");
-                    let desc = opt.get("description").and_then(|v| v.as_str());
+                    let label = opt
+                        .get(wire_fields::LABEL)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let desc = opt.get(tool_arg_keys::DESCRIPTION).and_then(|v| v.as_str());
                     let opt_text = match desc {
                         Some(d) => format!("  · {} — {}", label, format_preview_line(d, 64)),
                         None => format!("  · {}", label),
@@ -1037,13 +1062,11 @@ fn render_patch_result_block(
             arr.iter()
                 .filter_map(|f| {
                     // files metadata is array of objects with "path" key, or strings
-                    f.as_str()
-                        .map(String::from)
-                        .or_else(|| {
-                            f.get(patch_keys::LEGACY_PATH)
-                                .and_then(|p| p.as_str())
-                                .map(String::from)
-                        })
+                    f.as_str().map(String::from).or_else(|| {
+                        f.get(patch_keys::LEGACY_PATH)
+                            .and_then(|p| p.as_str())
+                            .map(String::from)
+                    })
                 })
                 .collect()
         })
@@ -1228,10 +1251,16 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
         return summary;
     };
 
-    summary.category = extract_string_key(value, &["category"]);
-    summary.subagent_type = extract_string_key(value, &["subagent_type", "subagentType"]);
-    summary.description = extract_string_key(value, &["description"]);
-    let prompt = extract_string_key(value, &["prompt"]);
+    summary.category = extract_string_key(value, &[tool_arg_keys::CATEGORY]);
+    summary.subagent_type = extract_string_key(
+        value,
+        &[
+            tool_arg_keys::SUBAGENT_TYPE,
+            tool_arg_keys::SUBAGENT_TYPE_CAMEL,
+        ],
+    );
+    summary.description = extract_string_key(value, &[tool_arg_keys::DESCRIPTION]);
+    let prompt = extract_string_key(value, &[tool_arg_keys::PROMPT]);
     if let Some(prompt_text) = prompt.as_deref() {
         summary.checklist = parse_markdown_checklist(prompt_text)
             .into_iter()
@@ -1247,8 +1276,8 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
             .map(|line| format_preview_line(line, 88))
     });
     summary.skill_count = value
-        .get("load_skills")
-        .or_else(|| value.get("loadSkills"))
+        .get(tool_arg_keys::LOAD_SKILLS)
+        .or_else(|| value.get(tool_arg_keys::LOADED_SKILLS))
         .and_then(|v| v.as_array())
         .map(Vec::len);
 
@@ -1396,7 +1425,10 @@ fn render_task_result_block(
         ));
     }
     if let Some(meta) = metadata {
-        if let Some(has_text_output) = meta.get("hasTextOutput").and_then(|v| v.as_bool()) {
+        if let Some(has_text_output) = meta
+            .get(task_metadata_keys::HAS_TEXT_OUTPUT)
+            .and_then(|v| v.as_bool())
+        {
             lines.push(block_content_line(
                 format!(
                     "Text Output: {}",
@@ -1407,15 +1439,18 @@ fn render_task_result_block(
                 bg,
             ));
         }
-        if let Some(model) = meta.get("model").and_then(|v| v.as_object()) {
+        if let Some(model) = meta
+            .get(task_metadata_keys::MODEL)
+            .and_then(|v| v.as_object())
+        {
             let provider = model
-                .get("providerID")
-                .or_else(|| model.get("provider_id"))
+                .get(task_metadata_keys::MODEL_PROVIDER_ID_CAMEL)
+                .or_else(|| model.get(task_metadata_keys::MODEL_PROVIDER_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let model_id = model
-                .get("modelID")
-                .or_else(|| model.get("model_id"))
+                .get(task_metadata_keys::MODEL_ID_CAMEL)
+                .or_else(|| model.get(task_metadata_keys::MODEL_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !provider.is_empty() || !model_id.is_empty() {
@@ -1906,7 +1941,7 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     if matches!(tool_kind, Some(BuiltinToolName::Glob)) {
         if let Some(pattern) = parsed
             .as_ref()
-            .and_then(|value| extract_string_key(value, &["pattern"]))
+            .and_then(|value| extract_string_key(value, &[tool_arg_keys::PATTERN]))
         {
             let target = parsed.as_ref().and_then(extract_path);
             return Some(match target {
@@ -1917,10 +1952,9 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if matches!(tool_kind, Some(BuiltinToolName::Grep)) {
-        if let Some(pattern) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &["pattern", "query"]))
-        {
+        if let Some(pattern) = parsed.as_ref().and_then(|value| {
+            extract_string_key(value, &[tool_arg_keys::PATTERN, tool_arg_keys::QUERY])
+        }) {
             let target = parsed.as_ref().and_then(extract_path);
             return Some(match target {
                 Some(path) => format!("\"{}\" in {}", pattern, path),
@@ -1932,7 +1966,7 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     if matches!(tool_kind, Some(BuiltinToolName::WebFetch)) {
         if let Some(url) = parsed
             .as_ref()
-            .and_then(|value| extract_string_key(value, &["url"]))
+            .and_then(|value| extract_string_key(value, &[tool_arg_keys::URL]))
         {
             return Some(url);
         }
@@ -1944,7 +1978,7 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     ) {
         if let Some(query) = parsed
             .as_ref()
-            .and_then(|value| extract_string_key(value, &["query"]))
+            .and_then(|value| extract_string_key(value, &[tool_arg_keys::QUERY]))
         {
             return Some(format!("\"{}\"", query));
         }
@@ -1975,16 +2009,19 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     if matches!(tool_kind, Some(BuiltinToolName::Batch)) {
         if let Some(calls) = parsed
             .as_ref()
-            .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
+            .and_then(|v| {
+                v.get(tool_arg_keys::TOOL_CALLS_CAMEL)
+                    .or_else(|| v.get(tool_arg_keys::TOOL_CALLS))
+            })
             .and_then(|v| v.as_array())
         {
             let count = calls.len();
             let names: Vec<String> = calls
                 .iter()
                 .filter_map(|call| {
-                    call.get("tool")
-                        .or_else(|| call.get("name"))
-                        .or_else(|| call.get("tool_name"))
+                    call.get(tool_arg_keys::TOOL)
+                        .or_else(|| call.get(tool_arg_keys::NAME))
+                        .or_else(|| call.get(tool_arg_keys::TOOL_NAME))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                 })
@@ -2006,14 +2043,14 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
 
     if matches!(tool_kind, Some(BuiltinToolName::Question)) {
         if let Some(questions) = object
-            .and_then(|value| value.get("questions"))
+            .and_then(|value| value.get(wire_fields::QUESTIONS))
             .and_then(|value| value.as_array())
         {
             let count = questions.len();
             // Show the first question text as preview
             let first_q = questions
                 .first()
-                .and_then(|q| q.get("question").and_then(|v| v.as_str()));
+                .and_then(|q| q.get(wire_fields::QUESTION).and_then(|v| v.as_str()));
             return match first_q {
                 Some(text) if count == 1 => Some(format_preview_line(text, 72)),
                 Some(text) => Some(format!(
@@ -2032,7 +2069,7 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
 
     if matches!(tool_kind, Some(BuiltinToolName::TodoWrite)) {
         if let Some(count) = object
-            .and_then(|value| value.get("todos"))
+            .and_then(|value| value.get(todo_keys::TODOS))
             .and_then(|value| value.as_array())
             .map(Vec::len)
         {
@@ -2048,7 +2085,7 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     if matches!(tool_kind, Some(BuiltinToolName::Skill)) {
         if let Some(name) = parsed
             .as_ref()
-            .and_then(|value| extract_string_key(value, &["name"]))
+            .and_then(|value| extract_string_key(value, &[tool_arg_keys::NAME]))
         {
             return Some(format!("\"{}\"", name));
         }
@@ -2061,20 +2098,18 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     if matches!(tool_kind, Some(BuiltinToolName::Lsp)) {
         if let Some(operation) = parsed
             .as_ref()
-            .and_then(|value| extract_string_key(value, &["operation"]))
+            .and_then(|value| extract_string_key(value, &[tool_arg_keys::OPERATION]))
         {
-            let target = parsed
-                .as_ref()
-                .and_then(|value| {
-                    extract_string_key(
-                        value,
-                        &[
-                            patch_keys::FILE_PATH,
-                            patch_keys::FILE_PATH_SNAKE,
-                            patch_keys::LEGACY_PATH,
-                        ],
-                    )
-                });
+            let target = parsed.as_ref().and_then(|value| {
+                extract_string_key(
+                    value,
+                    &[
+                        patch_keys::FILE_PATH,
+                        patch_keys::FILE_PATH_SNAKE,
+                        patch_keys::LEGACY_PATH,
+                    ],
+                )
+            });
             return Some(match target {
                 Some(path) => format!("{} {}", operation, path),
                 None => operation,
@@ -2090,13 +2125,13 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         format_primitive_arguments(
             value,
             &[
-                "content",
-                "new_string",
-                "old_string",
+                patch_keys::CONTENT,
+                patch_keys::NEW_STRING,
+                patch_keys::OLD_STRING,
                 "patch",
-                "prompt",
-                "questions",
-                "todos",
+                tool_arg_keys::PROMPT,
+                wire_fields::QUESTIONS,
+                todo_keys::TODOS,
             ],
         )
     }) {
@@ -2113,7 +2148,13 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
 
 fn extract_shell_command(value: &Value) -> Option<String> {
     let object = value.as_object()?;
-    for key in ["command", "cmd", "script", "input", "text"] {
+    for key in [
+        tool_arg_keys::COMMAND,
+        tool_arg_keys::CMD,
+        tool_arg_keys::SCRIPT,
+        tool_arg_keys::INPUT,
+        output_keys::TEXT,
+    ] {
         if let Some(command) = object.get(key).and_then(|v| v.as_str()) {
             let trimmed = command.trim();
             if !trimmed.is_empty() {
@@ -2409,8 +2450,10 @@ mod tests {
 
     #[test]
     fn read_tool_preview_supports_file_path_keys() {
-        let preview =
-            tool_argument_preview(BuiltinToolName::Read.as_str(), r#"{"file_path":"/tmp/a.txt"}"#);
+        let preview = tool_argument_preview(
+            BuiltinToolName::Read.as_str(),
+            r#"{"file_path":"/tmp/a.txt"}"#,
+        );
         assert_eq!(preview.as_deref(), Some("→ /tmp/a.txt"));
     }
 
@@ -2514,8 +2557,14 @@ mod tests {
         let theme = crate::theme::Theme::dark();
         let diff_content = "--- a/test.rs\n+++ b/test.rs\n@@ -1,3 +1,3 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
         let mut metadata = HashMap::new();
-        metadata.insert(patch_keys::DIFF.to_string(), serde_json::json!(diff_content));
-        metadata.insert(patch_keys::FILEPATH.to_string(), serde_json::json!("test.rs"));
+        metadata.insert(
+            patch_keys::DIFF.to_string(),
+            serde_json::json!(diff_content),
+        );
+        metadata.insert(
+            patch_keys::FILEPATH.to_string(),
+            serde_json::json!("test.rs"),
+        );
         let mut tool_results = HashMap::new();
         tool_results.insert(
             "tc1".to_string(),
@@ -2652,7 +2701,10 @@ mod tests {
         let theme = crate::theme::Theme::dark();
         let diff_content = "--- /dev/null\n+++ b/new_file.txt\n@@ -0,0 +1,2 @@\n+line1\n+line2";
         let mut metadata = HashMap::new();
-        metadata.insert(patch_keys::DIFF.to_string(), serde_json::json!(diff_content));
+        metadata.insert(
+            patch_keys::DIFF.to_string(),
+            serde_json::json!(diff_content),
+        );
         let mut tool_results = HashMap::new();
         tool_results.insert(
             "tc1".to_string(),

@@ -3,6 +3,19 @@
 /// This is intentionally plain-text so it can be displayed directly in
 /// terminals while still being machine-parseable by UIs.
 
+/// Task/tool metadata keys shared across task/task_flow/UI layers.
+pub mod metadata_keys {
+    pub const TASK_STATUS: &str = "taskStatus";
+    pub const HAS_TEXT_OUTPUT: &str = "hasTextOutput";
+    pub const MODEL: &str = "model";
+    pub const LOADED_SKILL_COUNT: &str = "loadedSkillCount";
+
+    pub const MODEL_PROVIDER_ID_CAMEL: &str = "providerID";
+    pub const MODEL_PROVIDER_ID_SNAKE: &str = "provider_id";
+    pub const MODEL_ID_CAMEL: &str = "modelID";
+    pub const MODEL_ID_SNAKE: &str = "model_id";
+}
+
 pub const TASK_ID_PREFIX: &str = "task_id:";
 pub const TASK_STATUS_PREFIX: &str = "task_status:";
 

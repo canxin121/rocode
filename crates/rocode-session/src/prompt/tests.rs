@@ -3,6 +3,7 @@ use crate::message::MessagePart;
 use async_trait::async_trait;
 use futures::stream;
 use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_orchestrator::CompiledExecutionRequest;
 use rocode_provider::{
     ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamEvent, StreamResult, StreamUsage,
@@ -511,16 +512,20 @@ async fn create_user_message_persists_pending_subtask_payload() {
     let msg = session.messages.last().expect("user message should exist");
     let pending = msg
         .metadata
-        .get("pending_subtasks")
+        .get(session_keys::PENDING_SUBTASKS)
         .and_then(|v| v.as_array())
         .expect("pending_subtasks metadata should exist");
     assert_eq!(pending.len(), 1);
     assert_eq!(
-        pending[0].get("agent").and_then(|v| v.as_str()),
+        pending[0]
+            .get(session_keys::SUBTASK_AGENT)
+            .and_then(|v| v.as_str()),
         Some("explore")
     );
     assert_eq!(
-        pending[0].get("prompt").and_then(|v| v.as_str()),
+        pending[0]
+            .get(session_keys::SUBTASK_PROMPT)
+            .and_then(|v| v.as_str()),
         Some("Inspect codegen path")
     );
     assert!(msg.parts.iter().any(|p| match &p.part_type {
@@ -1002,8 +1007,7 @@ fn part_input_file_skips_none_fields_in_json() {
 
 #[tokio::test]
 async fn resolve_prompt_parts_plain_text() {
-    let parts =
-        resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
+    let parts = resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
     assert_eq!(parts.len(), 1);
     assert!(matches!(&parts[0], PartInput::Text { text } if text == "just plain text"));
 }

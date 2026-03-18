@@ -6,7 +6,8 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTas
 use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
 use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+use rocode_core::contracts::task::metadata_keys as task_metadata_keys;
+use rocode_core::contracts::todo::{keys as todo_keys, TodoPriority, TodoStatus};
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_core::contracts::wire::aliases as wire_aliases;
 
@@ -349,7 +350,7 @@ async fn execute_delegate(
         delegated_metadata_string(&delegated.metadata, wire_aliases::SESSION_ID_CAMEL)?;
     let has_text_output = delegated
         .metadata
-        .get("hasTextOutput")
+        .get(task_metadata_keys::HAS_TEXT_OUTPUT)
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let task = global_task_registry().get(&agent_task_id).ok_or_else(|| {
@@ -383,7 +384,7 @@ async fn execute_delegate(
         serde_json::json!(session_id),
     );
     metadata.insert(
-        "hasTextOutput".to_string(),
+        task_metadata_keys::HAS_TEXT_OUTPUT.to_string(),
         serde_json::json!(has_text_output),
     );
     metadata.insert("todoSynced".to_string(), serde_json::json!(todo_synced));
@@ -391,8 +392,15 @@ async fn execute_delegate(
         tool_arg_keys::TASK.to_string(),
         serde_json::to_value(&view).unwrap(),
     );
-    if let Some(model) = delegated.metadata.get("model").and_then(parse_model_view) {
-        metadata.insert("model".to_string(), serde_json::to_value(model).unwrap());
+    if let Some(model) = delegated
+        .metadata
+        .get(task_metadata_keys::MODEL)
+        .and_then(parse_model_view)
+    {
+        metadata.insert(
+            task_metadata_keys::MODEL.to_string(),
+            serde_json::to_value(model).unwrap(),
+        );
     }
     if let Some(loaded_skills) = delegated.metadata.get(tool_arg_keys::LOADED_SKILLS) {
         metadata.insert(
@@ -400,8 +408,14 @@ async fn execute_delegate(
             loaded_skills.clone(),
         );
     }
-    if let Some(loaded_skill_count) = delegated.metadata.get("loadedSkillCount") {
-        metadata.insert("loadedSkillCount".to_string(), loaded_skill_count.clone());
+    if let Some(loaded_skill_count) = delegated
+        .metadata
+        .get(task_metadata_keys::LOADED_SKILL_COUNT)
+    {
+        metadata.insert(
+            task_metadata_keys::LOADED_SKILL_COUNT.to_string(),
+            loaded_skill_count.clone(),
+        );
     }
     metadata.insert(
         output_keys::DISPLAY_SUMMARY.to_string(),
@@ -453,8 +467,14 @@ fn delegated_metadata_string(metadata: &Metadata, key: &str) -> Result<String, T
 
 fn parse_model_view(value: &serde_json::Value) -> Option<TaskFlowModelView> {
     Some(TaskFlowModelView {
-        provider_id: value.get("providerID")?.as_str()?.to_string(),
-        model_id: value.get("modelID")?.as_str()?.to_string(),
+        provider_id: value
+            .get(task_metadata_keys::MODEL_PROVIDER_ID_CAMEL)?
+            .as_str()?
+            .to_string(),
+        model_id: value
+            .get(task_metadata_keys::MODEL_ID_CAMEL)?
+            .as_str()?
+            .to_string(),
     })
 }
 
@@ -485,7 +505,7 @@ async fn project_task_to_todo(
     TodoWriteTool
         .execute(
             serde_json::json!({
-                "todos": todos.iter().map(todo_item_to_json).collect::<Vec<_>>()
+                todo_keys::TODOS: todos.iter().map(todo_item_to_json).collect::<Vec<_>>()
             }),
             todo_ctx,
         )
@@ -589,7 +609,10 @@ fn execute_get(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
 
     let view = task_to_view(&task, true);
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!("get"));
+    metadata.insert(
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!("get"),
+    );
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
     metadata.insert(
         output_keys::DISPLAY_SUMMARY.to_string(),
@@ -609,7 +632,10 @@ fn execute_list(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     let (views, truncated) = list_task_views(&tasks, input.status_filter.as_deref(), input.limit);
 
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!("list"));
+    metadata.insert(
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!("list"),
+    );
     metadata.insert("count".to_string(), serde_json::json!(views.len()));
     metadata.insert("truncated".to_string(), serde_json::json!(truncated));
     metadata.insert("tasks".to_string(), serde_json::to_value(&views).unwrap());
@@ -645,7 +671,10 @@ fn execute_cancel(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     let view = task_to_view(&task, true);
 
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!("cancel"));
+    metadata.insert(
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!("cancel"),
+    );
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
     metadata.insert(
         output_keys::DISPLAY_SUMMARY.to_string(),

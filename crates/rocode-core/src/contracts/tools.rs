@@ -4,6 +4,13 @@ use strum_macros::EnumString;
 pub mod arg_keys {
     pub const QUESTIONS: &str = "questions";
     pub const ANSWERS: &str = "answers";
+    pub const OPTIONS: &str = "options";
+    pub const PARAMETERS: &str = "parameters";
+    pub const RESULTS: &str = "results";
+    pub const SUCCESS: &str = "success";
+    pub const OUTPUT: &str = "output";
+    pub const RESULT: &str = "result";
+    pub const ERROR: &str = "error";
     pub const HEADER: &str = "header";
     pub const QUESTION: &str = "question";
     pub const COMMAND: &str = "command";
@@ -31,6 +38,7 @@ pub mod arg_keys {
     pub const LOADED_SKILLS: &str = "loadedSkills";
     pub const DELEGATED: &str = "delegated";
     pub const AGENT_TASK_ID: &str = "agentTaskId";
+    pub const AGENT_TASK_ID_SNAKE: &str = "agent_task_id";
     pub const TASK: &str = "task";
     pub const TOOL_CALLS: &str = "tool_calls";
     pub const TOOL_CALLS_CAMEL: &str = "toolCalls";
