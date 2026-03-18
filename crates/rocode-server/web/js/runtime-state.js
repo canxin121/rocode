@@ -217,9 +217,9 @@ function runtimeStatusLabel() {
 }
 
 function runtimeStatusTone() {
-  if (state.abortRequested) return "warn";
-  if (state.streaming || state.busyAction) return "warn";
-  return "ok";
+  if (state.abortRequested) return BADGE_TONES.WARN;
+  if (state.streaming || state.busyAction) return BADGE_TONES.WARN;
+  return BADGE_TONES.OK;
 }
 
 function runtimeSummaryText() {
@@ -265,12 +265,12 @@ function interactionLocked() {
   return state.streaming || Boolean(state.busyAction);
 }
 
-function setBadge(text, tone = "idle") {
+function setBadge(text, tone = BADGE_TONES.IDLE) {
   nodes.statusBadge.textContent = text;
   nodes.statusBadge.className = "badge";
-  if (tone === "ok") nodes.statusBadge.classList.add("ok");
-  if (tone === "warn") nodes.statusBadge.classList.add("warn");
-  if (tone === "error") nodes.statusBadge.classList.add("error");
+  if (tone === BADGE_TONES.OK) nodes.statusBadge.classList.add(BADGE_TONES.OK);
+  if (tone === BADGE_TONES.WARN) nodes.statusBadge.classList.add(BADGE_TONES.WARN);
+  if (tone === BADGE_TONES.ERROR) nodes.statusBadge.classList.add(BADGE_TONES.ERROR);
 }
 
 function updateTokenUsage() {
@@ -296,8 +296,8 @@ function applyTheme(themeId, options = {}) {
   }
   if (announce) {
     applyOutputBlock({
-      kind: "status",
-      tone: "success",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
       text: `Theme switched to ${valid}`,
       silent: true,
     });
@@ -313,17 +313,17 @@ function updatePanels() {
 }
 
 function toneForBadge(tone) {
-  if (tone === "error") return "error";
-  if (tone === "warning") return "warn";
-  if (tone === "success") return "ok";
-  return "warn";
+  if (tone === OUTPUT_BLOCK_TONES.ERROR) return BADGE_TONES.ERROR;
+  if (tone === OUTPUT_BLOCK_TONES.WARNING) return BADGE_TONES.WARN;
+  if (tone === OUTPUT_BLOCK_TONES.SUCCESS) return BADGE_TONES.OK;
+  return BADGE_TONES.WARN;
 }
 
 function toneForMessage(tone) {
-  if (tone === "error") return "error";
-  if (tone === "warning") return "warning";
-  if (tone === "success") return "success";
-  return "normal";
+  if (tone === OUTPUT_BLOCK_TONES.ERROR) return OUTPUT_BLOCK_TONES.ERROR;
+  if (tone === OUTPUT_BLOCK_TONES.WARNING) return OUTPUT_BLOCK_TONES.WARNING;
+  if (tone === OUTPUT_BLOCK_TONES.SUCCESS) return OUTPUT_BLOCK_TONES.SUCCESS;
+  return OUTPUT_BLOCK_TONES.NORMAL;
 }
 
 function syncInteractionState() {

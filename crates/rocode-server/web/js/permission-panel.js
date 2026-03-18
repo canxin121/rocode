@@ -1,8 +1,8 @@
 function humanPermissionStatusLabel(status) {
   switch (String(status || "").toLowerCase()) {
-    case "resolved":
+    case PERMISSION_STATUSES.RESOLVED:
       return "Resolved";
-    case "rejected":
+    case PERMISSION_STATUSES.REJECTED:
       return "Rejected";
     default:
       return "Awaiting Approval";
@@ -11,8 +11,8 @@ function humanPermissionStatusLabel(status) {
 
 function permissionStatusTone(status) {
   const normalized = String(status || "").toLowerCase();
-  if (normalized === "resolved") return "done";
-  if (normalized === "rejected") return "error";
+  if (normalized === PERMISSION_STATUSES.RESOLVED) return "done";
+  if (normalized === PERMISSION_STATUSES.REJECTED) return BADGE_TONES.ERROR;
   return "waiting";
 }
 
@@ -102,9 +102,9 @@ async function submitPermissionInteractionReply(reply) {
       body: JSON.stringify({
         reply,
         message:
-          reply === "reject"
+          reply === PERMISSION_REPLIES.REJECT
             ? "rejected"
-            : reply === "always"
+            : reply === PERMISSION_REPLIES.ALWAYS
               ? "approved always"
               : "approved",
       }),
@@ -121,10 +121,10 @@ function permissionInteractionFromLiveEvent(payload) {
   const patterns = Array.isArray(input.patterns) ? input.patterns : [];
 
   return {
-    type: "permission",
-    status: "pending",
-    permission_id: payload.permissionID || payload.permissionId || info.id,
-    session_id: payload.sessionID || payload.sessionId || info.session_id || null,
+    type: INTERACTION_TYPES.PERMISSION,
+    status: PERMISSION_STATUSES.PENDING,
+    permission_id: payload[WIRE_KEYS.PERMISSION_ID] || payload[WIRE_KEYS.PERMISSION_ID_ALIAS] || info.id,
+    session_id: payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS] || info.session_id || null,
     permission: input.permission || info.tool || null,
     message: info.message || "Permission required",
     patterns,

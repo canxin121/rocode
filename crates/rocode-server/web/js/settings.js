@@ -1551,8 +1551,8 @@ function openCommandPanel(section) {
   nodes.commandPanel.classList.remove("hidden");
   void loadSettingsWorkspace({ force: true }).catch((error) => {
     applyOutputBlock({
-      kind: "status",
-      tone: "error",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
       text: `Failed to load settings: ${String(error)}`,
     });
   });

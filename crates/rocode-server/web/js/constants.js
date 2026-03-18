@@ -10,10 +10,15 @@ const WIRE_KEYS = {
   TYPE: "type",
   SESSION_ID: "sessionID",
   SESSION_ID_ALIAS: "sessionId",
+  MESSAGE_ID: "messageID",
+  MESSAGE_ID_ALIAS: "messageId",
+  TOOL_CALL_ID: "toolCallId",
   PARENT_ID: "parentID",
   PARENT_ID_ALIAS: "parentId",
   CHILD_ID: "childID",
   CHILD_ID_ALIAS: "childId",
+  EXECUTION_ID: "executionID",
+  STAGE_ID: "stageID",
   REQUEST_ID: "requestID",
   REQUEST_ID_ALIAS: "requestId",
   PERMISSION_ID: "permissionID",
@@ -44,6 +49,118 @@ const SERVER_EVENT_TYPES = {
   TOOL_CALL_LIFECYCLE: "tool_call.lifecycle",
   DIFF_UPDATED: "diff.updated",
 };
+
+const OUTPUT_BLOCK_KINDS = {
+  STATUS: "status",
+  MESSAGE: "message",
+  REASONING: "reasoning",
+  TOOL: "tool",
+  SESSION_EVENT: "session_event",
+  QUEUE_ITEM: "queue_item",
+  SCHEDULER_STAGE: "scheduler_stage",
+  INSPECT: "inspect",
+};
+
+const OUTPUT_BLOCK_TONES = {
+  NORMAL: "normal",
+  WARNING: "warning",
+  SUCCESS: "success",
+  ERROR: "error",
+  MUTED: "muted",
+  STATUS: "status",
+};
+
+const BADGE_TONES = {
+  IDLE: "idle",
+  OK: "ok",
+  WARN: "warn",
+  ERROR: "error",
+};
+
+const MESSAGE_ROLES = {
+  USER: "user",
+  ASSISTANT: "assistant",
+  SYSTEM: "system",
+  TOOL: "tool",
+  REASONING: "reasoning",
+};
+
+const MESSAGE_PHASES = {
+  START: "start",
+  DELTA: "delta",
+  END: "end",
+  FULL: "full",
+};
+
+const MESSAGE_PART_TYPES = {
+  TEXT: "text",
+  REASONING: "reasoning",
+  COMPACTION: "compaction",
+  OUTPUT_BLOCK: SERVER_EVENT_TYPES.OUTPUT_BLOCK,
+};
+
+const TOOL_PHASES = {
+  START: "start",
+  RUNNING: "running",
+  DONE: "done",
+  RESULT: "result",
+  ERROR: "error",
+};
+
+const QUESTION_STATUSES = {
+  PENDING: "pending",
+  ANSWERED: "answered",
+  REJECTED: "rejected",
+  CANCELLED: "cancelled",
+  ERROR: "error",
+};
+
+const PERMISSION_STATUSES = {
+  PENDING: "pending",
+  RESOLVED: "resolved",
+  REJECTED: "rejected",
+};
+
+const PERMISSION_REPLIES = {
+  ONCE: "once",
+  ALWAYS: "always",
+  REJECT: "reject",
+};
+
+const INTERACTION_TYPES = {
+  QUESTION: "question",
+  PERMISSION: "permission",
+};
+
+const SCHEDULER_STAGE_STATUSES = {
+  WAITING: "waiting",
+  RUNNING: "running",
+  CANCELLING: "cancelling",
+  CANCELLED: "cancelled",
+  DONE: "done",
+  BLOCKED: "blocked",
+  CONTINUE: "continue",
+};
+
+const EXECUTION_KINDS = {
+  PROMPT_RUN: "prompt_run",
+  SCHEDULER_RUN: "scheduler_run",
+  SCHEDULER_STAGE: "scheduler_stage",
+  TOOL_CALL: "tool_call",
+  AGENT_TASK: "agent_task",
+  QUESTION: "question",
+};
+
+const QUESTION_RESOLUTION_EVENT_TYPES = [
+  SERVER_EVENT_TYPES.QUESTION_RESOLVED,
+  SERVER_EVENT_TYPES.QUESTION_REPLIED,
+  SERVER_EVENT_TYPES.QUESTION_REJECTED,
+];
+
+const PERMISSION_RESOLUTION_EVENT_TYPES = [
+  SERVER_EVENT_TYPES.PERMISSION_RESOLVED,
+  SERVER_EVENT_TYPES.PERMISSION_REPLIED,
+];
 
 const state = {
   sessions: [],

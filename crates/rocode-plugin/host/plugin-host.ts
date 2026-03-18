@@ -47,6 +47,24 @@ const INTERNAL_TOKEN_HEADER = "x-rocode-internal-token";
 const PLUGIN_PROGRESS_NOTIFICATION_METHOD = "notifications/progress";
 const PLUGIN_CONFIG_HOOK_NAME = "config";
 const RESERVED_PLUGIN_HOOK_NAMES = new Set(["auth", "event", PLUGIN_CONFIG_HOOK_NAME]);
+const PLUGIN_RPC_METHODS = {
+  CANCEL_REQUEST: "$/cancelRequest",
+  INITIALIZE: "initialize",
+  HOOK_INVOKE: "hook.invoke",
+  HOOK_INVOKE_FILE: "hook.invoke.file",
+  TOOL_INVOKE: "tool.invoke",
+  AUTH_AUTHORIZE: "auth.authorize",
+  AUTH_CALLBACK: "auth.callback",
+  AUTH_LOAD: "auth.load",
+  AUTH_FETCH: "auth.fetch",
+  AUTH_FETCH_STREAM: "auth.fetch.stream",
+  SHUTDOWN: "shutdown",
+} as const;
+const AUTH_FETCH_STREAM_NOTIFICATIONS = {
+  CHUNK: "auth.fetch.stream.chunk",
+  END: "auth.fetch.stream.end",
+  ERROR: "auth.fetch.stream.error",
+} as const;
 const PLUGIN_TOOL_CONTEXT_KEYS = {
   sessionID: "sessionID",
   messageID: "messageID",
@@ -1009,7 +1027,7 @@ async function handleAuthFetchStream(
     });
 
     if (!resp.body) {
-      sendNotification("auth.fetch.stream.end", { requestId: id });
+      sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.END, { requestId: id });
       return;
     }
 
@@ -1021,7 +1039,7 @@ async function handleAuthFetchStream(
       if (!value || value.length === 0) continue;
       const chunk = decoder.decode(value, { stream: true });
       if (chunk.length === 0) continue;
-      sendNotification("auth.fetch.stream.chunk", {
+      sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.CHUNK, {
         requestId: id,
         chunk,
       });
@@ -1029,19 +1047,19 @@ async function handleAuthFetchStream(
 
     const rest = decoder.decode();
     if (rest.length > 0) {
-      sendNotification("auth.fetch.stream.chunk", {
+      sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.CHUNK, {
         requestId: id,
         chunk: rest,
       });
     }
-    sendNotification("auth.fetch.stream.end", { requestId: id });
+    sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.END, { requestId: id });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    sendNotification("auth.fetch.stream.error", {
+    sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.ERROR, {
       requestId: id,
       message: msg,
     });
-    sendNotification("auth.fetch.stream.end", { requestId: id });
+    sendNotification(AUTH_FETCH_STREAM_NOTIFICATIONS.END, { requestId: id });
   }
 }
 
@@ -1077,37 +1095,37 @@ async function main(): Promise<void> {
     const { id, method, params } = msg;
 
     switch (method) {
-      case "$/cancelRequest":
+      case PLUGIN_RPC_METHODS.CANCEL_REQUEST:
         handleCancelRequest(params as { id: number });
         break;
-      case "initialize":
+      case PLUGIN_RPC_METHODS.INITIALIZE:
         await handleInitialize(id, params as Parameters<typeof handleInitialize>[1]);
         break;
-      case "hook.invoke":
+      case PLUGIN_RPC_METHODS.HOOK_INVOKE:
         await handleHookInvoke(id, params as Parameters<typeof handleHookInvoke>[1]);
         break;
-      case "hook.invoke.file":
+      case PLUGIN_RPC_METHODS.HOOK_INVOKE_FILE:
         await handleHookInvokeFile(id, params as { file: string; token: string });
         break;
-      case "tool.invoke":
+      case PLUGIN_RPC_METHODS.TOOL_INVOKE:
         await handleToolInvoke(id, params as { toolID: string; args: unknown; context: UnknownRecord });
         break;
-      case "auth.authorize":
+      case PLUGIN_RPC_METHODS.AUTH_AUTHORIZE:
         await handleAuthAuthorize(id, params as Parameters<typeof handleAuthAuthorize>[1]);
         break;
-      case "auth.callback":
+      case PLUGIN_RPC_METHODS.AUTH_CALLBACK:
         await handleAuthCallback(id, params as Parameters<typeof handleAuthCallback>[1]);
         break;
-      case "auth.load":
+      case PLUGIN_RPC_METHODS.AUTH_LOAD:
         await handleAuthLoad(id);
         break;
-      case "auth.fetch":
+      case PLUGIN_RPC_METHODS.AUTH_FETCH:
         await handleAuthFetch(id, params as Parameters<typeof handleAuthFetch>[1]);
         break;
-      case "auth.fetch.stream":
+      case PLUGIN_RPC_METHODS.AUTH_FETCH_STREAM:
         await handleAuthFetchStream(id, params as Parameters<typeof handleAuthFetchStream>[1]);
         break;
-      case "shutdown":
+      case PLUGIN_RPC_METHODS.SHUTDOWN:
         sendResult(id, {});
         process.exit(0);
       default:

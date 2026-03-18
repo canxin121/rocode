@@ -25,29 +25,29 @@ function schedulerStageText(block) {
 }
 
 function schedulerStageTone(status) {
-  if (status === "done") return "success";
-  if (status === "blocked") return "error";
-  if (status === "cancelled") return "error";
-  if (status === "waiting") return "warning";
-  return "warning";
+  if (status === SCHEDULER_STAGE_STATUSES.DONE) return OUTPUT_BLOCK_TONES.SUCCESS;
+  if (status === SCHEDULER_STAGE_STATUSES.BLOCKED) return OUTPUT_BLOCK_TONES.ERROR;
+  if (status === SCHEDULER_STAGE_STATUSES.CANCELLED) return OUTPUT_BLOCK_TONES.ERROR;
+  if (status === SCHEDULER_STAGE_STATUSES.WAITING) return OUTPUT_BLOCK_TONES.WARNING;
+  return OUTPUT_BLOCK_TONES.WARNING;
 }
 
 function schedulerStageStatusLabel(status) {
   switch (status) {
-    case "waiting":
+    case SCHEDULER_STAGE_STATUSES.WAITING:
       return "? waiting";
-    case "running":
+    case SCHEDULER_STAGE_STATUSES.RUNNING:
       return "@ running";
-    case "cancelling":
+    case SCHEDULER_STAGE_STATUSES.CANCELLING:
       return "~ cancelling";
-    case "cancelled":
+    case SCHEDULER_STAGE_STATUSES.CANCELLED:
       return "x cancelled";
-    case "done":
+    case SCHEDULER_STAGE_STATUSES.DONE:
       return "+ done";
-    case "blocked":
+    case SCHEDULER_STAGE_STATUSES.BLOCKED:
       return "! blocked";
     default:
-      return status ? `@ ${status}` : "@ running";
+      return status ? `@ ${status}` : `@ ${SCHEDULER_STAGE_STATUSES.RUNNING}`;
   }
 }
 
@@ -192,10 +192,10 @@ function renderStageCapabilities(node, block) {
 }
 
 function gateStatusLabel(status) {
-  if (!status) return "running";
-  if (status === "continue") return "? continue";
-  if (status === "done") return "+ done";
-  if (status === "blocked") return "! blocked";
+  if (!status) return SCHEDULER_STAGE_STATUSES.RUNNING;
+  if (status === SCHEDULER_STAGE_STATUSES.CONTINUE) return "? continue";
+  if (status === SCHEDULER_STAGE_STATUSES.DONE) return "+ done";
+  if (status === SCHEDULER_STAGE_STATUSES.BLOCKED) return "! blocked";
   return status;
 }
 
@@ -406,7 +406,11 @@ function renderDecisionBlock(node, decision) {
 
 function updateSchedulerStage(entry, block) {
   const tone = schedulerStageTone(block.status);
-  entry.article.classList.remove("warning", "success", "error");
+  entry.article.classList.remove(
+    OUTPUT_BLOCK_TONES.WARNING,
+    OUTPUT_BLOCK_TONES.SUCCESS,
+    OUTPUT_BLOCK_TONES.ERROR
+  );
   entry.article.classList.add(tone);
   entry.titleNode.textContent = schedulerStageTitle(block);
   entry.timeNode.textContent = formatTime(block.ts || Date.now());
@@ -418,7 +422,7 @@ function updateSchedulerStage(entry, block) {
       ? `${block.stage_index}/${block.stage_total}`
       : "live";
   entry.stepChip.textContent = block.step ? `step ${block.step}` : "step \u2014";
-  entry.statusChip.className = `stage-chip status-chip ${block.status || "running"}`;
+  entry.statusChip.className = `stage-chip status-chip ${block.status || SCHEDULER_STAGE_STATUSES.RUNNING}`;
   entry.statusChip.textContent = schedulerStageStatusLabel(block.status);
   entry.tokenChip.textContent = `tokens ${tokenDisplay(block.prompt_tokens)}/${tokenDisplay(block.completion_tokens)}`;
   if (block.total_agent_count > 0) {
@@ -456,7 +460,7 @@ function schedulerStageBlockFromMessage(message, body) {
   const meta = message && message.metadata ? message.metadata : null;
   if (!meta || !meta.scheduler_stage) return null;
   return {
-    kind: "scheduler_stage",
+    kind: OUTPUT_BLOCK_KINDS.SCHEDULER_STAGE,
     stage_id: meta.scheduler_stage_id || null,
     id: message.id,
     profile: meta.resolved_scheduler_profile || meta.scheduler_profile || null,

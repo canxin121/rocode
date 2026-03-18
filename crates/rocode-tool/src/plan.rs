@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::{output_blocks::MessageRoleWire, tools::BuiltinToolName, wire};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -16,6 +16,7 @@ pub struct PlanEnterTool;
 pub struct PlanExitTool;
 
 const PLAN_FILE: &str = "PLAN.md";
+const MESSAGE_PART_TYPE_TEXT: &str = "text";
 
 /// Create a user message and a synthetic text part via the ToolContext callbacks,
 /// matching the TS `Session.updateMessage()` + `Session.updatePart()` pattern.
@@ -32,11 +33,11 @@ async fn create_user_message_with_part(
     // Build the MessageV2.User info matching the TS MessageInfo::User shape
     let mut user_msg = serde_json::json!({
         "id": message_id,
-        "sessionID": ctx.session_id,
-        "role": "user",
+        "role": MessageRoleWire::User.as_str(),
         "time": { "created": now },
         "agent": agent,
     });
+    user_msg[wire::keys::SESSION_ID] = serde_json::json!(ctx.session_id);
     if let Some(ref m) = model {
         user_msg["model"] = serde_json::json!(m);
     }
@@ -45,14 +46,14 @@ async fn create_user_message_with_part(
     ctx.do_update_message(user_msg).await?;
 
     // Build the synthetic text part matching the TS MessageV2.TextPart shape
-    let text_part = serde_json::json!({
+    let mut text_part = serde_json::json!({
         "id": part_id,
-        "messageID": message_id,
-        "sessionID": ctx.session_id,
-        "type": "text",
+        "type": MESSAGE_PART_TYPE_TEXT,
         "text": text,
         "synthetic": true,
     });
+    text_part[wire::keys::MESSAGE_ID] = serde_json::json!(message_id);
+    text_part[wire::keys::SESSION_ID] = serde_json::json!(ctx.session_id);
 
     // Persist the part (mirrors TS Session.updatePart)
     ctx.do_update_part(text_part).await?;

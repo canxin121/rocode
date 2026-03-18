@@ -265,8 +265,8 @@ function wireEvents() {
       await loadMessages();
     } catch (error) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: `Failed to reject question: ${String(error)}`,
       });
       state.questionSubmitting = false;
@@ -289,8 +289,8 @@ function wireEvents() {
       await loadMessages();
     } catch (error) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: `Failed to answer question: ${String(error)}`,
       });
       state.questionSubmitting = false;
@@ -306,13 +306,13 @@ function wireEvents() {
   });
   nodes.permissionRejectBtn.addEventListener("click", async () => {
     try {
-      await submitPermissionInteractionReply("reject");
+      await submitPermissionInteractionReply(PERMISSION_REPLIES.REJECT);
       closePermissionPanel();
       await loadMessages();
     } catch (error) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: `Failed to reject permission: ${String(error)}`,
       });
       renderPermissionPanel();
@@ -320,13 +320,13 @@ function wireEvents() {
   });
   nodes.permissionAllowBtn.addEventListener("click", async () => {
     try {
-      await submitPermissionInteractionReply("once");
+      await submitPermissionInteractionReply(PERMISSION_REPLIES.ONCE);
       closePermissionPanel();
       await loadMessages();
     } catch (error) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: `Failed to allow permission: ${String(error)}`,
       });
       renderPermissionPanel();
@@ -334,13 +334,13 @@ function wireEvents() {
   });
   nodes.permissionAlwaysBtn.addEventListener("click", async () => {
     try {
-      await submitPermissionInteractionReply("always");
+      await submitPermissionInteractionReply(PERMISSION_REPLIES.ALWAYS);
       closePermissionPanel();
       await loadMessages();
     } catch (error) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: `Failed to allow permission: ${String(error)}`,
       });
       renderPermissionPanel();
@@ -351,12 +351,22 @@ function wireEvents() {
     state.selectedModel = nodes.modelSelect.value;
     updateComposerMeta();
     updateSessionRuntimeMeta(currentSession());
-    applyOutputBlock({ kind: "status", tone: "success", text: `Model set to ${state.selectedModel}`, silent: true });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
+      text: `Model set to ${state.selectedModel}`,
+      silent: true,
+    });
   });
 
   nodes.agentSelect.addEventListener("change", () => {
     setSelectedMode(nodes.agentSelect.value || null);
-    applyOutputBlock({ kind: "status", tone: "success", text: `Mode set to ${selectedModeLabel()}`, silent: true });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
+      text: `Mode set to ${selectedModeLabel()}`,
+      silent: true,
+    });
   });
 
   nodes.themeSelect.addEventListener("change", () => {
@@ -412,8 +422,8 @@ function wireEvents() {
 
     if (interactionLocked() && !content.startsWith("/")) {
       applyOutputBlock({
-        kind: "status",
-        tone: "warning",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.WARNING,
         text: state.streaming
           ? "A response is running. Use /abort to cancel or wait until it finishes."
           : "Another action is running. Wait until it finishes.",
@@ -502,7 +512,7 @@ async function bootstrap() {
   nodes.heroGreeting.textContent = timeGreeting();
   applyTheme(state.selectedTheme, { persist: false, announce: false });
   updateTokenUsage();
-  setBadge("loading", "warn");
+  setBadge("loading", BADGE_TONES.WARN);
   wireEvents();
   initTerminalPanel();
   autoSizeInput();
@@ -516,7 +526,7 @@ async function bootstrap() {
   startGlobalServerEventStream();
 
   if (!state.streaming) {
-    setBadge("ready", "ok");
+    setBadge("ready", BADGE_TONES.OK);
   }
 }
 

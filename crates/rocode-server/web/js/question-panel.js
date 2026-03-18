@@ -2,15 +2,15 @@
 
 function humanQuestionStatusLabel(status) {
   switch (String(status || "").toLowerCase()) {
-    case "pending":
+    case QUESTION_STATUSES.PENDING:
       return "Awaiting Answer";
-    case "answered":
+    case QUESTION_STATUSES.ANSWERED:
       return "Answered";
-    case "rejected":
+    case QUESTION_STATUSES.REJECTED:
       return "Rejected";
-    case "cancelled":
+    case QUESTION_STATUSES.CANCELLED:
       return "Cancelled";
-    case "error":
+    case QUESTION_STATUSES.ERROR:
       return "Error";
     default:
       return "Question";
@@ -19,8 +19,14 @@ function humanQuestionStatusLabel(status) {
 
 function questionStatusTone(status) {
   const normalized = String(status || "").toLowerCase();
-  if (normalized === "answered") return "done";
-  if (normalized === "rejected" || normalized === "cancelled" || normalized === "error") return "error";
+  if (normalized === QUESTION_STATUSES.ANSWERED) return "done";
+  if (
+    normalized === QUESTION_STATUSES.REJECTED ||
+    normalized === QUESTION_STATUSES.CANCELLED ||
+    normalized === QUESTION_STATUSES.ERROR
+  ) {
+    return BADGE_TONES.ERROR;
+  }
   return "waiting";
 }
 
@@ -183,9 +189,9 @@ function collectQuestionPanelAnswers() {
 function interactionFromLiveQuestionEvent(payload) {
   const questions = Array.isArray(payload.questions) ? payload.questions : [];
   return {
-    type: "question",
-    status: "pending",
-    request_id: payload.requestID || payload.requestId,
+    type: INTERACTION_TYPES.QUESTION,
+    status: QUESTION_STATUSES.PENDING,
+    request_id: payload[WIRE_KEYS.REQUEST_ID] || payload[WIRE_KEYS.REQUEST_ID_ALIAS],
     can_reply: true,
     can_reject: true,
     questions: questions.map((question) => ({
@@ -207,7 +213,7 @@ function interactionFromLiveQuestionEvent(payload) {
 
 function renderQuestionInteraction(entry, interaction) {
   entry.interactionNode.replaceChildren();
-  if (!interaction || interaction.type !== "question") {
+  if (!interaction || interaction.type !== INTERACTION_TYPES.QUESTION) {
     entry.interactionNode.classList.add("hidden");
     return;
   }
@@ -218,7 +224,7 @@ function renderQuestionInteraction(entry, interaction) {
   statusChip.textContent = humanQuestionStatusLabel(interaction.status);
   entry.interactionNode.appendChild(statusChip);
 
-  if (interaction.status === "pending" && interaction.request_id) {
+  if (interaction.status === QUESTION_STATUSES.PENDING && interaction.request_id) {
     const actions = document.createElement("div");
     actions.className = "question-action-buttons";
 
@@ -242,8 +248,8 @@ function renderQuestionInteraction(entry, interaction) {
         await loadMessages();
       } catch (error) {
         applyOutputBlock({
-          kind: "status",
-          tone: "error",
+          kind: OUTPUT_BLOCK_KINDS.STATUS,
+          tone: OUTPUT_BLOCK_TONES.ERROR,
           text: `Failed to reject question: ${String(error)}`,
         });
       } finally {

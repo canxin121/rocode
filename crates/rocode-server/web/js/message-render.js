@@ -171,7 +171,7 @@ function createMessageElement(role, options = {}) {
   }
 
   // Header (role + timestamp) - only for non-user messages or if explicitly shown
-  if (role !== "user" || options.showHeader) {
+  if (role !== MESSAGE_ROLES.USER || options.showHeader) {
     const header = document.createElement("div");
     header.className = "message-header";
 
@@ -197,7 +197,12 @@ function createMessageElement(role, options = {}) {
 }
 
 function appendMessage(role, text, ts, options = {}) {
-  const mappedRole = role === "assistant" ? "ai" : (role === "tool" || role === "system") ? "system" : role;
+  const mappedRole =
+    role === MESSAGE_ROLES.ASSISTANT
+      ? "ai"
+      : (role === MESSAGE_ROLES.TOOL || role === MESSAGE_ROLES.SYSTEM)
+        ? MESSAGE_ROLES.SYSTEM
+        : role;
   const { article, content } = createMessageElement(mappedRole, { ...options, ts });
 
   content.classList.add("md-root");
@@ -219,30 +224,39 @@ function appendMessage(role, text, ts, options = {}) {
 
 function toolPhaseLabel(phase) {
   switch (phase) {
-    case "start": return "start";
-    case "running": return "running";
-    case "done":
-    case "result": return "done";
-    case "error": return "error";
-    default: return phase || "tool";
+    case TOOL_PHASES.START:
+      return TOOL_PHASES.START;
+    case TOOL_PHASES.RUNNING:
+      return TOOL_PHASES.RUNNING;
+    case TOOL_PHASES.DONE:
+    case TOOL_PHASES.RESULT:
+      return TOOL_PHASES.DONE;
+    case TOOL_PHASES.ERROR:
+      return TOOL_PHASES.ERROR;
+    default:
+      return phase || OUTPUT_BLOCK_KINDS.TOOL;
   }
 }
 
 function toolPhaseTone(phase) {
-  if (phase === "error") return "error";
-  if (phase === "done" || phase === "result") return "success";
-  return "warning";
+  if (phase === TOOL_PHASES.ERROR) return OUTPUT_BLOCK_TONES.ERROR;
+  if (phase === TOOL_PHASES.DONE || phase === TOOL_PHASES.RESULT) return OUTPUT_BLOCK_TONES.SUCCESS;
+  return OUTPUT_BLOCK_TONES.WARNING;
 }
 
 function statusChipTone(status) {
   const normalized = String(status || "").toLowerCase();
-  if (!normalized) return "running";
-  if (normalized === "completed" || normalized === "done" || normalized === "success") return "done";
-  if (normalized === "failed" || normalized === "error") return "error";
-  if (normalized === "pending" || normalized === "queued") return "waiting";
-  if (normalized === "in_progress" || normalized === "in-progress" || normalized === "running") return "running";
-  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
-  if (normalized === "blocked") return "blocked";
+  if (!normalized) return SCHEDULER_STAGE_STATUSES.RUNNING;
+  if (normalized === "completed" || normalized === TOOL_PHASES.DONE || normalized === "success") return "done";
+  if (normalized === "failed" || normalized === OUTPUT_BLOCK_TONES.ERROR) return OUTPUT_BLOCK_TONES.ERROR;
+  if (normalized === QUESTION_STATUSES.PENDING || normalized === "queued") return SCHEDULER_STAGE_STATUSES.WAITING;
+  if (normalized === "in_progress" || normalized === "in-progress" || normalized === SCHEDULER_STAGE_STATUSES.RUNNING) {
+    return SCHEDULER_STAGE_STATUSES.RUNNING;
+  }
+  if (normalized === SCHEDULER_STAGE_STATUSES.CANCELLED || normalized === "canceled") {
+    return SCHEDULER_STAGE_STATUSES.CANCELLED;
+  }
+  if (normalized === SCHEDULER_STAGE_STATUSES.BLOCKED) return SCHEDULER_STAGE_STATUSES.BLOCKED;
   return normalized;
 }
 
@@ -263,10 +277,18 @@ function humanEventLabel(event) {
 }
 
 function sessionEventTone(status) {
-  if (status === "error" || status === "failed") return "error";
-  if (status === "completed" || status === "done" || status === "success") return "success";
-  if (status === "running" || status === "pending" || status === "in_progress") return "warning";
-  return "warning";
+  if (status === OUTPUT_BLOCK_TONES.ERROR || status === "failed") return OUTPUT_BLOCK_TONES.ERROR;
+  if (status === "completed" || status === TOOL_PHASES.DONE || status === "success") {
+    return OUTPUT_BLOCK_TONES.SUCCESS;
+  }
+  if (
+    status === SCHEDULER_STAGE_STATUSES.RUNNING ||
+    status === QUESTION_STATUSES.PENDING ||
+    status === "in_progress"
+  ) {
+    return OUTPUT_BLOCK_TONES.WARNING;
+  }
+  return OUTPUT_BLOCK_TONES.WARNING;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,7 +296,10 @@ function sessionEventTone(status) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function appendToolBlock(block) {
-  const { article, content } = createMessageElement("system", { title: "Tool", ts: block.ts });
+  const { article, content } = createMessageElement(MESSAGE_ROLES.SYSTEM, {
+    title: "Tool",
+    ts: block.ts,
+  });
 
   // Tool header with name and phase badge
   const header = document.createElement("div");
@@ -282,12 +307,12 @@ function appendToolBlock(block) {
 
   const nameBadge = document.createElement("span");
   nameBadge.className = "badge";
-  nameBadge.textContent = block.name || "tool";
+  nameBadge.textContent = block.name || OUTPUT_BLOCK_KINDS.TOOL;
   header.appendChild(nameBadge);
 
   const phaseBadge = document.createElement("span");
   phaseBadge.className = "badge badge-running";
-  phaseBadge.textContent = "running";
+  phaseBadge.textContent = TOOL_PHASES.RUNNING;
   header.appendChild(phaseBadge);
 
   content.appendChild(header);
@@ -329,7 +354,7 @@ function appendToolBlock(block) {
 }
 
 function updateToolBlock(entry, block) {
-  const phase = block.phase || "start";
+  const phase = block.phase || TOOL_PHASES.START;
   const display = block.display || {};
 
   // Update phase badge
@@ -436,7 +461,7 @@ function renderPreviewLines(node, preview) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function appendSessionEventBlock(block) {
-  const { article, content } = createMessageElement("system", {
+  const { article, content } = createMessageElement(MESSAGE_ROLES.SYSTEM, {
     title: humanEventLabel(block.event),
     ts: block.ts
   });
@@ -546,7 +571,7 @@ function updateSessionEventBlock(entry, block) {
 }
 
 function appendQueueItemBlock(block) {
-  const { article, content } = createMessageElement("system", {
+  const { article, content } = createMessageElement(MESSAGE_ROLES.SYSTEM, {
     title: "Queue",
     ts: block.ts || Date.now(),
   });

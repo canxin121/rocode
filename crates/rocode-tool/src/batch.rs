@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::{tools::BuiltinToolName, tools::ToolCallStatusWire, wire};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
@@ -139,23 +139,22 @@ impl Tool for BatchTool {
                 .as_millis() as u64;
 
             futures.push(Box::pin(async move {
-                let _ = ctx_clone
-                    .do_update_part(serde_json::json!({
+                let mut running_part = serde_json::json!({
                         "id": call_id,
-                        "messageID": message_id,
-                        "sessionID": session_id,
                         "type": "tool",
                         "tool": tool_name,
                         "callID": call_id,
                         "state": {
-                            "status": "running",
+                            "status": ToolCallStatusWire::Running.as_str(),
                             "input": tool_params,
                             "time": {
                                 "start": call_start_time
                             }
                         }
-                    }))
-                    .await;
+                    });
+                running_part[wire::keys::MESSAGE_ID] = serde_json::json!(message_id);
+                running_part[wire::keys::SESSION_ID] = serde_json::json!(session_id);
+                let _ = ctx_clone.do_update_part(running_part).await;
 
                 let result = match registry.get(&tool_name).await {
                     Some(tool) => {
@@ -167,16 +166,13 @@ impl Tool for BatchTool {
                                     .as_millis()
                                     as u64;
 
-                                let _ = ctx_clone
-                                    .do_update_part(serde_json::json!({
+                                let mut completed_part = serde_json::json!({
                                         "id": call_id,
-                                        "messageID": message_id,
-                                        "sessionID": session_id,
                                         "type": "tool",
                                         "tool": tool_name,
                                         "callID": call_id,
                                         "state": {
-                                            "status": "completed",
+                                            "status": ToolCallStatusWire::Completed.as_str(),
                                             "input": tool_params,
                                             "output": res.output,
                                             "title": res.title,
@@ -187,8 +183,12 @@ impl Tool for BatchTool {
                                                 "end": call_end_time
                                             }
                                         }
-                                    }))
-                                    .await;
+                                    });
+                                completed_part[wire::keys::MESSAGE_ID] =
+                                    serde_json::json!(message_id);
+                                completed_part[wire::keys::SESSION_ID] =
+                                    serde_json::json!(session_id);
+                                let _ = ctx_clone.do_update_part(completed_part).await;
 
                                 let attachments = collect_attachments_from_metadata(&res.metadata);
 
@@ -206,16 +206,13 @@ impl Tool for BatchTool {
                                     .as_millis()
                                     as u64;
 
-                                let _ = ctx_clone
-                                    .do_update_part(serde_json::json!({
+                                let mut error_part = serde_json::json!({
                                         "id": call_id,
-                                        "messageID": message_id,
-                                        "sessionID": session_id,
                                         "type": "tool",
                                         "tool": tool_name,
                                         "callID": call_id,
                                         "state": {
-                                            "status": "error",
+                                            "status": ToolCallStatusWire::Error.as_str(),
                                             "input": tool_params,
                                             "error": e.to_string(),
                                             "time": {
@@ -223,8 +220,10 @@ impl Tool for BatchTool {
                                                 "end": call_end_time
                                             }
                                         }
-                                    }))
-                                    .await;
+                                    });
+                                error_part[wire::keys::MESSAGE_ID] = serde_json::json!(message_id);
+                                error_part[wire::keys::SESSION_ID] = serde_json::json!(session_id);
+                                let _ = ctx_clone.do_update_part(error_part).await;
 
                                 BatchResult {
                                     tool: tool_name,

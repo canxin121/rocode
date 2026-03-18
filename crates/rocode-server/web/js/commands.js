@@ -155,14 +155,14 @@ function setSelectedModelByArg(arg) {
   const value = String(arg || "").trim();
   const ok = modelOptionList().some((opt) => opt.value === value);
   if (!ok) {
-    applyOutputBlock({ kind: "status", tone: "error", text: `Unknown model: ${value}` });
+    applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.ERROR, text: `Unknown model: ${value}` });
     return false;
   }
   state.selectedModel = value;
   nodes.modelSelect.value = value;
   updateComposerMeta();
   updateSessionRuntimeMeta(currentSession());
-  applyOutputBlock({ kind: "status", tone: "success", text: `Model set to ${value}` });
+  applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.SUCCESS, text: `Model set to ${value}` });
   return true;
 }
 
@@ -170,18 +170,18 @@ function setSelectedModeByArg(arg, scope) {
   const value = String(arg || "").trim();
   if (value === "auto") {
     setSelectedMode(null);
-    applyOutputBlock({ kind: "status", tone: "success", text: "Mode set to auto" });
+    applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.SUCCESS, text: "Mode set to auto" });
     return true;
   }
 
   const found = resolveModeFromArg(value, scope);
   if (!found) {
-    applyOutputBlock({ kind: "status", tone: "error", text: `Unknown mode: ${value}` });
+    applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.ERROR, text: `Unknown mode: ${value}` });
     return true;
   }
 
   setSelectedMode(found.key);
-  applyOutputBlock({ kind: "status", tone: "success", text: `Mode set to ${selectedModeLabel()}` });
+  applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.SUCCESS, text: `Mode set to ${selectedModeLabel()}` });
   return true;
 }
 
@@ -197,9 +197,9 @@ async function switchToSession(session) {
 function renderStatusMessage() {
   const current = currentSession();
   applyOutputBlock({
-    kind: "message",
-    phase: "full",
-    role: "system",
+    kind: OUTPUT_BLOCK_KINDS.MESSAGE,
+    phase: MESSAGE_PHASES.FULL,
+    role: MESSAGE_ROLES.SYSTEM,
     title: "status",
     text: [
       `state: ${runtimeStatusLabel()}`,
@@ -215,8 +215,8 @@ function renderStatusMessage() {
 async function navigateParentSessionView() {
   if (!state.parentSessionId) {
     applyOutputBlock({
-      kind: "status",
-      tone: "warning",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.WARNING,
       text: "No parent session is currently attached.",
     });
     return true;
@@ -227,8 +227,8 @@ async function navigateParentSessionView() {
   renderProjects();
   await loadMessages();
   applyOutputBlock({
-    kind: "status",
-    tone: "success",
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
     text: `Returned to parent session: ${parentId}`,
   });
   return true;
@@ -237,8 +237,8 @@ async function navigateParentSessionView() {
 async function copyCurrentSessionTranscript() {
   if (!state.selectedSession) {
     applyOutputBlock({
-      kind: "status",
-      tone: "warning",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.WARNING,
       text: "No active session to copy.",
     });
     return true;
@@ -246,24 +246,24 @@ async function copyCurrentSessionTranscript() {
   const transcript = String(nodes.messageFeed ? nodes.messageFeed.textContent || "" : "").trim();
   if (!transcript) {
     applyOutputBlock({
-      kind: "status",
-      tone: "warning",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.WARNING,
       text: "No transcript available for current session.",
     });
     return true;
   }
   if (!navigator.clipboard || !navigator.clipboard.writeText) {
     applyOutputBlock({
-      kind: "status",
-      tone: "error",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
       text: "Clipboard access is not available in this browser.",
     });
     return true;
   }
   await navigator.clipboard.writeText(transcript);
   applyOutputBlock({
-    kind: "status",
-    tone: "success",
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
     text: "Session transcript copied to clipboard.",
   });
   return true;
@@ -328,13 +328,13 @@ async function executeParameterizedUiCommand(actionId, argumentKind, arg = "") {
       {
         const resolved = resolveSessionFromArg(arg);
         if (!resolved) {
-          applyOutputBlock({ kind: "status", tone: "error", text: `Session not found: ${arg}` });
+          applyOutputBlock({ kind: OUTPUT_BLOCK_KINDS.STATUS, tone: OUTPUT_BLOCK_TONES.ERROR, text: `Session not found: ${arg}` });
           return true;
         }
         await switchToSession(resolved);
         applyOutputBlock({
-          kind: "status",
-          tone: "success",
+          kind: OUTPUT_BLOCK_KINDS.STATUS,
+          tone: OUTPUT_BLOCK_TONES.SUCCESS,
           text: `Session switched: ${resolved.id}`,
         });
         return true;
@@ -350,16 +350,16 @@ async function executeSharedUiAction(actionId, arg = "") {
       if (arg) return false;
       if (!state.streaming) {
         applyOutputBlock({
-          kind: "status",
-          tone: "warning",
+          kind: OUTPUT_BLOCK_KINDS.STATUS,
+          tone: OUTPUT_BLOCK_TONES.WARNING,
           text: "No active run to abort. Use /abort while a response is running.",
         });
         return true;
       }
       if (state.abortRequested) {
         applyOutputBlock({
-          kind: "status",
-          tone: "warning",
+          kind: OUTPUT_BLOCK_KINDS.STATUS,
+          tone: OUTPUT_BLOCK_TONES.WARNING,
           text: "Cancellation already requested.",
         });
         return true;
@@ -368,9 +368,9 @@ async function executeSharedUiAction(actionId, arg = "") {
       return true;
     case "show_help":
       applyOutputBlock({
-        kind: "message",
-        phase: "full",
-        role: "system",
+        kind: OUTPUT_BLOCK_KINDS.MESSAGE,
+        phase: MESSAGE_PHASES.FULL,
+        role: MESSAGE_ROLES.SYSTEM,
         title: "commands",
         text: sharedHelpLines().join("\n"),
       });
@@ -408,8 +408,8 @@ async function executeSharedUiAction(actionId, arg = "") {
         const current = currentSession();
         if (current && current.share_url) {
           applyOutputBlock({
-            kind: "status",
-            tone: "warning",
+            kind: OUTPUT_BLOCK_KINDS.STATUS,
+            tone: OUTPUT_BLOCK_TONES.WARNING,
             text: "Session is already shared. Use /unshare to revoke the link.",
           });
           return;
@@ -423,8 +423,8 @@ async function executeSharedUiAction(actionId, arg = "") {
         const current = currentSession();
         if (!current || !current.share_url) {
           applyOutputBlock({
-            kind: "status",
-            tone: "warning",
+            kind: OUTPUT_BLOCK_KINDS.STATUS,
+            tone: OUTPUT_BLOCK_TONES.WARNING,
             text: "Session is not currently shared.",
           });
           return;
@@ -465,8 +465,8 @@ async function handleSlashCommand(input) {
     sharedActionId !== "show_status"
   ) {
     applyOutputBlock({
-      kind: "status",
-      tone: "warning",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.WARNING,
       text: state.streaming
         ? "A response is running. Use /abort to cancel or wait until it finishes."
         : "Another action is running. Wait until it finishes.",

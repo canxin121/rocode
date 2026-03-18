@@ -5,15 +5,15 @@ async function runUiAction(label, task) {
 
   const runningBadgeText = `${label}...`;
   state.busyAction = label;
-  setBadge(runningBadgeText, "warn");
+  setBadge(runningBadgeText, BADGE_TONES.WARN);
   syncInteractionState();
 
   try {
     return await task();
   } catch (error) {
     applyOutputBlock({
-      kind: "status",
-      tone: "error",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
       text: `${label} failed: ${String(error)}`,
     });
     return null;
@@ -21,7 +21,7 @@ async function runUiAction(label, task) {
     state.busyAction = null;
     syncInteractionState();
     if (!state.streaming && nodes.statusBadge.textContent === runningBadgeText) {
-      setBadge("ready", "ok");
+      setBadge("ready", BADGE_TONES.OK);
     }
   }
 }
@@ -29,7 +29,7 @@ async function runUiAction(label, task) {
 async function abortCurrentExecution() {
   if (!state.selectedSession || !state.streaming || state.abortRequested) return;
   state.abortRequested = true;
-  setBadge("cancelling", "warn");
+  setBadge("cancelling", BADGE_TONES.WARN);
   syncInteractionState();
   const path =
     runningSchedulerMode()
@@ -42,7 +42,12 @@ async function abortCurrentExecution() {
       result && result.target === "stage"
         ? `Cancellation requested: ${result.stage || "current stage"}`
         : "Cancellation requested";
-    applyOutputBlock({ kind: "status", tone: "warning", text: label, silent: true });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.WARNING,
+      text: label,
+      silent: true,
+    });
   } catch (error) {
     state.abortRequested = false;
     syncInteractionState();
@@ -67,7 +72,11 @@ async function loadProviders() {
     updateComposerMeta();
     updateSessionRuntimeMeta(currentSession());
   } catch (error) {
-    applyOutputBlock({ kind: "status", tone: "error", text: `Failed to load providers: ${String(error)}` });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
+      text: `Failed to load providers: ${String(error)}`,
+    });
   }
 }
 
@@ -97,7 +106,11 @@ async function loadModes() {
 
     renderModeOptions();
   } catch (error) {
-    applyOutputBlock({ kind: "status", tone: "error", text: `Failed to load modes: ${String(error)}` });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
+      text: `Failed to load modes: ${String(error)}`,
+    });
   }
 }
 
@@ -143,10 +156,10 @@ async function loadMessages() {
         // attached to the same message (tool results, session events, etc.).
       } else if (body) {
         applyOutputBlock({
-          kind: "message",
-          phase: "full",
-          role: message.role || "assistant",
-          title: `${message.role || "assistant"}${message.model ? ` · ${message.model}` : ""}`,
+          kind: OUTPUT_BLOCK_KINDS.MESSAGE,
+          phase: MESSAGE_PHASES.FULL,
+          role: message.role || MESSAGE_ROLES.ASSISTANT,
+          title: `${message.role || MESSAGE_ROLES.ASSISTANT}${message.model ? ` · ${message.model}` : ""}`,
           text: body,
           ts: message.created_at,
         });
@@ -163,7 +176,11 @@ async function loadMessages() {
     await refreshExecutionTopology(state.selectedSession);
   } catch (error) {
     clearFeed();
-    applyOutputBlock({ kind: "status", tone: "error", text: `Failed to load messages: ${String(error)}` });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
+      text: `Failed to load messages: ${String(error)}`,
+    });
   }
 }
 
@@ -208,9 +225,13 @@ async function loadSessions() {
     await refreshSessionsIndex();
     await loadMessages();
   } catch (error) {
-    setBadge("offline", "error");
+    setBadge("offline", BADGE_TONES.ERROR);
     clearFeed();
-    applyOutputBlock({ kind: "status", tone: "error", text: `Failed to load sessions: ${String(error)}` });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
+      text: `Failed to load sessions: ${String(error)}`,
+    });
   }
 }
 
@@ -223,7 +244,11 @@ async function createAndSelectSession() {
   state.selectedSession = created.id;
   state.selectedProject = projectKey(created);
   await loadSessions();
-  applyOutputBlock({ kind: "status", tone: "success", text: `Session created: ${created.id}` });
+  applyOutputBlock({
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
+    text: `Session created: ${created.id}`,
+  });
   return created.id;
 }
 
@@ -240,7 +265,11 @@ async function renameCurrentSession() {
 
   await loadSessions();
   await loadMessages();
-  applyOutputBlock({ kind: "status", tone: "success", text: "Session renamed" });
+  applyOutputBlock({
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
+    text: "Session renamed",
+  });
 }
 
 async function toggleShareCurrentSession() {
@@ -250,7 +279,11 @@ async function toggleShareCurrentSession() {
 
   if (current.share_url) {
     await api(`/session/${state.selectedSession}/share`, { method: "DELETE" });
-    applyOutputBlock({ kind: "status", tone: "success", text: "Session unshared" });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
+      text: "Session unshared",
+    });
   } else {
     const response = await api(`/session/${state.selectedSession}/share`, { method: "POST" });
     const data = await response.json();
@@ -262,8 +295,8 @@ async function toggleShareCurrentSession() {
       }
     }
     applyOutputBlock({
-      kind: "status",
-      tone: "success",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
       text: data && data.url ? `Share link: ${data.url}` : "Session shared",
     });
   }
@@ -283,7 +316,11 @@ async function forkCurrentSession() {
   state.selectedProject = projectKey(forked);
   await loadSessions();
   await loadMessages();
-  applyOutputBlock({ kind: "status", tone: "success", text: `Forked session: ${forked.id}` });
+  applyOutputBlock({
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
+    text: `Forked session: ${forked.id}`,
+  });
 }
 
 async function compactCurrentSession() {
@@ -292,8 +329,8 @@ async function compactCurrentSession() {
     method: "POST",
   });
   applyOutputBlock({
-    kind: "status",
-    tone: "warning",
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.WARNING,
     text: "Compaction started",
   });
   await loadSessions();
@@ -319,5 +356,9 @@ async function deleteCurrentSession() {
 
   await loadSessions();
   await loadMessages();
-  applyOutputBlock({ kind: "status", tone: "success", text: "Session deleted" });
+  applyOutputBlock({
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.SUCCESS,
+    text: "Session deleted",
+  });
 }

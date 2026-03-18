@@ -32,14 +32,14 @@ function upsertChildSessionLiveBlock(sessionId, block) {
   if (!sessionId || !block || !block.kind) return;
   const entries = ensureChildSessionLiveState(sessionId);
 
-  if (block.kind === "message" || block.kind === "reasoning") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.MESSAGE || block.kind === OUTPUT_BLOCK_KINDS.REASONING) {
     const streamKind = block.kind;
     const streamRole = block.role || null;
-    if (block.phase === "start") {
+    if (block.phase === MESSAGE_PHASES.START) {
       entries.push({ kind: streamKind, role: streamRole, text: "" });
       return;
     }
-    if (block.phase === "delta") {
+    if (block.phase === MESSAGE_PHASES.DELTA) {
       const last = entries[entries.length - 1];
       if (last && last.kind === streamKind && (last.role || null) === streamRole) {
         last.text = `${last.text || ""}${block.text || ""}`;
@@ -48,29 +48,31 @@ function upsertChildSessionLiveBlock(sessionId, block) {
       }
       return;
     }
-    if (block.phase === "end") {
+    if (block.phase === MESSAGE_PHASES.END) {
       return;
     }
     entries.push({ kind: streamKind, role: streamRole, text: block.text || "" });
     return;
   }
 
-  if (block.kind === "tool") {
-    const label = [block.name || "tool", block.phase || "running"].filter(Boolean).join(" · ");
+  if (block.kind === OUTPUT_BLOCK_KINDS.TOOL) {
+    const label = [block.name || OUTPUT_BLOCK_KINDS.TOOL, block.phase || TOOL_PHASES.RUNNING]
+      .filter(Boolean)
+      .join(" · ");
     const detail = block.output || block.text || block.input || "";
-    entries.push({ kind: "tool", text: detail ? `${label}\n${detail}` : label });
+    entries.push({ kind: OUTPUT_BLOCK_KINDS.TOOL, text: detail ? `${label}\n${detail}` : label });
     return;
   }
 
-  if (block.kind === "scheduler_stage") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.SCHEDULER_STAGE) {
     const title = schedulerStageTitle(block);
     const detail = schedulerStageText(block) || block.activity || block.last_event || "";
     entries.push({ kind: "stage", text: detail ? `${title}\n${detail}` : title });
     return;
   }
 
-  if (block.kind === "status") {
-    entries.push({ kind: "status", text: block.text || "status" });
+  if (block.kind === OUTPUT_BLOCK_KINDS.STATUS) {
+    entries.push({ kind: OUTPUT_BLOCK_KINDS.STATUS, text: block.text || OUTPUT_BLOCK_KINDS.STATUS });
   }
 }
 
@@ -84,10 +86,10 @@ function focusedChildTranscriptMarkup(sessionId) {
     .slice(-12)
     .map((entry) => {
       const label =
-        entry.kind === "reasoning"
+        entry.kind === OUTPUT_BLOCK_KINDS.REASONING
           ? "thinking"
-          : entry.kind === "message"
-            ? entry.role || "assistant"
+          : entry.kind === OUTPUT_BLOCK_KINDS.MESSAGE
+            ? entry.role || MESSAGE_ROLES.ASSISTANT
             : entry.kind;
       return `
         <article class="focused-child-entry focused-child-entry-${escapeHtml(entry.kind)}">
@@ -101,14 +103,14 @@ function focusedChildTranscriptMarkup(sessionId) {
 
 function applyFocusedChildOutputBlockEvent(payload) {
   if (!payload) return false;
-  const sessionId = payload.sessionID || payload.sessionId || null;
+  const sessionId = payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS] || null;
   if (!sessionId || sessionId === state.selectedSession || sessionId !== state.focusedChildSessionId) {
     return false;
   }
   if (!childSessionIdsFromTopology().has(sessionId)) {
     return false;
   }
-  const block = payload && payload.block ? payload.block : payload;
+  const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
   upsertChildSessionLiveBlock(sessionId, block);
   renderChildSessionRail(state.executionTopology);
   return true;
@@ -121,8 +123,8 @@ function collectChildSessionEntries(nodes, into = []) {
       into.push({
         childSessionId,
         label: node.label || humanExecutionKind(node.kind),
-        kind: node.kind || "agent_task",
-        status: node.status || "running",
+        kind: node.kind || EXECUTION_KINDS.AGENT_TASK,
+        status: node.status || SCHEDULER_STAGE_STATUSES.RUNNING,
         waitingOn: node.waiting_on || null,
         recentEvent: node.recent_event || null,
         stageId: node.stage_id || null,
@@ -148,10 +150,10 @@ function uniqueChildSessionEntries(entries) {
 }
 
 function childSessionStatusTone(status) {
-  if (status === "done") return "success";
-  if (status === "waiting" || status === "retry") return "warning";
-  if (status === "cancelling") return "warning";
-  return "running";
+  if (status === SCHEDULER_STAGE_STATUSES.DONE) return OUTPUT_BLOCK_TONES.SUCCESS;
+  if (status === SCHEDULER_STAGE_STATUSES.WAITING || status === "retry") return OUTPUT_BLOCK_TONES.WARNING;
+  if (status === SCHEDULER_STAGE_STATUSES.CANCELLING) return OUTPUT_BLOCK_TONES.WARNING;
+  return SCHEDULER_STAGE_STATUSES.RUNNING;
 }
 
 function renderChildSessionRail(topology) {
@@ -328,24 +330,26 @@ function executionSummaryText(topology) {
 }
 
 function executionStatusTone(status) {
-  if (status === "waiting" || status === "cancelling" || status === "retry") return "warn";
-  if (status === "running") return "ok";
+  if (status === SCHEDULER_STAGE_STATUSES.WAITING || status === SCHEDULER_STAGE_STATUSES.CANCELLING || status === "retry") {
+    return BADGE_TONES.WARN;
+  }
+  if (status === SCHEDULER_STAGE_STATUSES.RUNNING) return BADGE_TONES.OK;
   return "";
 }
 
 function humanExecutionKind(kind) {
   switch (kind) {
-    case "prompt_run":
+    case EXECUTION_KINDS.PROMPT_RUN:
       return "prompt";
-    case "scheduler_run":
+    case EXECUTION_KINDS.SCHEDULER_RUN:
       return "scheduler";
-    case "scheduler_stage":
+    case EXECUTION_KINDS.SCHEDULER_STAGE:
       return "stage";
-    case "tool_call":
-      return "tool";
-    case "agent_task":
+    case EXECUTION_KINDS.TOOL_CALL:
+      return OUTPUT_BLOCK_KINDS.TOOL;
+    case EXECUTION_KINDS.AGENT_TASK:
       return "agent task";
-    case "question":
+    case EXECUTION_KINDS.QUESTION:
       return "question";
     default:
       return kind || "execution";
@@ -363,7 +367,7 @@ function renderExecutionNode(node) {
       <div class="execution-node-row">
         <span class="execution-kind">${escapeHtml(humanExecutionKind(node.kind))}</span>
         <span class="execution-label">${escapeHtml(node.label || node.id)}</span>
-        <span class="badge ${statusTone}">${escapeHtml(node.status || "running")}</span>
+        <span class="badge ${statusTone}">${escapeHtml(node.status || SCHEDULER_STAGE_STATUSES.RUNNING)}</span>
       </div>
       ${
         meta.length
@@ -479,8 +483,8 @@ async function executeRecoveryAction(action, targetId = null, label = "recovery"
     });
     const result = await response.json();
     applyOutputBlock({
-      kind: "status",
-      tone: "success",
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
       text: `Recovery action started: ${label}`,
     });
     await refreshSessionSnapshot(state.selectedSession);

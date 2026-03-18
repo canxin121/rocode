@@ -152,7 +152,10 @@ function handleGlobalServerEvent(name, payload) {
     const handled = applyOutputBlockEvent(payload);
     if (!handled && !applyFocusedChildOutputBlockEvent(payload)) return;
     const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
-    if (block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
+    if (
+      block &&
+      (block.kind === OUTPUT_BLOCK_KINDS.SCHEDULER_STAGE || block.kind === OUTPUT_BLOCK_KINDS.TOOL)
+    ) {
       scheduleExecutionTopologyRefresh(60);
     }
     return;
@@ -168,8 +171,8 @@ function handleGlobalServerEvent(name, payload) {
   if (type === SERVER_EVENT_TYPES.ERROR) {
     if (!state.streaming && globalServerEventSessionId(payload) === state.selectedSession) {
       applyOutputBlock({
-        kind: "status",
-        tone: "error",
+        kind: OUTPUT_BLOCK_KINDS.STATUS,
+        tone: OUTPUT_BLOCK_TONES.ERROR,
         text: payload[WIRE_KEYS.ERROR] || payload[WIRE_KEYS.MESSAGE] || "Stream error",
       });
     }
@@ -203,11 +206,7 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (
-    type === SERVER_EVENT_TYPES.QUESTION_RESOLVED ||
-    type === SERVER_EVENT_TYPES.QUESTION_REPLIED ||
-    type === SERVER_EVENT_TYPES.QUESTION_REJECTED
-  ) {
+  if (QUESTION_RESOLUTION_EVENT_TYPES.includes(type)) {
     maybeResolveGlobalQuestion(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
@@ -224,10 +223,7 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (
-    type === SERVER_EVENT_TYPES.PERMISSION_RESOLVED ||
-    type === SERVER_EVENT_TYPES.PERMISSION_REPLIED
-  ) {
+  if (PERMISSION_RESOLUTION_EVENT_TYPES.includes(type)) {
     maybeResolveGlobalPermission(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);

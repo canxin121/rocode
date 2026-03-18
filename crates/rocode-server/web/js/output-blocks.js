@@ -6,11 +6,11 @@ function targetsSelectedSession(sessionId) {
 
 function applyOutputBlockEvent(payload) {
   if (!payload) return false;
-  const sessionId = payload.sessionID || payload.sessionId || null;
+  const sessionId = payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS] || null;
   if (!targetsSelectedSession(sessionId)) {
     return false;
   }
-  const block = payload && payload.block ? payload.block : payload;
+  const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
   applyOutputBlock(block);
   return true;
 }
@@ -18,32 +18,32 @@ function applyOutputBlockEvent(payload) {
 function applyOutputBlock(block) {
   if (!block || !block.kind) return;
 
-  if (block.kind === "status") {
-    const tone = toneForMessage(block.tone || "normal");
-    setBadge(block.text || "status", toneForBadge(tone));
+  if (block.kind === OUTPUT_BLOCK_KINDS.STATUS) {
+    const tone = toneForMessage(block.tone || OUTPUT_BLOCK_TONES.NORMAL);
+    setBadge(block.text || OUTPUT_BLOCK_KINDS.STATUS, toneForBadge(tone));
     if (!block.silent) {
-      appendMessage("status", block.text || "status", Date.now(), {
-        title: `status · ${tone}`,
+      appendMessage(OUTPUT_BLOCK_KINDS.STATUS, block.text || OUTPUT_BLOCK_KINDS.STATUS, Date.now(), {
+        title: `${OUTPUT_BLOCK_KINDS.STATUS} · ${tone}`,
         tone,
       });
     }
     return;
   }
 
-  if (block.kind === "message") {
-    if (block.phase === "start") {
-      const result = appendMessage(block.role || "assistant", "", Date.now(), {
-        title: block.role || "assistant",
+  if (block.kind === OUTPUT_BLOCK_KINDS.MESSAGE) {
+    if (block.phase === MESSAGE_PHASES.START) {
+      const result = appendMessage(block.role || MESSAGE_ROLES.ASSISTANT, "", Date.now(), {
+        title: block.role || MESSAGE_ROLES.ASSISTANT,
       });
       state.streamMessageArticle = result.article;
       state.streamMessageNode = result.bodyNode;
       state.streamMessageText = "";
       return;
     }
-    if (block.phase === "delta") {
+    if (block.phase === MESSAGE_PHASES.DELTA) {
       if (!state.streamMessageNode) {
-        const result = appendMessage(block.role || "assistant", "", Date.now(), {
-          title: block.role || "assistant",
+        const result = appendMessage(block.role || MESSAGE_ROLES.ASSISTANT, "", Date.now(), {
+          title: block.role || MESSAGE_ROLES.ASSISTANT,
         });
         state.streamMessageArticle = result.article;
         state.streamMessageNode = result.bodyNode;
@@ -56,29 +56,29 @@ function applyOutputBlock(block) {
       nodes.messageFeed.scrollTop = nodes.messageFeed.scrollHeight;
       return;
     }
-    if (block.phase === "end") {
+    if (block.phase === MESSAGE_PHASES.END) {
       state.streamMessageArticle = null;
       state.streamMessageNode = null;
       state.streamMessageText = "";
       return;
     }
-    if (block.phase === "full") {
-      appendMessage(block.role || "assistant", block.text || "", block.ts || Date.now(), {
-        title: block.title || (block.role || "assistant"),
+    if (block.phase === MESSAGE_PHASES.FULL) {
+      appendMessage(block.role || MESSAGE_ROLES.ASSISTANT, block.text || "", block.ts || Date.now(), {
+        title: block.title || (block.role || MESSAGE_ROLES.ASSISTANT),
       });
     }
     return;
   }
 
-  if (block.kind === "reasoning") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.REASONING) {
     if (!state.showThinking) {
       return;
     }
 
-    if (block.phase === "start") {
-      const result = appendMessage("reasoning", "", Date.now(), {
+    if (block.phase === MESSAGE_PHASES.START) {
+      const result = appendMessage(MESSAGE_ROLES.REASONING, "", Date.now(), {
         title: "thinking",
-        tone: "muted",
+        tone: OUTPUT_BLOCK_TONES.MUTED,
         beforeNode: state.streamMessageArticle,
       });
       state.streamReasoningArticle = result.article;
@@ -86,11 +86,11 @@ function applyOutputBlock(block) {
       state.streamReasoningText = "";
       return;
     }
-    if (block.phase === "delta") {
+    if (block.phase === MESSAGE_PHASES.DELTA) {
       if (!state.streamReasoningNode) {
-        const result = appendMessage("reasoning", "", Date.now(), {
+        const result = appendMessage(MESSAGE_ROLES.REASONING, "", Date.now(), {
           title: "thinking",
-          tone: "muted",
+          tone: OUTPUT_BLOCK_TONES.MUTED,
           beforeNode: state.streamMessageArticle,
         });
         state.streamReasoningArticle = result.article;
@@ -102,24 +102,24 @@ function applyOutputBlock(block) {
       nodes.messageFeed.scrollTop = nodes.messageFeed.scrollHeight;
       return;
     }
-    if (block.phase === "end") {
+    if (block.phase === MESSAGE_PHASES.END) {
       state.streamReasoningArticle = null;
       state.streamReasoningNode = null;
       state.streamReasoningText = "";
       return;
     }
-    if (block.phase === "full") {
-      appendMessage("reasoning", block.text || "", block.ts || Date.now(), {
+    if (block.phase === MESSAGE_PHASES.FULL) {
+      appendMessage(MESSAGE_ROLES.REASONING, block.text || "", block.ts || Date.now(), {
         title: "thinking",
-        tone: "muted",
+        tone: OUTPUT_BLOCK_TONES.MUTED,
       });
     }
     return;
   }
 
-  if (block.kind === "tool") {
-    const phase = block.phase || "start";
-    const key = block.id || block.name || `tool-${Date.now()}`;
+  if (block.kind === OUTPUT_BLOCK_KINDS.TOOL) {
+    const phase = block.phase || TOOL_PHASES.START;
+    const key = block.id || block.name || `${OUTPUT_BLOCK_KINDS.TOOL}-${Date.now()}`;
     let entry = state.streamToolBlocks.get(key);
     if (!entry) {
       entry = appendToolBlock(block);
@@ -127,13 +127,13 @@ function applyOutputBlock(block) {
     }
     updateToolBlock(entry, block);
 
-    if (phase === "done" || phase === "result" || phase === "error") {
+    if (phase === TOOL_PHASES.DONE || phase === TOOL_PHASES.RESULT || phase === TOOL_PHASES.ERROR) {
       state.streamToolBlocks.delete(key);
     }
     return;
   }
 
-  if (block.kind === "session_event") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.SESSION_EVENT) {
     const key = block.id || `${block.event || "event"}:${block.title || Date.now()}`;
     let entry = state.streamEventBlocks.get(key);
     if (!entry) {
@@ -145,17 +145,17 @@ function applyOutputBlock(block) {
     return;
   }
 
-  if (block.kind === "queue_item") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.QUEUE_ITEM) {
     appendQueueItemBlock(block);
     return;
   }
 
-  if (block.kind === "inspect") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.INSPECT) {
     renderInspectBlockPayload(block);
     return;
   }
 
-  if (block.kind === "scheduler_stage") {
+  if (block.kind === OUTPUT_BLOCK_KINDS.SCHEDULER_STAGE) {
     const key =
       block.stage_id ||
       block.id ||
@@ -166,7 +166,7 @@ function applyOutputBlock(block) {
       state.streamStageBlocks.set(key, entry);
     }
     updateSchedulerStage(entry, block);
-    if (block.status === "done" || block.status === "blocked") {
+    if (block.status === SCHEDULER_STAGE_STATUSES.DONE || block.status === SCHEDULER_STAGE_STATUSES.BLOCKED) {
       state.streamStageBlocks.delete(key);
     }
   }
@@ -177,7 +177,12 @@ function messageBodyFromParts(parts) {
   const out = [];
   for (const part of parts) {
     const type = part.type;
-    if ((type === "text" || type === "reasoning" || type === "compaction") && part.text) {
+    if (
+      (type === MESSAGE_PART_TYPES.TEXT ||
+        type === MESSAGE_PART_TYPES.REASONING ||
+        type === MESSAGE_PART_TYPES.COMPACTION) &&
+      part.text
+    ) {
       out.push(part.text);
     }
   }
@@ -187,6 +192,6 @@ function messageBodyFromParts(parts) {
 function historyOutputBlocksFromParts(parts) {
   if (!Array.isArray(parts) || parts.length === 0) return [];
   return parts
-    .map((part) => part && part.output_block ? part.output_block : null)
+    .map((part) => part && part[MESSAGE_PART_TYPES.OUTPUT_BLOCK] ? part[MESSAGE_PART_TYPES.OUTPUT_BLOCK] : null)
     .filter(Boolean);
 }

@@ -55,15 +55,26 @@ async function sendPrompt(content) {
   state.streaming = true;
   state.abortRequested = false;
   syncInteractionState();
-  setBadge("running", "warn");
-  applyOutputBlock({ kind: "status", tone: "warning", text: "Running...", silent: true });
+  setBadge("running", BADGE_TONES.WARN);
+  applyOutputBlock({
+    kind: OUTPUT_BLOCK_KINDS.STATUS,
+    tone: OUTPUT_BLOCK_TONES.WARNING,
+    text: "Running...",
+    silent: true,
+  });
 
   try {
     if (!state.selectedSession) {
       await createAndSelectSession();
     }
 
-    applyOutputBlock({ kind: "message", phase: "full", role: "user", title: "you", text: content });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.MESSAGE,
+      phase: MESSAGE_PHASES.FULL,
+      role: MESSAGE_ROLES.USER,
+      title: "you",
+      text: content,
+    });
 
     const mode = selectedMode();
     const payload = {
@@ -86,9 +97,9 @@ async function sendPrompt(content) {
 
     try {
       const snapshot = await refreshSessionSnapshot(state.selectedSession);
-      setBadge(runtimeBadgeText(snapshot), "warn");
+      setBadge(runtimeBadgeText(snapshot), BADGE_TONES.WARN);
     } catch (_) {
-      setBadge("Running...", "warn");
+      setBadge("Running...", BADGE_TONES.WARN);
     }
 
     await parseSSE(response, (name, payload) => {
@@ -98,7 +109,11 @@ async function sendPrompt(content) {
           applyFocusedChildOutputBlockEvent(payload);
         }
         const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
-        if (handled && block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
+        if (
+          handled &&
+          block &&
+          (block.kind === OUTPUT_BLOCK_KINDS.SCHEDULER_STAGE || block.kind === OUTPUT_BLOCK_KINDS.TOOL)
+        ) {
           scheduleExecutionTopologyRefresh();
         }
         return;
@@ -122,11 +137,7 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (
-        name === SERVER_EVENT_TYPES.QUESTION_RESOLVED ||
-        name === SERVER_EVENT_TYPES.QUESTION_REPLIED ||
-        name === SERVER_EVENT_TYPES.QUESTION_REJECTED
-      ) {
+      if (QUESTION_RESOLUTION_EVENT_TYPES.includes(name)) {
         const requestId = payload[WIRE_KEYS.REQUEST_ID] || payload[WIRE_KEYS.REQUEST_ID_ALIAS];
         if (
           state.activeQuestionInteraction &&
@@ -140,10 +151,7 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (
-        name === SERVER_EVENT_TYPES.PERMISSION_RESOLVED ||
-        name === SERVER_EVENT_TYPES.PERMISSION_REPLIED
-      ) {
+      if (PERMISSION_RESOLUTION_EVENT_TYPES.includes(name)) {
         const permissionId =
           payload[WIRE_KEYS.PERMISSION_ID] ||
           payload[WIRE_KEYS.PERMISSION_ID_ALIAS] ||
@@ -164,24 +172,33 @@ async function sendPrompt(content) {
         applyStreamUsage(payload);
       } else if (name === SERVER_EVENT_TYPES.ERROR) {
         applyOutputBlock({
-          kind: "status",
-          tone: "error",
+          kind: OUTPUT_BLOCK_KINDS.STATUS,
+          tone: OUTPUT_BLOCK_TONES.ERROR,
           text: payload[WIRE_KEYS.ERROR] || "Stream error",
         });
       }
     });
 
-    applyOutputBlock({ kind: "status", tone: "success", text: "Done.", silent: true });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.SUCCESS,
+      text: "Done.",
+      silent: true,
+    });
     await loadSessions();
   } catch (error) {
-    applyOutputBlock({ kind: "status", tone: "error", text: `Send failed: ${String(error)}` });
+    applyOutputBlock({
+      kind: OUTPUT_BLOCK_KINDS.STATUS,
+      tone: OUTPUT_BLOCK_TONES.ERROR,
+      text: `Send failed: ${String(error)}`,
+    });
   } finally {
     state.streaming = false;
     state.abortRequested = false;
     await refreshExecutionTopology().catch(() => {});
     syncInteractionState();
     if (!state.busyAction) {
-      setBadge("ready", "ok");
+      setBadge("ready", BADGE_TONES.OK);
     }
   }
 }
