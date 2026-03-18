@@ -4,6 +4,7 @@ import {
   THEMES,
   setTheme,
   setSelectedMode,
+  setSelectedModel,
   selectedModeLabel,
 } from "~/stores/app";
 import styles from "./SettingsDrawer.module.css";
@@ -57,7 +58,7 @@ export const GeneralSection: Component = () => {
             class={styles.fieldSelect}
             value={state.selectedModel ?? ""}
             onChange={(e) => {
-              // Model selection will be wired to store
+              setSelectedModel(e.currentTarget.value || null);
             }}
           >
             <option value="">auto</option>

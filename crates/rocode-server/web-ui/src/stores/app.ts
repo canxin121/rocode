@@ -248,6 +248,14 @@ export function setSelectedMode(modeKey: string | null, options: { persist?: boo
   }
 }
 
+export function setSelectedModel(modelKey: string | null, options: { persist?: boolean } = {}) {
+  const { persist = true } = options;
+  setState("selectedModel", modelKey?.trim() || null);
+  if (persist) {
+    void persistWebUiPreferences().catch(() => {});
+  }
+}
+
 export function applyStreamUsage(payload: UsageEvent) {
   batch(() => {
     if (payload.prompt_tokens != null) setState("promptTokens", payload.prompt_tokens);
@@ -403,6 +411,7 @@ export async function persistWebUiPreferences(): Promise<void> {
       uiPreferences: {
         webTheme: state.selectedTheme,
         webMode: state.selectedModeKey,
+        webModel: state.selectedModel,
         showThinking: state.showThinking,
       },
     }),
@@ -413,12 +422,14 @@ export function applyWebUiPreferences(config: Record<string, unknown>) {
   const ui = (config?.uiPreferences ?? config?.ui_preferences ?? {}) as Record<string, unknown>;
   const webTheme = (ui.webTheme ?? ui.web_theme ?? null) as string | null;
   const webMode = (ui.webMode ?? ui.web_mode ?? null) as string | null;
+  const webModel = (ui.webModel ?? ui.web_model ?? null) as string | null;
   const showThinking = (ui.showThinking ?? ui.show_thinking ?? state.showThinking) as boolean;
 
   batch(() => {
     setTheme(webTheme || state.selectedTheme || "daylight", { persist: false });
     setState("showThinking", Boolean(showThinking));
     setSelectedMode(webMode, { persist: false });
+    setSelectedModel(webModel, { persist: false });
   });
 }
 
