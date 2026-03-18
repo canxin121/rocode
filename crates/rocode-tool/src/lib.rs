@@ -27,6 +27,7 @@ pub mod question;
 pub mod read;
 pub mod registry;
 pub mod repo_history;
+pub mod rust_search;
 pub mod shell_session;
 pub mod skill;
 pub mod task;

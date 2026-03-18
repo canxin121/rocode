@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
             port,
             variant,
             thinking,
+            interactive_mode,
         }) => {
             run_non_interactive(RunNonInteractiveOptions {
                 message,
@@ -179,6 +180,7 @@ async fn main() -> anyhow::Result<()> {
                 port,
                 variant,
                 thinking,
+                interactive_mode,
             })
             .await?;
         }
