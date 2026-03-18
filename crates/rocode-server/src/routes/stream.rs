@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
+use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -54,6 +55,51 @@ pub(crate) async fn send_stream_usage_event(
         message_id,
     };
     send_sse_server_event(tx, &event).await;
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamSessionMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    model_variant: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamEventTypeWire {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    event_type: Option<String>,
+}
+
+fn stream_session_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> StreamSessionMetadataWire {
+    serde_json::from_value::<StreamSessionMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
+fn stream_event_name(payload: &serde_json::Value) -> String {
+    serde_json::from_value::<StreamEventTypeWire>(payload.clone())
+        .unwrap_or_default()
+        .event_type
+        .unwrap_or_else(|| "question.event".to_string())
 }
 
 async fn emit_latest_assistant_usage(
@@ -121,12 +167,12 @@ pub(crate) async fn stream_message(
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+        let metadata_wire = stream_session_metadata_wire(&session.metadata);
         req.variant.clone().or_else(|| {
-            session
-                .metadata
-                .get("model_variant")
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
+            metadata_wire
+                .model_variant
+                .as_ref()
+                .map(ToString::to_string)
         })
     };
 
@@ -288,11 +334,7 @@ pub(crate) async fn stream_message(
                 let sse_tx = sse_tx.clone();
                 let event_hook: QuestionEventHook = Arc::new(move |payload| {
                     let sse_tx = sse_tx.clone();
-                    let event_name = payload
-                        .get("type")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("question.event")
-                        .to_string();
+                    let event_name = stream_event_name(&payload);
                     tokio::spawn(async move {
                         if let Ok(event) = Event::default().event(&event_name).json_data(payload) {
                             let _ = sse_tx.send(Ok(event)).await;

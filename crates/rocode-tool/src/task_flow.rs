@@ -113,6 +113,71 @@ struct TaskFlowModelView {
     model_id: String,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => value,
+        Some(serde_json::Value::Number(value)) => value.as_i64().is_some_and(|value| value != 0),
+        Some(serde_json::Value::String(value)) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => false,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DelegatedTaskMetadataWire {
+    #[serde(
+        default,
+        alias = "agent_task_id",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    agent_task_id: Option<String>,
+    #[serde(
+        default,
+        alias = "session_id",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    session_id: Option<String>,
+    #[serde(
+        default,
+        alias = "has_text_output",
+        deserialize_with = "deserialize_bool_lossy"
+    )]
+    has_text_output: bool,
+    #[serde(default)]
+    model: Option<TaskFlowModelView>,
+    #[serde(default, alias = "loaded_skills")]
+    loaded_skills: Option<serde_json::Value>,
+    #[serde(default, alias = "loaded_skill_count")]
+    loaded_skill_count: Option<serde_json::Value>,
+}
+
+fn delegated_task_metadata_wire(metadata: &Metadata) -> DelegatedTaskMetadataWire {
+    serde_json::from_value::<DelegatedTaskMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
 fn default_limit() -> usize {
     DEFAULT_LIMIT
 }
@@ -305,13 +370,14 @@ async fn execute_delegate(
         .execute(serde_json::Value::Object(task_args), ctx)
         .await?;
 
-    let agent_task_id = delegated_metadata_string(&delegated.metadata, "agentTaskId")?;
-    let session_id = delegated_metadata_string(&delegated.metadata, "sessionId")?;
-    let has_text_output = delegated
-        .metadata
-        .get("hasTextOutput")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
+    let delegated_metadata = delegated_task_metadata_wire(&delegated.metadata);
+    let agent_task_id = delegated_metadata.agent_task_id.clone().ok_or_else(|| {
+        ToolError::ExecutionError("delegated task metadata missing `agentTaskId`".to_string())
+    })?;
+    let session_id = delegated_metadata.session_id.clone().ok_or_else(|| {
+        ToolError::ExecutionError("delegated task metadata missing `sessionId`".to_string())
+    })?;
+    let has_text_output = delegated_metadata.has_text_output;
     let task = global_task_registry().get(&agent_task_id).ok_or_else(|| {
         ToolError::ExecutionError(format!(
             "delegated task `{}` completed but could not be reloaded from agent task registry",
@@ -339,14 +405,14 @@ async fn execute_delegate(
     );
     metadata.insert("todoSynced".to_string(), serde_json::json!(todo_synced));
     metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
-    if let Some(model) = delegated.metadata.get("model").and_then(parse_model_view) {
+    if let Some(model) = delegated_metadata.model {
         metadata.insert("model".to_string(), serde_json::to_value(model).unwrap());
     }
-    if let Some(loaded_skills) = delegated.metadata.get("loadedSkills") {
-        metadata.insert("loadedSkills".to_string(), loaded_skills.clone());
+    if let Some(loaded_skills) = delegated_metadata.loaded_skills {
+        metadata.insert("loadedSkills".to_string(), loaded_skills);
     }
-    if let Some(loaded_skill_count) = delegated.metadata.get("loadedSkillCount") {
-        metadata.insert("loadedSkillCount".to_string(), loaded_skill_count.clone());
+    if let Some(loaded_skill_count) = delegated_metadata.loaded_skill_count {
+        metadata.insert("loadedSkillCount".to_string(), loaded_skill_count);
     }
     metadata.insert(
         "display.summary".to_string(),
@@ -374,20 +440,6 @@ async fn execute_delegate(
         metadata,
         truncated: delegated.truncated,
     })
-}
-
-fn delegated_metadata_string(metadata: &Metadata, key: &str) -> Result<String, ToolError> {
-    metadata
-        .get(key)
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
-        .ok_or_else(|| {
-            ToolError::ExecutionError(format!("delegated task metadata missing `{}`", key))
-        })
-}
-
-fn parse_model_view(value: &serde_json::Value) -> Option<TaskFlowModelView> {
-    serde_json::from_value::<TaskFlowModelView>(value.clone()).ok()
 }
 
 fn title_case(value: &str) -> String {

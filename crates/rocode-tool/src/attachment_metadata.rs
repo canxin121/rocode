@@ -1,4 +1,27 @@
 use crate::Metadata;
+use serde::Deserialize;
+
+#[derive(Debug, Default, Deserialize)]
+struct AttachmentMetadataWire {
+    #[serde(default)]
+    attachments: Option<AttachmentMetadataValueWire>,
+    #[serde(default)]
+    attachment: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AttachmentMetadataValueWire {
+    Array(Vec<serde_json::Value>),
+    Single(serde_json::Value),
+}
+
+fn attachment_metadata_wire(metadata: &Metadata) -> AttachmentMetadataWire {
+    serde_json::from_value::<AttachmentMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
 
 pub(crate) fn collect_attachments_from_metadata(metadata: &Metadata) -> Vec<serde_json::Value> {
     let mut attachments = Vec::new();
@@ -9,18 +32,21 @@ pub(crate) fn collect_attachments_from_metadata(metadata: &Metadata) -> Vec<serd
         }
     };
 
-    if let Some(value) = metadata.get("attachments") {
-        match value {
-            serde_json::Value::Array(array) => {
-                for item in array {
-                    push_unique(item.clone());
+    let metadata_wire = attachment_metadata_wire(metadata);
+    if let Some(values) = metadata_wire.attachments {
+        match values {
+            AttachmentMetadataValueWire::Array(values) => {
+                for value in values {
+                    push_unique(value);
                 }
             }
-            other => push_unique(other.clone()),
+            AttachmentMetadataValueWire::Single(value) => {
+                push_unique(value);
+            }
         }
     }
-    if let Some(value) = metadata.get("attachment") {
-        push_unique(value.clone());
+    if let Some(value) = metadata_wire.attachment {
+        push_unique(value);
     }
     attachments
 }

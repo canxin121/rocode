@@ -28,6 +28,42 @@ const TASK_STATUS_COMPLETED: &str = "completed";
 const TASK_NO_TEXT_OUTPUT_MESSAGE: &str =
     "Task completed successfully. No textual output was returned by subagent.";
 
+fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => value,
+        Some(serde_json::Value::Number(value)) => value.as_i64().is_some_and(|value| value != 0),
+        Some(serde_json::Value::String(value)) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => false,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskContextFlagsWire {
+    #[serde(
+        rename = "bypassAgentCheck",
+        alias = "bypass_agent_check",
+        default,
+        deserialize_with = "deserialize_bool_lossy"
+    )]
+    bypass_agent_check: bool,
+}
+
+fn task_context_flags_wire(
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) -> TaskContextFlagsWire {
+    serde_json::from_value::<TaskContextFlagsWire>(serde_json::Value::Object(
+        extra.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TaskInput {
     #[serde(default)]
@@ -236,11 +272,7 @@ impl Tool for TaskTool {
 
         let dispatch_label = input.dispatch.label().to_string();
 
-        let bypass_check = ctx
-            .extra
-            .get("bypassAgentCheck")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let bypass_check = task_context_flags_wire(&ctx.extra).bypass_agent_check;
 
         if !bypass_check {
             ctx.ask_permission(

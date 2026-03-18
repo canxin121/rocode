@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use rocode_storage::{Database, MessageRepository, SessionRepository};
+use serde::Deserialize;
 
 use crate::cli::{DbCommands, DbOutputFormat};
 
@@ -11,6 +12,36 @@ fn local_database_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("rocode")
         .join("rocode.db")
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MessageModelMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    provider_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    model_id: Option<String>,
+}
+
+fn message_model_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> MessageModelMetadataWire {
+    serde_json::from_value::<MessageModelMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
 }
 
 pub(crate) async fn handle_db_command(
@@ -112,12 +143,11 @@ pub(crate) async fn handle_stats_command(
         total_messages += messages.len();
 
         for message in messages {
-            if let Some(provider) = message.metadata.get("provider_id").and_then(|v| v.as_str()) {
-                let model = message
-                    .metadata
-                    .get("model_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+            let metadata_wire = message_model_metadata_wire(&message.metadata);
+            if let Some(provider) = metadata_wire.provider_id {
+                let model = metadata_wire
+                    .model_id
+                    .unwrap_or_else(|| "unknown".to_string());
                 *model_usage
                     .entry(format!("{}/{}", provider, model))
                     .or_insert(0) += 1;

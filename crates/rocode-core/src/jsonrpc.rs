@@ -114,13 +114,23 @@ pub enum JsonRpcMessage {
 #[error("invalid JSON-RPC message: missing both 'id' (response) and 'method' (notification)")]
 pub struct InvalidJsonRpcMessage;
 
+#[derive(Debug, Default, Deserialize)]
+struct JsonRpcMessageProbeWire {
+    #[serde(default)]
+    id: Option<Value>,
+    #[serde(default)]
+    method: Option<String>,
+}
+
 impl JsonRpcMessage {
     /// Parse a [`serde_json::Value`] into a typed [`JsonRpcMessage`].
     ///
     /// This is the canonical discrimination algorithm — adapters must not
     /// reimplement it.
     pub fn from_value(value: Value) -> Result<Self, JsonRpcError> {
-        if value.get("id").is_some() {
+        let probe =
+            serde_json::from_value::<JsonRpcMessageProbeWire>(value.clone()).unwrap_or_default();
+        if probe.id.is_some() {
             serde_json::from_value(value)
                 .map(JsonRpcMessage::Response)
                 .map_err(|e| JsonRpcError {
@@ -128,7 +138,7 @@ impl JsonRpcMessage {
                     message: format!("Failed to parse response: {e}"),
                     data: None,
                 })
-        } else if value.get("method").is_some() {
+        } else if probe.method.is_some() {
             serde_json::from_value(value)
                 .map(JsonRpcMessage::Notification)
                 .map_err(|e| JsonRpcError {

@@ -6,6 +6,44 @@ use std::collections::HashMap;
 pub const CONTINUATION_TARGETS_METADATA_KEY: &str = "continuationTargets";
 pub const OUTPUT_USAGE_METADATA_KEY: &str = "usage";
 
+fn deserialize_opt_trimmed_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ContinuationToolMetadataWire {
+    #[serde(
+        rename = "sessionId",
+        alias = "session_id",
+        default,
+        deserialize_with = "deserialize_opt_trimmed_string_lossy"
+    )]
+    session_id: Option<String>,
+    #[serde(
+        rename = "agentTaskId",
+        alias = "agent_task_id",
+        default,
+        deserialize_with = "deserialize_opt_trimmed_string_lossy"
+    )]
+    agent_task_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContinuationTarget {
     #[serde(rename = "sessionId")]
@@ -89,24 +127,12 @@ pub fn continuation_target_from_tool_metadata(
     metadata: Option<&Value>,
 ) -> Option<ContinuationTarget> {
     let metadata = metadata?;
-    let session_id = metadata
-        .get("sessionId")
-        .or_else(|| metadata.get("session_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-
-    let agent_task_id = metadata
-        .get("agentTaskId")
-        .or_else(|| metadata.get("agent_task_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let wire = serde_json::from_value::<ContinuationToolMetadataWire>(metadata.clone()).ok()?;
+    let session_id = wire.session_id?;
 
     Some(ContinuationTarget {
-        session_id: session_id.to_string(),
-        agent_task_id,
+        session_id,
+        agent_task_id: wire.agent_task_id,
         tool_name: Some(tool_name.to_string()),
     })
 }

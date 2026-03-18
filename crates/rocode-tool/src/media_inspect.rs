@@ -36,6 +36,31 @@ struct MediaPreflight {
     attachments: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct MediaPreflightMetadataWire {
+    #[serde(default)]
+    mime: Option<String>,
+    #[serde(default)]
+    size: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AttachmentSummaryWire {
+    #[serde(default)]
+    mime: Option<String>,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+fn preflight_metadata_wire(metadata: &Metadata) -> MediaPreflightMetadataWire {
+    serde_json::from_value::<MediaPreflightMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
 pub struct MediaInspectTool;
 
 impl MediaInspectTool {
@@ -262,16 +287,17 @@ fn build_media_prompt(
     );
 
     if let Some(preflight) = preflight {
+        let preflight_metadata = preflight_metadata_wire(&preflight.metadata);
         let attachment_summary = summarize_attachment_payloads(&preflight.attachments);
         prompt.push_str("\n\nPreflight media context from the authoritative `read` tool:\n");
         prompt.push_str(&format!(
             "- read output: {}\n",
             sanitize_prompt_line(&preflight.output)
         ));
-        if let Some(mime) = preflight.metadata.get("mime").and_then(|v| v.as_str()) {
+        if let Some(mime) = preflight_metadata.mime.as_deref() {
             prompt.push_str(&format!("- mime: {}\n", mime));
         }
-        if let Some(size) = preflight.metadata.get("size") {
+        if let Some(size) = preflight_metadata.size {
             prompt.push_str(&format!("- size: {}\n", size));
         }
         if let Some(summary) = attachment_summary {
@@ -291,17 +317,13 @@ fn build_media_prompt(
 
 fn summarize_attachment_payloads(attachments: &[serde_json::Value]) -> Option<String> {
     let first = attachments.first()?;
-    let mime = first
-        .get("mime")
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
-    let filename = first
-        .get("filename")
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
-    let url_kind = first
-        .get("url")
-        .and_then(|value| value.as_str())
+    let first_wire =
+        serde_json::from_value::<AttachmentSummaryWire>(first.clone()).unwrap_or_default();
+    let mime = first_wire.mime.as_deref().unwrap_or("unknown");
+    let filename = first_wire.filename.as_deref().unwrap_or("unknown");
+    let url_kind = first_wire
+        .url
+        .as_deref()
         .map(|url| {
             if url.starts_with("data:") {
                 "data-url payload"

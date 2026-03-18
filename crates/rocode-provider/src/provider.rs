@@ -194,6 +194,22 @@ pub enum ParsedStreamError {
     },
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct StreamErrorBodyWire {
+    #[serde(rename = "type", default)]
+    error_type: String,
+    #[serde(default)]
+    error: Option<StreamErrorWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamErrorWire {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 pub fn parse_api_call_error(provider_id: &str, error: &ProviderError) -> ParsedAPICallError {
     let message = format_error_message(provider_id, error);
     let standard_code = crate::error_classification::classify_provider_error(error);
@@ -257,13 +273,14 @@ fn is_openai_error_retryable(status: u16) -> bool {
 
 pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
     let body: serde_json::Value = serde_json::from_str(data).ok()?;
+    let parsed = serde_json::from_value::<StreamErrorBodyWire>(body.clone()).ok()?;
 
-    if body.get("type")?.as_str()? != "error" {
+    if parsed.error_type != "error" {
         return None;
     }
 
-    let error = body.get("error")?;
-    let code = error.get("code")?.as_str()?;
+    let error = parsed.error?;
+    let code = error.code.as_str();
     let response_body = serde_json::to_string(&body).unwrap_or_default();
 
     match code {
@@ -282,11 +299,7 @@ pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
             response_body,
         }),
         "invalid_prompt" => {
-            let msg = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Invalid prompt.")
-                .to_string();
+            let msg = error.message.unwrap_or_else(|| "Invalid prompt.".to_string());
             Some(ParsedStreamError::ApiError {
                 message: msg,
                 is_retryable: false,
