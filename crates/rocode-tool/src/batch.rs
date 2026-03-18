@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use rocode_core::contracts::{tools::BuiltinToolName, tools::ToolCallStatusWire, wire};
+use rocode_core::contracts::{
+    tools::{arg_keys as tool_arg_keys, BuiltinToolName, ToolCallStatusWire},
+    wire,
+};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
@@ -51,28 +54,28 @@ impl Tool for BatchTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "toolCalls": {
+                (tool_arg_keys::TOOL_CALLS_CAMEL): {
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 25,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "tool": {
+                            (tool_arg_keys::TOOL): {
                                 "type": "string",
                                 "description": "The name of the tool to execute"
                             },
-                            "parameters": {
+                            (tool_arg_keys::PARAMETERS): {
                                 "type": "object",
                                 "description": "Parameters for the tool"
                             }
                         },
-                        "required": ["tool", "parameters"]
+                        "required": [tool_arg_keys::TOOL, tool_arg_keys::PARAMETERS]
                     },
                     "description": "Array of tool calls to execute in parallel"
                 }
             },
-            "required": ["toolCalls"]
+            "required": [tool_arg_keys::TOOL_CALLS_CAMEL]
         })
     }
 
@@ -174,7 +177,7 @@ impl Tool for BatchTool {
                                         "state": {
                                             "status": ToolCallStatusWire::Completed.as_str(),
                                             "input": tool_params,
-                                            "output": res.output,
+                                            (tool_arg_keys::OUTPUT): res.output,
                                             "title": res.title,
                                             "metadata": strip_attachments_from_metadata(&res.metadata),
                                             "attachments": collect_attachments_from_metadata(&res.metadata),
@@ -214,7 +217,7 @@ impl Tool for BatchTool {
                                         "state": {
                                             "status": ToolCallStatusWire::Error.as_str(),
                                             "input": tool_params,
-                                            "error": e.to_string(),
+                                            (tool_arg_keys::ERROR): e.to_string(),
                                             "time": {
                                                 "start": call_start_time,
                                                 "end": call_end_time
@@ -304,8 +307,8 @@ impl Tool for BatchTool {
             serde_json::json!(final_results
                 .iter()
                 .map(|r| serde_json::json!({
-                    "tool": r.tool,
-                    "success": r.success
+                    (tool_arg_keys::TOOL): r.tool,
+                    (tool_arg_keys::SUCCESS): r.success
                 }))
                 .collect::<Vec<_>>()),
         );

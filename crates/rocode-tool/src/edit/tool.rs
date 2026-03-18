@@ -3,7 +3,7 @@ use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
 use rocode_core::contracts::patch::keys as patch_keys;
 use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -46,15 +46,15 @@ impl Tool for EditTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "file_path": {
+                (patch_keys::FILE_PATH_SNAKE): {
                     "type": "string",
                     "description": "Absolute path or project-relative path to the file to edit"
                 },
-                "old_string": {
+                (patch_keys::OLD_STRING): {
                     "type": "string",
                     "description": "The text to replace"
                 },
-                "new_string": {
+                (patch_keys::NEW_STRING): {
                     "type": "string",
                     "description": "The text to replace it with (must be different from old_string)"
                 },
@@ -63,7 +63,7 @@ impl Tool for EditTool {
                     "description": "Replace all occurrences of old_string (default false)"
                 }
             },
-            "required": ["file_path", "old_string", "new_string"]
+            "required": [patch_keys::FILE_PATH_SNAKE, patch_keys::OLD_STRING, patch_keys::NEW_STRING]
         })
     }
 
@@ -83,7 +83,7 @@ impl Tool for EditTool {
             .to_string();
 
         let old_string: String = args
-            .get("old_string")
+            .get(patch_keys::OLD_STRING)
             .or_else(|| args.get("oldString"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -92,7 +92,7 @@ impl Tool for EditTool {
             .to_string();
 
         let new_string: String = args
-            .get("new_string")
+            .get(patch_keys::NEW_STRING)
             .or_else(|| args.get("newString"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -139,7 +139,7 @@ impl Tool for EditTool {
                 crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str))
-                    .with_metadata("parentDir", serde_json::json!(parent)),
+                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
             )
             .await?;
         }
@@ -344,7 +344,10 @@ impl Tool for EditTool {
                         patch_keys::FILEPATH.into(),
                         serde_json::json!(path_for_metadata),
                     );
-                    m.insert(patch_keys::DIFF.into(), serde_json::json!(diff_for_metadata));
+                    m.insert(
+                        patch_keys::DIFF.into(),
+                        serde_json::json!(diff_for_metadata),
+                    );
                     if !lsp_diagnostics.is_empty() {
                         m.insert(
                             patch_keys::DIAGNOSTICS.into(),

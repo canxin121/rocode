@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
@@ -16,27 +16,23 @@ impl QuestionTool {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionInput {
-    #[serde(rename = "questions")]
     questions: Vec<QuestionDef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionDef {
-    #[serde(rename = "question")]
     question: String,
-    #[serde(rename = "header")]
     header: Option<String>,
-    #[serde(rename = "options", default)]
+    #[serde(default)]
     options: Vec<QuestionOption>,
-    #[serde(rename = "multiple", default)]
+    #[serde(default)]
     multiple: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionOption {
-    #[serde(rename = "label")]
     label: String,
-    #[serde(rename = "description", default)]
+    #[serde(default)]
     description: Option<String>,
 }
 
@@ -59,16 +55,16 @@ impl Tool for QuestionTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "questions": {
+                (tool_arg_keys::QUESTIONS): {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "question": {
+                            (tool_arg_keys::QUESTION): {
                                 "type": "string",
                                 "description": "The complete question to ask"
                             },
-                            "header": {
+                            (tool_arg_keys::HEADER): {
                                 "type": "string",
                                 "description": "Short label for the question (max 30 chars)"
                             },
@@ -77,24 +73,24 @@ impl Tool for QuestionTool {
                                 "default": false,
                                 "description": "Allow selecting multiple options"
                             },
-                            "options": {
+                            (tool_arg_keys::OPTIONS): {
                                 "type": "array",
                                 "items": {
                                     "type": "object",
                                     "properties": {
                                         "label": {"type": "string"},
-                                        "description": {"type": "string"}
+                                        (tool_arg_keys::DESCRIPTION): {"type": "string"}
                                     },
                                     "required": ["label"]
                                 },
                                 "description": "Available choices for the user"
                             }
                         },
-                        "required": ["question"]
+                        "required": [tool_arg_keys::QUESTION]
                     }
                 }
             },
-            "required": ["questions"]
+            "required": [tool_arg_keys::QUESTIONS]
         })
     }
 
@@ -289,7 +285,7 @@ fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolEr
         .as_object()
         .ok_or_else(|| ToolError::InvalidArguments("question input must be an object".into()))?;
     let questions_value = obj
-        .get("questions")
+        .get(tool_arg_keys::QUESTIONS)
         .ok_or_else(|| ToolError::InvalidArguments("questions is required".into()))?;
     let questions = parse_questions_value(questions_value).map_err(ToolError::InvalidArguments)?;
     Ok(QuestionInput { questions })

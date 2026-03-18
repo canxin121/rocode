@@ -149,7 +149,7 @@ impl Tool for TaskFlowTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
                     "enum": ["create", "resume", "get", "list", "cancel"],
                     "description": "Task lifecycle operation"
@@ -158,42 +158,42 @@ impl Tool for TaskFlowTool {
                     "type": "string",
                     "description": "Registry task id or delegated session id depending on operation"
                 },
-                "agent": {
+                (tool_arg_keys::AGENT): {
                     "type": "string",
                     "description": "Agent name to delegate to for create"
                 },
-                "description": {
+                (tool_arg_keys::DESCRIPTION): {
                     "type": "string",
                     "description": "Short task label for UI and summaries"
                 },
-                "prompt": {
+                (tool_arg_keys::PROMPT): {
                     "type": "string",
                     "description": "Delegated prompt body for create or resume"
                 },
-                "command": {
+                (tool_arg_keys::COMMAND): {
                     "type": "string",
                     "description": "Optional source command or trigger name"
                 },
-                "load_skills": {
+                (tool_arg_keys::LOAD_SKILLS): {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional explicit skills to inject into delegated prompt"
                 },
-                "run_in_background": {
+                (tool_arg_keys::RUN_IN_BACKGROUND): {
                     "type": "boolean",
                     "default": false,
                     "description": "Whether create should return immediately after dispatch"
                 },
-                "sync_todo": {
+                (tool_arg_keys::SYNC_TODO): {
                     "type": "boolean",
                     "default": false,
                     "description": "Whether to project task lifecycle into the session todo board"
                 },
-                "todo_item": {
+                (tool_arg_keys::TODO_ITEM): {
                     "type": "object",
                     "properties": {
-                        "content": { "type": "string" },
-                        "status": {
+                        (todo_keys::CONTENT): { "type": "string" },
+                        (todo_keys::STATUS): {
                             "type": "string",
                             "enum": [
                                 TodoStatus::Pending.as_str(),
@@ -202,11 +202,11 @@ impl Tool for TaskFlowTool {
                                 TodoStatus::Cancelled.as_str(),
                             ]
                         },
-                        "priority": { "type": "string" }
+                        (todo_keys::PRIORITY): { "type": "string" }
                     },
-                    "required": ["content"]
+                    "required": [todo_keys::CONTENT]
                 },
-                "status_filter": {
+                (tool_arg_keys::STATUS_FILTER): {
                     "type": "array",
                     "items": {
                         "type": "string",
@@ -220,7 +220,7 @@ impl Tool for TaskFlowTool {
                     },
                     "description": "Optional status filter for list"
                 },
-                "limit": {
+                (tool_arg_keys::LIMIT): {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 100,
@@ -228,7 +228,7 @@ impl Tool for TaskFlowTool {
                     "description": "Maximum number of tasks to return for list"
                 }
             },
-            "required": ["operation"]
+            "required": [tool_arg_keys::OPERATION]
         })
     }
 
@@ -574,9 +574,9 @@ fn build_projection_todo_item(input: &TaskFlowInput, view: &TaskFlowTaskView) ->
 
 fn todo_item_to_json(item: &TodoItemData) -> serde_json::Value {
     serde_json::json!({
-        "content": item.content,
-        "status": item.status,
-        "priority": item.priority,
+        (todo_keys::CONTENT): item.content,
+        (todo_keys::STATUS): item.status,
+        (todo_keys::PRIORITY): item.priority,
     })
 }
 

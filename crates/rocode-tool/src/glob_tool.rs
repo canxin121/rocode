@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
@@ -39,16 +39,16 @@ impl Tool for GlobTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {
+                (tool_arg_keys::PATTERN): {
                     "type": "string",
                     "description": "The glob pattern to match files against"
                 },
-                "path": {
+                (tool_arg_keys::PATH): {
                     "type": "string",
                     "description": "The directory to search in. Defaults to current directory."
                 }
             },
-            "required": ["pattern"]
+            "required": [tool_arg_keys::PATTERN]
         })
     }
 
@@ -57,12 +57,12 @@ impl Tool for GlobTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args["pattern"]
+        let pattern: String = args[tool_arg_keys::PATTERN]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
             .to_string();
 
-        let search_path: String = args["path"]
+        let search_path: String = args[tool_arg_keys::PATH]
             .as_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| ctx.directory.clone());
@@ -79,7 +79,7 @@ impl Tool for GlobTool {
             ctx.ask_permission(
                 crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", base_dir_str))
-                    .with_metadata("path", serde_json::json!(&base_dir_str)),
+                    .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
             )
             .await?;
         }
@@ -87,7 +87,7 @@ impl Tool for GlobTool {
         ctx.ask_permission(
             crate::PermissionRequest::new(BuiltinToolName::Glob.as_str())
                 .with_pattern(&pattern)
-                .with_metadata("path", serde_json::json!(&base_dir_str))
+                .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str))
                 .always_allow(),
         )
         .await?;
@@ -147,8 +147,11 @@ impl Tool for GlobTool {
             output,
             metadata: {
                 let mut m = Metadata::new();
-                m.insert("count".into(), serde_json::json!(total));
-                m.insert("truncated".into(), serde_json::json!(truncated));
+                m.insert(tool_arg_keys::COUNT.into(), serde_json::json!(total));
+                m.insert(
+                    tool_arg_keys::TRUNCATED.into(),
+                    serde_json::json!(truncated),
+                );
                 m
             },
             truncated,

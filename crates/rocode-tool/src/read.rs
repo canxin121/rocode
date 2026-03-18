@@ -63,7 +63,7 @@ impl Tool for ReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "file_path": {
+                (patch_keys::FILE_PATH_SNAKE): {
                     "type": "string",
                     "minLength": 1,
                     "description": "Absolute path or project-relative path to the file or directory to read."
@@ -77,7 +77,7 @@ impl Tool for ReadTool {
                     "description": "The maximum number of lines to read (defaults to 2000)"
                 }
             },
-            "required": ["file_path"]
+            "required": [patch_keys::FILE_PATH_SNAKE]
         })
     }
 
@@ -150,7 +150,7 @@ impl Tool for ReadTool {
                 crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata(patch_keys::FILEPATH, serde_json::json!(path_str))
-                    .with_metadata("parentDir", serde_json::json!(parent)),
+                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
             )
             .await?;
         }

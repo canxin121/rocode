@@ -3,7 +3,7 @@ use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
 use rocode_core::contracts::patch::keys as patch_keys;
 use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -47,16 +47,16 @@ impl Tool for WriteTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "file_path": {
+                (patch_keys::FILE_PATH_SNAKE): {
                     "type": "string",
                     "description": "Absolute path or project-relative path to the file to write"
                 },
-                "content": {
+                (patch_keys::CONTENT): {
                     "type": "string",
                     "description": "The content to write to the file"
                 }
             },
-            "required": ["file_path", "content"]
+            "required": [patch_keys::FILE_PATH_SNAKE, patch_keys::CONTENT]
         })
     }
 
@@ -75,7 +75,7 @@ impl Tool for WriteTool {
             .trim()
             .to_string();
 
-        let content: String = args["content"]
+        let content: String = args[patch_keys::CONTENT]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?
             .to_string();
@@ -113,7 +113,7 @@ impl Tool for WriteTool {
                 crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str))
-                    .with_metadata("parentDir", serde_json::json!(parent)),
+                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
             )
             .await?;
         }
