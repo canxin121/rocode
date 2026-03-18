@@ -433,10 +433,7 @@ async fn cli_trigger_abort(handle: CliActiveAbortHandle) -> bool {
             api_client,
             session_id,
         } => match api_client.abort_session(&session_id).await {
-            Ok(result) => result
-                .get("aborted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            Ok(aborted) => aborted,
             Err(e) => {
                 tracing::error!("Failed to abort server session: {}", e);
                 false
@@ -1156,4 +1153,3 @@ fn cli_render_retained_layout(
 
     screen
 }
-

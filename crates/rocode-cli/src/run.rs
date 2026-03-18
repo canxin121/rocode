@@ -581,13 +581,13 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
         CliServerEvent::OutputBlock {
             session_id,
             id,
-            payload,
+            block_json,
         } => {
             if !is_related_session(&session_id) {
                 return;
             }
-            let Some(block) = parse_output_block(&payload) else {
-                tracing::debug!(?id, payload = %payload, "failed to parse output_block");
+            let Some(block) = parse_output_block(&block_json) else {
+                tracing::debug!(?id, payload = %block_json, "failed to parse output_block");
                 return;
             };
             if matches!(block, OutputBlock::Reasoning(_))

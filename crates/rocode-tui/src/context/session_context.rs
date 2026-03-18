@@ -228,6 +228,18 @@ pub enum TodoStatus {
     Cancelled,
 }
 
+impl TodoStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "pending" => Some(Self::Pending),
+            "in_progress" | "in-progress" | "inprogress" => Some(Self::InProgress),
+            "completed" | "done" => Some(Self::Completed),
+            "cancelled" | "canceled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ChildSessionInfo {
     pub session_id: String,

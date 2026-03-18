@@ -346,7 +346,19 @@ pub(super) async fn set_session_run_status(
         state.as_ref(),
         &ServerEvent::SessionStatus {
             session_id: session_id.to_string(),
-            status: rocode_types::SessionRunStatusWire::Tagged(status),
+            status: rocode_types::SessionRunStatusWire::Tagged(match status {
+                SessionRunStatus::Idle => rocode_types::SessionRunStatus::Idle,
+                SessionRunStatus::Busy => rocode_types::SessionRunStatus::Busy,
+                SessionRunStatus::Retry {
+                    attempt,
+                    message,
+                    next,
+                } => rocode_types::SessionRunStatus::Retry {
+                    attempt,
+                    message,
+                    next,
+                },
+            }),
         },
     );
 }

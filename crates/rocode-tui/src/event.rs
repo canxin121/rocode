@@ -102,7 +102,7 @@ pub enum StateChange {
     OutputBlock {
         session_id: String,
         id: Option<String>,
-        payload: rocode_command::output_blocks::OutputBlock,
+        payload: serde_json::Value,
     },
 }
 
