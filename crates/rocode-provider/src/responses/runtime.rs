@@ -1,4 +1,5 @@
 use futures::{Stream, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -321,48 +322,112 @@ impl OpenAIResponsesLanguageModel {
             });
         }
 
-        let body: Value = serde_json::from_str(&raw)
+        fn deserialize_opt_string_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(Value::String(value)) => Some(value),
+                _ => None,
+            })
+        }
+
+        fn deserialize_opt_u64_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<u64>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(Value::Number(value)) => value.as_u64(),
+                Some(Value::String(value)) => value.parse::<u64>().ok(),
+                _ => None,
+            })
+        }
+
+        fn deserialize_vec_value_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Vec<Value>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(Value::Array(values)) => values,
+                _ => Vec::new(),
+            })
+        }
+
+        fn deserialize_usage_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<ResponsesUsage, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(ResponsesUsage::default());
+            };
+            Ok(serde_json::from_value::<ResponsesUsage>(value).unwrap_or_default())
+        }
+
+        fn deserialize_incomplete_details_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<IncompleteDetailsWire>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(None);
+            };
+            Ok(serde_json::from_value::<IncompleteDetailsWire>(value).ok())
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct IncompleteDetailsWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            reason: Option<String>,
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ResponsesBodyWire {
+            #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+            output: Vec<Value>,
+            #[serde(default, deserialize_with = "deserialize_usage_lossy")]
+            usage: ResponsesUsage,
+            #[serde(default, deserialize_with = "deserialize_incomplete_details_lossy")]
+            incomplete_details: Option<IncompleteDetailsWire>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            model: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            created_at: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            service_tier: Option<String>,
+        }
+
+        let body: ResponsesBodyWire = serde_json::from_str(&raw)
             .map_err(|e| ProviderError::ApiError(format!("invalid responses payload: {}", e)))?;
 
-        let output = body
-            .get("output")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let (parts, has_function_call, logprobs) = parse_output_items(&output);
-
-        let usage = body
-            .get("usage")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<ResponsesUsage>(v).ok())
-            .unwrap_or_default();
-
+        let (parts, has_function_call, logprobs) = parse_output_items(&body.output);
         let incomplete_reason = body
-            .get("incomplete_details")
-            .and_then(Value::as_object)
-            .and_then(|obj| obj.get("reason"))
-            .and_then(Value::as_str);
+            .incomplete_details
+            .as_ref()
+            .and_then(|details| details.reason.as_deref());
         let finish_reason = map_openai_response_finish_reason(incomplete_reason, has_function_call);
 
         let metadata = ResponseMetadata {
-            response_id: body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            model_id: body
-                .get("model")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            timestamp: body.get("created_at").and_then(Value::as_u64),
-            service_tier: body
-                .get("service_tier")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            logprobs: if logprobs.is_empty() {
-                None
-            } else {
-                Some(logprobs)
-            },
+            response_id: body.id,
+            model_id: body.model,
+            timestamp: body.created_at,
+            service_tier: body.service_tier,
+            logprobs: (!logprobs.is_empty()).then_some(logprobs),
         };
 
         let message = Message {
@@ -379,7 +444,7 @@ impl OpenAIResponsesLanguageModel {
         Ok(ResponsesGenerateResult {
             message,
             finish_reason,
-            usage,
+            usage: body.usage,
             metadata,
             warnings: prepared.warnings,
         })
