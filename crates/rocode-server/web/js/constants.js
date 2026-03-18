@@ -6,6 +6,45 @@ const THEMES = [
   { id: "daylight", label: "Daylight" },
 ];
 
+const WIRE_KEYS = {
+  TYPE: "type",
+  SESSION_ID: "sessionID",
+  SESSION_ID_ALIAS: "sessionId",
+  PARENT_ID: "parentID",
+  PARENT_ID_ALIAS: "parentId",
+  CHILD_ID: "childID",
+  CHILD_ID_ALIAS: "childId",
+  REQUEST_ID: "requestID",
+  REQUEST_ID_ALIAS: "requestId",
+  PERMISSION_ID: "permissionID",
+  PERMISSION_ID_ALIAS: "permissionId",
+  ERROR: "error",
+  MESSAGE: "message",
+  BLOCK: "block",
+};
+
+const SERVER_EVENT_TYPES = {
+  MESSAGE: "message",
+  OUTPUT_BLOCK: "output_block",
+  USAGE: "usage",
+  ERROR: "error",
+  SESSION_UPDATED: "session.updated",
+  SESSION_STATUS: "session.status",
+  EXECUTION_TOPOLOGY_CHANGED: "execution.topology.changed",
+  QUESTION_CREATED: "question.created",
+  QUESTION_RESOLVED: "question.resolved",
+  QUESTION_REPLIED: "question.replied",
+  QUESTION_REJECTED: "question.rejected",
+  PERMISSION_REQUESTED: "permission.requested",
+  PERMISSION_RESOLVED: "permission.resolved",
+  PERMISSION_REPLIED: "permission.replied",
+  CONFIG_UPDATED: "config.updated",
+  CHILD_SESSION_ATTACHED: "child_session.attached",
+  CHILD_SESSION_DETACHED: "child_session.detached",
+  TOOL_CALL_LIFECYCLE: "tool_call.lifecycle",
+  DIFF_UPDATED: "diff.updated",
+};
+
 const state = {
   sessions: [],
   projects: [],

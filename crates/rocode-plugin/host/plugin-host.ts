@@ -44,6 +44,16 @@ const LOCAL_SDK_REQUEST_TIMEOUT_MS = 8000;
 const INTERNAL_PLUGIN_REQUEST_HEADER = "x-rocode-plugin-internal";
 const INTERNAL_PLUGIN_ID_HEADER = "x-rocode-plugin-id";
 const INTERNAL_TOKEN_HEADER = "x-rocode-internal-token";
+const PLUGIN_PROGRESS_NOTIFICATION_METHOD = "notifications/progress";
+const PLUGIN_CONFIG_HOOK_NAME = "config";
+const RESERVED_PLUGIN_HOOK_NAMES = new Set(["auth", "event", PLUGIN_CONFIG_HOOK_NAME]);
+const PLUGIN_TOOL_CONTEXT_KEYS = {
+  sessionID: "sessionID",
+  messageID: "messageID",
+  agent: "agent",
+  directory: "directory",
+  worktree: "worktree",
+} as const;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -667,7 +677,7 @@ async function handleInitialize(
     // Collect hook names
     const hookNames: string[] = [];
     for (const key of Object.keys(hooks)) {
-      if (key === "auth" || key === "event" || key === "config") continue;
+      if (RESERVED_PLUGIN_HOOK_NAMES.has(key)) continue;
       if (typeof hooks[key] === "function") {
         hookNames.push(key);
       }
@@ -751,7 +761,7 @@ async function handleHookInvoke(
   try {
     // TS parity: `config` hooks mutate the first argument in-place.
     // Use one shared object for both input/output so in-place edits are preserved.
-    if (params.hook === "config") {
+    if (params.hook === PLUGIN_CONFIG_HOOK_NAME) {
       const seed =
         (params.output as UnknownRecord | null) ??
         (params.input as UnknownRecord | null) ??
@@ -823,11 +833,11 @@ async function handleToolInvoke(
 
   try {
     const ctx: ToolContext = {
-      sessionID: (params.context?.sessionID as string) ?? "",
-      messageID: (params.context?.messageID as string) ?? "",
-      agent: (params.context?.agent as string) ?? "",
-      directory: (params.context?.directory as string) ?? "",
-      worktree: (params.context?.worktree as string) ?? "",
+      sessionID: (params.context?.[PLUGIN_TOOL_CONTEXT_KEYS.sessionID] as string) ?? "",
+      messageID: (params.context?.[PLUGIN_TOOL_CONTEXT_KEYS.messageID] as string) ?? "",
+      agent: (params.context?.[PLUGIN_TOOL_CONTEXT_KEYS.agent] as string) ?? "",
+      directory: (params.context?.[PLUGIN_TOOL_CONTEXT_KEYS.directory] as string) ?? "",
+      worktree: (params.context?.[PLUGIN_TOOL_CONTEXT_KEYS.worktree] as string) ?? "",
       abort: abortController.signal,
       // fail-closed: ask throws to refuse, not silent no-op
       ask: async () => { throw new Error("Permission ask not supported in plugin tool bridge"); },
@@ -844,7 +854,7 @@ async function handleToolInvoke(
 
     // Start progress heartbeat to prevent timeout
     const progressInterval = setInterval(() => {
-      sendNotification("notifications/progress", {
+      sendNotification(PLUGIN_PROGRESS_NOTIFICATION_METHOD, {
         message: `executing tool: ${params.toolID}`,
       });
     }, 5000); // Send heartbeat every 5 seconds

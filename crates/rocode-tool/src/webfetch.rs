@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use rocode_core::contracts::attachments::keys as attachment_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::web_page::{
     build_web_client, convert_html_to_markdown, ensure_http_url, strip_html,
@@ -37,7 +39,7 @@ fn default_format() -> String {
 #[async_trait]
 impl Tool for WebFetchTool {
     fn id(&self) -> &str {
-        "webfetch"
+        BuiltinToolName::WebFetch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -80,7 +82,7 @@ impl Tool for WebFetchTool {
         ensure_http_url(&url)?;
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("webfetch")
+            crate::PermissionRequest::new(BuiltinToolName::WebFetch.as_str())
                 .with_pattern(&url)
                 .always_allow(),
         )
@@ -168,11 +170,11 @@ impl Tool for WebFetchTool {
             metadata.insert("size".to_string(), serde_json::json!(bytes.len()));
             metadata.insert("data".to_string(), serde_json::json!(data_url));
             metadata.insert(
-                "attachment".to_string(),
+                attachment_keys::ATTACHMENT.to_string(),
                 serde_json::json!({
-                    "type": "image",
+                    (attachment_keys::TYPE): "image",
                     "mimeType": mime,
-                    "url": url,
+                    (attachment_keys::URL): url,
                     "size": bytes.len(),
                     "data": data_url
                 }),

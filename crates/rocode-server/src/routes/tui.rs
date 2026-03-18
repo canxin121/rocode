@@ -80,8 +80,7 @@ pub(crate) async fn request_question_answers_with_hook(
         .question_created(
             &session_id,
             &question_info.id,
-            serde_json::to_value(&questions)
-                .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+            serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
         )
         .await;
     if let Some(hook) = event_hook.as_ref() {
@@ -95,10 +94,7 @@ pub(crate) async fn request_question_answers_with_hook(
     state.runtime_control.drop_question(&question_info.id).await;
 
     // Clear pending question from aggregated runtime state.
-    state
-        .runtime_state
-        .question_resolved(&session_id)
-        .await;
+    state.runtime_state.question_resolved(&session_id).await;
 
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {
@@ -295,7 +291,7 @@ async fn enqueue_tui_request(state: &Arc<ServerState>, path: &str, body: serde_j
 
     state.broadcast(
         &serde_json::json!({
-            "type": "tui.request",
+            "type": rocode_core::contracts::events::ServerEventType::TuiRequest.as_str(),
             "path": path,
             "body": body,
         })
@@ -526,6 +522,8 @@ async fn submit_tui_response(Json(body): Json<serde_json::Value>) -> Json<bool> 
 mod tests {
     use super::*;
     use crate::ServerState;
+    use rocode_core::contracts::events::{QuestionResolutionKind, ServerEventType};
+    use rocode_core::contracts::wire::keys as wire_keys;
     use std::sync::{Arc, Mutex as StdMutex};
 
     fn sample_question() -> rocode_tool::QuestionDef {
@@ -558,7 +556,7 @@ mod tests {
                     let events = captured_for_answer.lock().expect("capture lock");
                     events.iter().find_map(|event| {
                         let ty = event.get("type").and_then(|value| value.as_str())?;
-                        if ty == "question.created" {
+                        if ty == ServerEventType::QuestionCreated.as_str() {
                             event
                                 .get("requestID")
                                 .and_then(|value| value.as_str())
@@ -593,13 +591,18 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.created")
-                && event.get("sessionID").and_then(|value| value.as_str())
+            event.get(wire_keys::TYPE).and_then(|value| value.as_str())
+                == Some(ServerEventType::QuestionCreated.as_str())
+                && event
+                    .get(wire_keys::SESSION_ID)
+                    .and_then(|value| value.as_str())
                     == Some(session_id.as_str())
         }));
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
-                && event.get("resolution").and_then(|value| value.as_str()) == Some("answered")
+            event.get(wire_keys::TYPE).and_then(|value| value.as_str())
+                == Some(ServerEventType::QuestionResolved.as_str())
+                && event.get("resolution").and_then(|value| value.as_str())
+                    == Some(QuestionResolutionKind::Answered.as_str())
         }));
     }
 
@@ -620,7 +623,7 @@ mod tests {
                     let events = captured_for_reject.lock().expect("capture lock");
                     events.iter().find_map(|event| {
                         let ty = event.get("type").and_then(|value| value.as_str())?;
-                        if ty == "question.created" {
+                        if ty == ServerEventType::QuestionCreated.as_str() {
                             event
                                 .get("requestID")
                                 .and_then(|value| value.as_str())
@@ -657,8 +660,10 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
-                && event.get("resolution").and_then(|value| value.as_str()) == Some("rejected")
+            event.get("type").and_then(|value| value.as_str())
+                == Some(ServerEventType::QuestionResolved.as_str())
+                && event.get("resolution").and_then(|value| value.as_str())
+                    == Some(QuestionResolutionKind::Rejected.as_str())
         }));
     }
 }

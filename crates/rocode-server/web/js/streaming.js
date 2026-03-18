@@ -21,7 +21,7 @@ async function parseSSE(response, onEvent) {
     } catch (_) {
       parsed = { raw: data };
     }
-    onEvent(eventName || "message", parsed);
+    onEvent(eventName || SERVER_EVENT_TYPES.MESSAGE, parsed);
     eventName = null;
   };
 
@@ -92,20 +92,20 @@ async function sendPrompt(content) {
     }
 
     await parseSSE(response, (name, payload) => {
-      if (name === "output_block") {
+      if (name === SERVER_EVENT_TYPES.OUTPUT_BLOCK) {
         const handled = applyOutputBlockEvent(payload);
         if (!handled) {
           applyFocusedChildOutputBlockEvent(payload);
         }
-        const block = payload && payload.block ? payload.block : payload;
+        const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
         if (handled && block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
           scheduleExecutionTopologyRefresh();
         }
         return;
       }
 
-      if (name === "question.created") {
-        const sessionId = payload.sessionID || payload.sessionId;
+      if (name === SERVER_EVENT_TYPES.QUESTION_CREATED) {
+        const sessionId = payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS];
         if (!sessionId || sessionId === state.selectedSession) {
           openQuestionPanel(interactionFromLiveQuestionEvent(payload));
           scheduleExecutionTopologyRefresh();
@@ -113,8 +113,8 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (name === "permission.requested") {
-        const sessionId = payload.sessionID || payload.sessionId;
+      if (name === SERVER_EVENT_TYPES.PERMISSION_REQUESTED) {
+        const sessionId = payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS];
         if (!sessionId || sessionId === state.selectedSession) {
           openPermissionPanel(permissionInteractionFromLiveEvent(payload));
           scheduleExecutionTopologyRefresh();
@@ -123,11 +123,11 @@ async function sendPrompt(content) {
       }
 
       if (
-        name === "question.resolved" ||
-        name === "question.replied" ||
-        name === "question.rejected"
+        name === SERVER_EVENT_TYPES.QUESTION_RESOLVED ||
+        name === SERVER_EVENT_TYPES.QUESTION_REPLIED ||
+        name === SERVER_EVENT_TYPES.QUESTION_REJECTED
       ) {
-        const requestId = payload.requestID || payload.requestId;
+        const requestId = payload[WIRE_KEYS.REQUEST_ID] || payload[WIRE_KEYS.REQUEST_ID_ALIAS];
         if (
           state.activeQuestionInteraction &&
           state.activeQuestionInteraction.request_id &&
@@ -140,8 +140,15 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (name === "permission.resolved" || name === "permission.replied") {
-        const permissionId = payload.permissionID || payload.permissionId || payload.requestID || payload.requestId;
+      if (
+        name === SERVER_EVENT_TYPES.PERMISSION_RESOLVED ||
+        name === SERVER_EVENT_TYPES.PERMISSION_REPLIED
+      ) {
+        const permissionId =
+          payload[WIRE_KEYS.PERMISSION_ID] ||
+          payload[WIRE_KEYS.PERMISSION_ID_ALIAS] ||
+          payload[WIRE_KEYS.REQUEST_ID] ||
+          payload[WIRE_KEYS.REQUEST_ID_ALIAS];
         if (
           state.activePermissionInteraction &&
           state.activePermissionInteraction.permission_id &&
@@ -153,10 +160,14 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (name === "usage") {
+      if (name === SERVER_EVENT_TYPES.USAGE) {
         applyStreamUsage(payload);
-      } else if (name === "error") {
-        applyOutputBlock({ kind: "status", tone: "error", text: payload.error || "Stream error" });
+      } else if (name === SERVER_EVENT_TYPES.ERROR) {
+        applyOutputBlock({
+          kind: "status",
+          tone: "error",
+          text: payload[WIRE_KEYS.ERROR] || "Stream error",
+        });
       }
     });
 

@@ -9,18 +9,18 @@ let globalSessionSnapshotTimer = null;
 let globalConfigRefreshTimer = null;
 
 function globalServerEventType(name, payload) {
-  if (name && name !== "message") return name;
-  return payload && payload.type ? payload.type : "message";
+  if (name && name !== SERVER_EVENT_TYPES.MESSAGE) return name;
+  return payload && payload[WIRE_KEYS.TYPE] ? payload[WIRE_KEYS.TYPE] : SERVER_EVENT_TYPES.MESSAGE;
 }
 
 function globalServerEventSessionId(payload) {
   return payload && (
-    payload.sessionID ||
-    payload.sessionId ||
-    payload.parentID ||
-    payload.parentId ||
-    payload.childID ||
-    payload.childId
+    payload[WIRE_KEYS.SESSION_ID] ||
+    payload[WIRE_KEYS.SESSION_ID_ALIAS] ||
+    payload[WIRE_KEYS.PARENT_ID] ||
+    payload[WIRE_KEYS.PARENT_ID_ALIAS] ||
+    payload[WIRE_KEYS.CHILD_ID] ||
+    payload[WIRE_KEYS.CHILD_ID_ALIAS]
   );
 }
 
@@ -85,7 +85,7 @@ function scheduleGlobalConfigRefresh(delay = 250) {
 }
 
 function maybeOpenGlobalQuestion(payload) {
-  const sessionId = payload.sessionID || payload.sessionId;
+  const sessionId = payload[WIRE_KEYS.SESSION_ID] || payload[WIRE_KEYS.SESSION_ID_ALIAS];
   if (!sessionId || sessionId !== state.selectedSession) return;
 
   const interaction = interactionFromLiveQuestionEvent(payload);
@@ -101,7 +101,7 @@ function maybeOpenGlobalQuestion(payload) {
 }
 
 function maybeResolveGlobalQuestion(payload) {
-  const requestId = payload.requestID || payload.requestId;
+  const requestId = payload[WIRE_KEYS.REQUEST_ID] || payload[WIRE_KEYS.REQUEST_ID_ALIAS];
   if (
     requestId &&
     state.activeQuestionInteraction &&
@@ -126,7 +126,11 @@ function maybeOpenGlobalPermission(payload) {
 }
 
 function maybeResolveGlobalPermission(payload) {
-  const permissionId = payload.permissionID || payload.permissionId || payload.requestID || payload.requestId;
+  const permissionId =
+    payload[WIRE_KEYS.PERMISSION_ID] ||
+    payload[WIRE_KEYS.PERMISSION_ID_ALIAS] ||
+    payload[WIRE_KEYS.REQUEST_ID] ||
+    payload[WIRE_KEYS.REQUEST_ID_ALIAS];
   if (
     permissionId &&
     state.activePermissionInteraction &&
@@ -139,55 +143,59 @@ function maybeResolveGlobalPermission(payload) {
 function handleGlobalServerEvent(name, payload) {
   const type = globalServerEventType(name, payload);
 
-  if (type === "message") {
+  if (type === SERVER_EVENT_TYPES.MESSAGE) {
     return;
   }
 
-  if (type === "output_block") {
+  if (type === SERVER_EVENT_TYPES.OUTPUT_BLOCK) {
     if (state.streaming) return;
     const handled = applyOutputBlockEvent(payload);
     if (!handled && !applyFocusedChildOutputBlockEvent(payload)) return;
-    const block = payload && payload.block ? payload.block : payload;
+    const block = payload && payload[WIRE_KEYS.BLOCK] ? payload[WIRE_KEYS.BLOCK] : payload;
     if (block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
       scheduleExecutionTopologyRefresh(60);
     }
     return;
   }
 
-  if (type === "usage") {
+  if (type === SERVER_EVENT_TYPES.USAGE) {
     if (!state.streaming && globalServerEventSessionId(payload) === state.selectedSession) {
       applyStreamUsage(payload);
     }
     return;
   }
 
-  if (type === "error") {
+  if (type === SERVER_EVENT_TYPES.ERROR) {
     if (!state.streaming && globalServerEventSessionId(payload) === state.selectedSession) {
-      applyOutputBlock({ kind: "status", tone: "error", text: payload.error || payload.message || "Stream error" });
+      applyOutputBlock({
+        kind: "status",
+        tone: "error",
+        text: payload[WIRE_KEYS.ERROR] || payload[WIRE_KEYS.MESSAGE] || "Stream error",
+      });
     }
     return;
   }
 
-  if (type === "session.updated") {
+  if (type === SERVER_EVENT_TYPES.SESSION_UPDATED) {
     scheduleGlobalSessionIndexRefresh();
     return;
   }
 
-  if (type === "session.status") {
+  if (type === SERVER_EVENT_TYPES.SESSION_STATUS) {
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleGlobalSelectedSessionSnapshotRefresh(80);
     }
     return;
   }
 
-  if (type === "execution.topology.changed") {
+  if (type === SERVER_EVENT_TYPES.EXECUTION_TOPOLOGY_CHANGED) {
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
     }
     return;
   }
 
-  if (type === "question.created") {
+  if (type === SERVER_EVENT_TYPES.QUESTION_CREATED) {
     maybeOpenGlobalQuestion(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
@@ -196,9 +204,9 @@ function handleGlobalServerEvent(name, payload) {
   }
 
   if (
-    type === "question.resolved" ||
-    type === "question.replied" ||
-    type === "question.rejected"
+    type === SERVER_EVENT_TYPES.QUESTION_RESOLVED ||
+    type === SERVER_EVENT_TYPES.QUESTION_REPLIED ||
+    type === SERVER_EVENT_TYPES.QUESTION_REJECTED
   ) {
     maybeResolveGlobalQuestion(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
@@ -208,7 +216,7 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (type === "permission.requested") {
+  if (type === SERVER_EVENT_TYPES.PERMISSION_REQUESTED) {
     maybeOpenGlobalPermission(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
@@ -216,7 +224,10 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (type === "permission.resolved" || type === "permission.replied") {
+  if (
+    type === SERVER_EVENT_TYPES.PERMISSION_RESOLVED ||
+    type === SERVER_EVENT_TYPES.PERMISSION_REPLIED
+  ) {
     maybeResolveGlobalPermission(payload);
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
@@ -225,14 +236,17 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (type === "config.updated") {
+  if (type === SERVER_EVENT_TYPES.CONFIG_UPDATED) {
     scheduleGlobalConfigRefresh();
     return;
   }
 
-  if (type === "child_session.attached" || type === "child_session.detached") {
-    const parentId = payload.parentID || payload.parentId;
-    const childId = payload.childID || payload.childId;
+  if (
+    type === SERVER_EVENT_TYPES.CHILD_SESSION_ATTACHED ||
+    type === SERVER_EVENT_TYPES.CHILD_SESSION_DETACHED
+  ) {
+    const parentId = payload[WIRE_KEYS.PARENT_ID] || payload[WIRE_KEYS.PARENT_ID_ALIAS];
+    const childId = payload[WIRE_KEYS.CHILD_ID] || payload[WIRE_KEYS.CHILD_ID_ALIAS];
     scheduleGlobalSessionIndexRefresh();
     if (state.selectedSession && (state.selectedSession === parentId || state.selectedSession === childId)) {
       scheduleExecutionTopologyRefresh(60);
@@ -241,7 +255,10 @@ function handleGlobalServerEvent(name, payload) {
     return;
   }
 
-  if (type === "tool_call.lifecycle" || type === "diff.updated") {
+  if (
+    type === SERVER_EVENT_TYPES.TOOL_CALL_LIFECYCLE ||
+    type === SERVER_EVENT_TYPES.DIFF_UPDATED
+  ) {
     if (globalServerEventSessionId(payload) === state.selectedSession) {
       scheduleExecutionTopologyRefresh(60);
     }
