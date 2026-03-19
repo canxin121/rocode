@@ -1,5 +1,6 @@
 pub(crate) mod events;
 pub(crate) mod state;
+pub(crate) mod todo;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -2107,26 +2108,38 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 /// stored in the TodoManager (single authority for todo state — Art. 5).
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
-) -> Option<Vec<rocode_session::TodoInfo>> {
-    let todos = tool_args.get("todos")?.as_array()?;
-    if todos.is_empty() {
+) -> Option<Vec<rocode_types::TodoInfo>> {
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoWriteArguments {
+        #[serde(default)]
+        todos: Vec<TodoWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoWire {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+    }
+
+    let args = serde_json::from_value::<TodoWriteArguments>(tool_args.clone()).ok()?;
+    if args.todos.is_empty() {
         return None;
     }
-    let items = todos
-        .iter()
+    let items = args
+        .todos
+        .into_iter()
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|v| v.as_str())?.to_string();
-            let status = todo
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("pending")
-                .to_string();
-            let priority = todo
-                .get("priority")
-                .and_then(|v| v.as_str())
-                .unwrap_or("medium")
-                .to_string();
-            Some(rocode_session::TodoInfo {
+            let content = todo.content.map(|value| value.trim().to_string())?;
+            if content.is_empty() {
+                return None;
+            }
+            let status = todo.status.unwrap_or_else(|| "pending".to_string());
+            let priority = todo.priority.unwrap_or_else(|| "medium".to_string());
+            Some(rocode_types::TodoInfo {
                 content,
                 status,
                 priority,

@@ -1,26 +1,24 @@
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::todo::keys as todo_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_storage::TodoRepository;
+use rocode_types::TodoInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TodoInfo {
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
-
-pub struct TodoManager {
+pub(crate) struct TodoManager {
     state: Arc<RwLock<HashMap<String, Vec<TodoInfo>>>>,
     db: Option<Arc<TodoRepository>>,
     bus: Option<Arc<Bus>>,
 }
 
-pub static TODO_UPDATED_EVENT: BusEventDef = BusEventDef::new("todo.updated");
+pub(crate) static TODO_UPDATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::TodoUpdated.as_str());
 
 impl TodoManager {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
             db: None,
@@ -36,7 +34,8 @@ impl TodoManager {
         }
     }
 
-    pub fn with_bus(bus: Arc<Bus>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_bus(bus: Arc<Bus>) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
             db: None,
@@ -44,7 +43,7 @@ impl TodoManager {
         }
     }
 
-    pub async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
+    pub(crate) async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
         let todos_payload = todos.clone();
         if let Some(ref db) = self.db {
             let _ = db.delete_for_session(session_id).await;
@@ -71,15 +70,15 @@ impl TodoManager {
             bus.publish(
                 &TODO_UPDATED_EVENT,
                 serde_json::json!({
-                    "sessionID": session_id,
-                    "todos": todos_payload,
+                    wire_keys::SESSION_ID: session_id,
+                    todo_keys::TODOS: todos_payload,
                 }),
             )
             .await;
         }
     }
 
-    pub async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
+    pub(crate) async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
         if let Some(ref db) = self.db {
             if let Ok(items) = db.list_for_session(session_id).await {
                 return items
@@ -198,74 +197,7 @@ mod tests {
             .expect("event timeout")
             .expect("event channel closed");
         assert_eq!(event.event_type, TODO_UPDATED_EVENT.event_type);
-        assert_eq!(event.properties["sessionID"], "session-1");
-        assert_eq!(event.properties["todos"][0]["content"], "write tests");
-    }
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub enum TodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Cancelled,
-}
-
-impl TodoStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TodoStatus::Pending => "pending",
-            TodoStatus::InProgress => "in_progress",
-            TodoStatus::Completed => "completed",
-            TodoStatus::Cancelled => "cancelled",
-        }
-    }
-}
-
-impl std::fmt::Display for TodoStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub enum TodoPriority {
-    High,
-    Medium,
-    Low,
-}
-
-impl TodoPriority {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TodoPriority::High => "high",
-            TodoPriority::Medium => "medium",
-            TodoPriority::Low => "low",
-        }
-    }
-}
-
-impl std::fmt::Display for TodoPriority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-pub fn parse_status(status: &str) -> TodoStatus {
-    match status.to_lowercase().as_str() {
-        "pending" => TodoStatus::Pending,
-        "in_progress" | "in progress" => TodoStatus::InProgress,
-        "completed" => TodoStatus::Completed,
-        "cancelled" => TodoStatus::Cancelled,
-        _ => TodoStatus::Pending,
-    }
-}
-
-pub fn parse_priority(priority: &str) -> TodoPriority {
-    match priority.to_lowercase().as_str() {
-        "high" => TodoPriority::High,
-        "medium" => TodoPriority::Medium,
-        "low" => TodoPriority::Low,
-        _ => TodoPriority::Medium,
+        assert_eq!(event.properties[wire_keys::SESSION_ID], "session-1");
+        assert_eq!(event.properties[todo_keys::TODOS][0][todo_keys::CONTENT], "write tests");
     }
 }
