@@ -32,8 +32,6 @@ futures = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
 dirs = { workspace = true }
-glob = { workspace = true }
-reqwest = { workspace = true }
 url = { workspace = true }
 base64 = { workspace = true }
 
