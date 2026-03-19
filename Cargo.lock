@@ -3497,7 +3497,6 @@ dependencies = [
  "rocode-types",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
