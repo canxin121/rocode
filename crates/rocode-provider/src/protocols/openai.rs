@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing;
 
+use super::runtime_pipeline_enabled;
+
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::*;
 use crate::tools::InputTool;
@@ -44,26 +46,6 @@ fn organization_from_config(config: &ProviderConfig) -> Option<String> {
 
 fn is_legacy_only(config: &ProviderConfig) -> bool {
     openai_config_options(config).legacy_only
-}
-
-fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
-    config
-        .option_bool(&["runtime_pipeline"])
-        .unwrap_or_else(|| {
-            std::env::var("ROCODE_RUNTIME_PIPELINE")
-                .ok()
-                .and_then(|v| {
-                    let lower = v.trim().to_ascii_lowercase();
-                    if matches!(lower.as_str(), "1" | "true" | "yes" | "on") {
-                        Some(true)
-                    } else if matches!(lower.as_str(), "0" | "false" | "no" | "off") {
-                        Some(false)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(true)
-        })
 }
 
 fn legacy_base_url(config: &ProviderConfig) -> Result<Option<&str>, ProviderError> {

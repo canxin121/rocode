@@ -3,32 +3,14 @@ use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+use super::runtime_pipeline_enabled;
+
 use crate::{
     ChatRequest, ChatResponse, Choice, Content, ContentPart, Message, ProtocolImpl, ProviderConfig,
     ProviderError, Role, StreamEvent, StreamResult, ToolUse, Usage,
 };
 
 const VERTEX_API_BASE: &str = "https://aiplatform.googleapis.com/v1";
-
-fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
-    config
-        .option_bool(&["runtime_pipeline"])
-        .unwrap_or_else(|| {
-            std::env::var("ROCODE_RUNTIME_PIPELINE")
-                .ok()
-                .and_then(|v| {
-                    let lower = v.trim().to_ascii_lowercase();
-                    if matches!(lower.as_str(), "1" | "true" | "yes" | "on") {
-                        Some(true)
-                    } else if matches!(lower.as_str(), "0" | "false" | "no" | "off") {
-                        Some(false)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(true)
-        })
-}
 
 pub struct VertexProtocol;
 

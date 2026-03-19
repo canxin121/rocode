@@ -6,6 +6,8 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing;
 
+use super::runtime_pipeline_enabled;
+
 use rocode_core::contracts::provider::ProviderFinishReasonWire;
 
 use crate::bootstrap::should_use_copilot_responses_api;
@@ -34,26 +36,6 @@ fn select_copilot_route(model_id: &str) -> CopilotRoute {
     } else {
         CopilotRoute::Legacy
     }
-}
-
-fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
-    config
-        .option_bool(&["runtime_pipeline"])
-        .unwrap_or_else(|| {
-            std::env::var("ROCODE_RUNTIME_PIPELINE")
-                .ok()
-                .and_then(|v| {
-                    let lower = v.trim().to_ascii_lowercase();
-                    if matches!(lower.as_str(), "1" | "true" | "yes" | "on") {
-                        Some(true)
-                    } else if matches!(lower.as_str(), "0" | "false" | "no" | "off") {
-                        Some(false)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(true)
-        })
 }
 
 async fn resolve_with_fallback<T, PFut, FFut, F>(

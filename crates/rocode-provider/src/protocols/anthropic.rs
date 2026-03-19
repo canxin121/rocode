@@ -2,32 +2,14 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use super::runtime_pipeline_enabled;
+
 use crate::{
     ChatRequest, ChatResponse, Choice, Message, ProtocolImpl, ProviderConfig, ProviderError,
     StreamResult, Usage,
 };
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-
-fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
-    config
-        .option_bool(&["runtime_pipeline"])
-        .unwrap_or_else(|| {
-            std::env::var("ROCODE_RUNTIME_PIPELINE")
-                .ok()
-                .and_then(|v| {
-                    let lower = v.trim().to_ascii_lowercase();
-                    if matches!(lower.as_str(), "1" | "true" | "yes" | "on") {
-                        Some(true)
-                    } else if matches!(lower.as_str(), "0" | "false" | "no" | "off") {
-                        Some(false)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(true)
-        })
-}
 
 /// Build the messages endpoint URL from a user-supplied base URL.
 /// Mirrors the behavior of `@ai-sdk/anthropic` which automatically appends
