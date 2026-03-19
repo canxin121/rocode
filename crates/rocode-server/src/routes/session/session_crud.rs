@@ -150,6 +150,8 @@ pub struct SessionStatusInfo {
     pub idle: bool,
     pub busy: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -359,12 +361,15 @@ pub(super) fn session_scheduler_profile_override(
     wire.scheduler_profile.or(wire.resolved_scheduler_profile)
 }
 
-pub(super) async fn set_session_run_status(
+pub(crate) async fn set_session_run_status(
     state: &Arc<ServerState>,
     session_id: &str,
     status: SessionRunStatus,
 ) {
-    let is_running = !matches!(status, SessionRunStatus::Idle);
+    let is_running = matches!(
+        status,
+        SessionRunStatus::Busy | SessionRunStatus::Pending { .. } | SessionRunStatus::Retry { .. }
+    );
     {
         let mut sessions = state.sessions.lock().await;
         let should_update = sessions
@@ -389,6 +394,12 @@ pub(super) async fn set_session_run_status(
         SessionRunStatus::Busy => {
             state.runtime_state.mark_running(session_id, None).await;
         }
+        SessionRunStatus::Pending { reason, .. } => {
+            state
+                .runtime_state
+                .mark_pending(session_id, reason.as_str().to_string())
+                .await;
+        }
         SessionRunStatus::Idle => {
             state.runtime_state.mark_idle(session_id).await;
         }
@@ -396,6 +407,12 @@ pub(super) async fn set_session_run_status(
             // Retry is still a "running" variant from the runtime state
             // perspective — the session is not idle.
             state.runtime_state.mark_running(session_id, None).await;
+        }
+        SessionRunStatus::Error { message } => {
+            state
+                .runtime_state
+                .mark_error(session_id, message.clone())
+                .await;
         }
     }
 
@@ -406,6 +423,12 @@ pub(super) async fn set_session_run_status(
             status: rocode_types::SessionRunStatusWire::Tagged(match status {
                 SessionRunStatus::Idle => rocode_types::SessionRunStatus::Idle,
                 SessionRunStatus::Busy => rocode_types::SessionRunStatus::Busy,
+                SessionRunStatus::Pending { reason, message } => {
+                    rocode_types::SessionRunStatus::Pending {
+                        reason: reason.as_str().to_string(),
+                        message,
+                    }
+                }
                 SessionRunStatus::Retry {
                     attempt,
                     message,
@@ -415,6 +438,9 @@ pub(super) async fn set_session_run_status(
                     message,
                     next,
                 },
+                SessionRunStatus::Error { message } => {
+                    rocode_types::SessionRunStatus::Error { message }
+                }
             }),
         },
     );
@@ -514,15 +540,24 @@ pub(super) async fn session_status(
         .into_iter()
         .map(|s| {
             let run = run_status.get(&s.id).cloned().unwrap_or_default();
-            let (status, idle, busy, attempt, message, next) = match run {
+            let (status, idle, busy, reason, attempt, message, next) = match run {
                 SessionRunStatus::Idle => {
                     if s.active {
-                        ("busy".to_string(), false, true, None, None, None)
+                        ("busy".to_string(), false, true, None, None, None, None)
                     } else {
-                        ("idle".to_string(), true, false, None, None, None)
+                        ("idle".to_string(), true, false, None, None, None, None)
                     }
                 }
-                SessionRunStatus::Busy => ("busy".to_string(), false, true, None, None, None),
+                SessionRunStatus::Busy => ("busy".to_string(), false, true, None, None, None, None),
+                SessionRunStatus::Pending { reason, message } => (
+                    "pending".to_string(),
+                    false,
+                    true,
+                    Some(reason.as_str().to_string()),
+                    None,
+                    message,
+                    None,
+                ),
                 SessionRunStatus::Retry {
                     attempt,
                     message,
@@ -531,9 +566,19 @@ pub(super) async fn session_status(
                     "retry".to_string(),
                     false,
                     true,
+                    None,
                     Some(attempt),
                     Some(message),
                     Some(next),
+                ),
+                SessionRunStatus::Error { message } => (
+                    "error".to_string(),
+                    false,
+                    false,
+                    None,
+                    None,
+                    Some(message),
+                    None,
                 ),
             };
             (
@@ -542,6 +587,7 @@ pub(super) async fn session_status(
                     status,
                     idle,
                     busy,
+                    reason,
                     attempt,
                     message,
                     next,

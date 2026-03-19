@@ -33,10 +33,18 @@ pub enum SessionRunStatus {
     #[default]
     Idle,
     Busy,
+    Pending {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     Retry {
         attempt: u32,
         message: String,
         next: i64,
+    },
+    Error {
+        message: String,
     },
 }
 
@@ -54,7 +62,9 @@ impl SessionRunStatusWire {
         match self {
             Self::Tagged(SessionRunStatus::Idle) => Some("idle"),
             Self::Tagged(SessionRunStatus::Busy) => Some("busy"),
+            Self::Tagged(SessionRunStatus::Pending { .. }) => Some("pending"),
             Self::Tagged(SessionRunStatus::Retry { .. }) => Some("retry"),
+            Self::Tagged(SessionRunStatus::Error { .. }) => Some("error"),
             Self::String(s) => Some(s.as_str()),
         }
     }

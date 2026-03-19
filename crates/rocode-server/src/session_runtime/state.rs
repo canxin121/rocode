@@ -28,6 +28,8 @@ pub struct SessionRuntimeState {
     pub session_id: String,
     pub run_status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_message_id: Option<String>,
     pub active_tools: Vec<ActiveToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,6 +44,7 @@ impl SessionRuntimeState {
         Self {
             session_id: session_id.into(),
             run_status: RunStatus::Idle,
+            status_detail: None,
             current_message_id: None,
             active_tools: Vec::new(),
             pending_question: None,
@@ -59,6 +62,8 @@ impl SessionRuntimeState {
 pub enum RunStatus {
     Idle,
     Running,
+    Pending,
+    Error,
     WaitingOnTool,
     WaitingOnUser,
     Cancelling,
@@ -151,6 +156,7 @@ impl RuntimeStateStore {
     pub async fn mark_running(&self, session_id: &str, message_id: Option<String>) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Running;
+            s.status_detail = None;
             s.current_message_id = message_id;
         })
         .await;
@@ -160,6 +166,7 @@ impl RuntimeStateStore {
     pub async fn mark_idle(&self, session_id: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Idle;
+            s.status_detail = None;
             s.current_message_id = None;
             s.active_tools.clear();
             s.pending_question = None;
@@ -174,6 +181,7 @@ impl RuntimeStateStore {
     pub async fn tool_started(&self, session_id: &str, tool_call_id: &str, tool_name: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnTool;
+            s.status_detail = None;
             s.active_tools.push(ActiveToolSummary {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -204,6 +212,7 @@ impl RuntimeStateStore {
     ) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnUser;
+            s.status_detail = Some("question".to_string());
             s.pending_question = Some(PendingQuestionSummary {
                 request_id: request_id.to_string(),
                 questions,
@@ -233,6 +242,7 @@ impl RuntimeStateStore {
     ) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnUser;
+            s.status_detail = Some("permission".to_string());
             s.pending_permission = Some(PendingPermissionSummary {
                 permission_id: permission_id.to_string(),
                 info,
@@ -271,6 +281,28 @@ impl RuntimeStateStore {
     pub async fn child_detached(&self, parent_id: &str, child_id: &str) {
         self.update(parent_id, |s| {
             s.child_sessions.retain(|c| c.child_id != child_id);
+        })
+        .await;
+    }
+
+    /// Mark the session as pending with a reason.
+    pub async fn mark_pending(&self, session_id: &str, reason: String) {
+        self.update(session_id, |s| {
+            s.run_status = RunStatus::Pending;
+            s.status_detail = Some(reason);
+        })
+        .await;
+    }
+
+    /// Mark the session as failed with a displayable error message.
+    pub async fn mark_error(&self, session_id: &str, message: String) {
+        self.update(session_id, |s| {
+            s.run_status = RunStatus::Error;
+            s.status_detail = Some(message);
+            s.current_message_id = None;
+            s.active_tools.clear();
+            s.pending_question = None;
+            s.pending_permission = None;
         })
         .await;
     }
@@ -427,5 +459,24 @@ mod tests {
         store.permission_resolved("ses_1").await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn pending_and_error_status_store_detail() {
+        let store = RuntimeStateStore::new();
+
+        store.mark_pending("ses_1", "question".to_string()).await;
+        let state = store.get("ses_1").await.unwrap();
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.status_detail.as_deref(), Some("question"));
+
+        store
+            .mark_error("ses_1", "provider timeout".to_string())
+            .await;
+        let state = store.get("ses_1").await.unwrap();
+        assert_eq!(state.run_status, RunStatus::Error);
+        assert_eq!(state.status_detail.as_deref(), Some("provider timeout"));
+        assert!(state.pending_question.is_none());
+        assert!(state.pending_permission.is_none());
     }
 }

@@ -10,6 +10,8 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 
 use rocode_permission::{PermissionReply, PermissionReplyRequest, PermissionRequestInfo};
 
+use crate::routes::session::set_session_run_status;
+use crate::runtime_control::{PendingStatusReason, SessionRunStatus};
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
 
@@ -67,12 +69,22 @@ pub(crate) async fn request_permission(
             serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
         )
         .await;
+    set_session_run_status(
+        &state,
+        &session_id,
+        SessionRunStatus::Pending {
+            reason: PendingStatusReason::Permission,
+            message: Some("Waiting for permission decision".to_string()),
+        },
+    )
+    .await;
 
     let wait_result = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
     PERMISSION_WAITERS.lock().await.remove(&permission_id);
 
     // Clear pending permission from aggregated runtime state.
     state.runtime_state.permission_resolved(&session_id).await;
+    set_session_run_status(&state, &session_id, SessionRunStatus::Busy).await;
 
     match wait_result {
         Ok(Ok(PermissionResolution { reply, message })) => match reply {
@@ -167,9 +179,13 @@ mod tests {
             tokio::task::yield_now().await;
         };
 
-        let requested = rx.recv().await.expect("requested event");
-        let requested_json: serde_json::Value =
-            serde_json::from_str(&requested).expect("requested json");
+        let requested_json: serde_json::Value = loop {
+            let raw = rx.recv().await.expect("requested event");
+            let payload: serde_json::Value = serde_json::from_str(&raw).expect("requested json");
+            if payload["type"] == "permission.requested" {
+                break payload;
+            }
+        };
         assert_eq!(requested_json["type"], "permission.requested");
         assert_eq!(requested_json["permissionID"], permission_id);
         assert_eq!(requested_json["sessionID"], "session-1");
@@ -186,9 +202,13 @@ mod tests {
         .await
         .expect("reply should succeed");
 
-        let resolved = rx.recv().await.expect("resolved event");
-        let resolved_json: serde_json::Value =
-            serde_json::from_str(&resolved).expect("resolved json");
+        let resolved_json: serde_json::Value = loop {
+            let raw = rx.recv().await.expect("resolved event");
+            let payload: serde_json::Value = serde_json::from_str(&raw).expect("resolved json");
+            if payload["type"] == "permission.resolved" {
+                break payload;
+            }
+        };
         assert_eq!(resolved_json["type"], "permission.resolved");
         assert_eq!(resolved_json["permissionID"], permission_id);
         assert_eq!(resolved_json["reply"], "once");

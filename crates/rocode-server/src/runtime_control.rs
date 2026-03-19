@@ -48,6 +48,12 @@ where
 #[derive(Debug, Default, Deserialize)]
 struct ExecutionRecordMetadataWire {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    status_kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    pending_reason: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    error: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     scheduler_stage_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     child_session_id: Option<String>,
@@ -61,9 +67,24 @@ struct ExecutionRecordMetadataWire {
 
 #[derive(Debug, Serialize)]
 struct RetryMetadata {
+    status_kind: &'static str,
     attempt: u32,
     message: String,
     next: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PendingMetadata {
+    status_kind: &'static str,
+    pending_reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorMetadata {
+    status_kind: &'static str,
+    error: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,11 +274,43 @@ pub enum SessionRunStatus {
     #[default]
     Idle,
     Busy,
+    Pending {
+        reason: PendingStatusReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     Retry {
         attempt: u32,
         message: String,
         next: i64,
     },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingStatusReason {
+    Question,
+    Permission,
+}
+
+impl PendingStatusReason {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::Permission => "permission",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "question" => Some(Self::Question),
+            "permission" => Some(Self::Permission),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,6 +393,7 @@ impl RuntimeControlRegistry {
                 self.cleanup_done_executions(session_id).await;
             }
             SessionRunStatus::Busy => {
+                self.cleanup_done_executions(session_id).await;
                 self.upsert_execution(ExecutionRecord {
                     id: execution_id,
                     session_id: session_id.to_string(),
@@ -353,6 +407,31 @@ impl RuntimeControlRegistry {
                     started_at: now_millis(),
                     updated_at: now_millis(),
                     metadata: None,
+                })
+                .await;
+            }
+            SessionRunStatus::Pending { reason, message } => {
+                self.upsert_execution(ExecutionRecord {
+                    id: execution_id,
+                    session_id: session_id.to_string(),
+                    kind: ExecutionKind::PromptRun,
+                    status: ExecutionStatus::Waiting,
+                    label: Some("Prompt run".to_string()),
+                    parent_id: None,
+                    stage_id: None,
+                    waiting_on: Some(reason.as_str().to_string()),
+                    recent_event: Some(
+                        message
+                            .clone()
+                            .unwrap_or_else(|| format!("Waiting for {}", reason.as_str())),
+                    ),
+                    started_at: now_millis(),
+                    updated_at: now_millis(),
+                    metadata: Some(value_or_null(PendingMetadata {
+                        status_kind: "pending",
+                        pending_reason: reason.as_str(),
+                        message,
+                    })),
                 })
                 .await;
             }
@@ -374,9 +453,30 @@ impl RuntimeControlRegistry {
                     started_at: now_millis(),
                     updated_at: now_millis(),
                     metadata: Some(value_or_null(RetryMetadata {
+                        status_kind: "retry",
                         attempt,
                         message: message.clone(),
                         next,
+                    })),
+                })
+                .await;
+            }
+            SessionRunStatus::Error { message } => {
+                self.upsert_execution(ExecutionRecord {
+                    id: execution_id,
+                    session_id: session_id.to_string(),
+                    kind: ExecutionKind::PromptRun,
+                    status: ExecutionStatus::Done,
+                    label: Some("Prompt run".to_string()),
+                    parent_id: None,
+                    stage_id: None,
+                    waiting_on: None,
+                    recent_event: Some(message.clone()),
+                    started_at: now_millis(),
+                    updated_at: now_millis(),
+                    metadata: Some(value_or_null(ErrorMetadata {
+                        status_kind: "error",
+                        error: message,
                     })),
                 })
                 .await;
@@ -388,27 +488,49 @@ impl RuntimeControlRegistry {
         let executions = self.executions.read().await;
         executions
             .values()
-            .filter(|record| {
-                matches!(record.kind, ExecutionKind::PromptRun)
-                    && record.status != ExecutionStatus::Done
-            })
-            .map(|record| {
+            .filter(|record| matches!(record.kind, ExecutionKind::PromptRun))
+            .filter_map(|record| {
+                let metadata = execution_record_metadata_wire(record.metadata.as_ref());
                 let status = match record.status {
-                    ExecutionStatus::Running
-                    | ExecutionStatus::Waiting
-                    | ExecutionStatus::Cancelling => SessionRunStatus::Busy,
-                    ExecutionStatus::Retry => {
-                        let metadata = execution_record_metadata_wire(record.metadata.as_ref());
-                        SessionRunStatus::Retry {
-                            attempt: metadata.attempt.unwrap_or(1),
-                            message: metadata.message.unwrap_or_default(),
-                            next: metadata.next.unwrap_or_default(),
+                    ExecutionStatus::Running | ExecutionStatus::Cancelling => {
+                        SessionRunStatus::Busy
+                    }
+                    ExecutionStatus::Waiting => {
+                        if metadata.status_kind.as_deref() == Some("pending") {
+                            let reason = metadata
+                                .pending_reason
+                                .as_deref()
+                                .and_then(PendingStatusReason::from_str)
+                                .unwrap_or(PendingStatusReason::Question);
+                            SessionRunStatus::Pending {
+                                reason,
+                                message: metadata.message,
+                            }
+                        } else {
+                            SessionRunStatus::Busy
                         }
                     }
-                    // Done is filtered out above, but satisfy exhaustiveness.
-                    ExecutionStatus::Done => SessionRunStatus::Idle,
+                    ExecutionStatus::Retry => SessionRunStatus::Retry {
+                        attempt: metadata.attempt.unwrap_or(1),
+                        message: metadata.message.unwrap_or_default(),
+                        next: metadata.next.unwrap_or_default(),
+                    },
+                    ExecutionStatus::Done => {
+                        if metadata.status_kind.as_deref() == Some("error") {
+                            SessionRunStatus::Error {
+                                message: metadata.error.unwrap_or_else(|| {
+                                    record
+                                        .recent_event
+                                        .clone()
+                                        .unwrap_or_else(|| "Prompt failed".to_string())
+                                }),
+                            }
+                        } else {
+                            return None;
+                        }
+                    }
                 };
-                (record.session_id.clone(), status)
+                Some((record.session_id.clone(), status))
             })
             .collect()
     }
@@ -1201,6 +1323,55 @@ mod tests {
             .set_session_run_status("ses_1", SessionRunStatus::Idle)
             .await;
         assert!(!registry.has_prompt_run("ses_1").await);
+    }
+
+    #[tokio::test]
+    async fn prompt_status_pending_and_error_are_reported() {
+        let registry = RuntimeControlRegistry::new();
+
+        registry
+            .set_session_run_status(
+                "ses_1",
+                SessionRunStatus::Pending {
+                    reason: PendingStatusReason::Question,
+                    message: Some("Waiting for answer".to_string()),
+                },
+            )
+            .await;
+
+        let statuses = registry.session_run_statuses().await;
+        assert!(matches!(
+            statuses.get("ses_1"),
+            Some(SessionRunStatus::Pending {
+                reason: PendingStatusReason::Question,
+                message,
+            }) if message.as_deref() == Some("Waiting for answer")
+        ));
+
+        registry
+            .set_session_run_status(
+                "ses_1",
+                SessionRunStatus::Error {
+                    message: "provider failed".to_string(),
+                },
+            )
+            .await;
+        assert!(!registry.has_prompt_run("ses_1").await);
+
+        let statuses = registry.session_run_statuses().await;
+        assert!(matches!(
+            statuses.get("ses_1"),
+            Some(SessionRunStatus::Error { message }) if message == "provider failed"
+        ));
+
+        registry
+            .set_session_run_status("ses_1", SessionRunStatus::Busy)
+            .await;
+        let statuses = registry.session_run_statuses().await;
+        assert!(matches!(
+            statuses.get("ses_1"),
+            Some(SessionRunStatus::Busy)
+        ));
     }
 
     #[tokio::test]

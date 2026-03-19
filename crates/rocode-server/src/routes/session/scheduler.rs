@@ -1128,6 +1128,7 @@ pub async fn run_local_scheduler_prompt(
     let mut prompt_tokens = 0;
     let mut completion_tokens = 0;
     let mut cancelled = false;
+    let mut failed_error_message: Option<String> = None;
     if let Some(assistant) = session.get_message_mut(&assistant_message_id) {
         assistant.metadata.insert(
             "model_provider".to_string(),
@@ -1214,6 +1215,7 @@ pub async fn run_local_scheduler_prompt(
                         .metadata
                         .insert("error".to_string(), serde_json::json!(error.to_string()));
                     assistant.add_text(format!("Scheduler error: {}", error));
+                    failed_error_message = Some(error.to_string());
                 }
             }
         }
@@ -1231,7 +1233,11 @@ pub async fn run_local_scheduler_prompt(
     }
     state.touch_session_cache(&session_id).await;
     broadcast_session_updated(state.as_ref(), session_id.clone(), "prompt.completed");
-    set_session_run_status(&state, &session_id, SessionRunStatus::Idle).await;
+    if let Some(message) = failed_error_message {
+        set_session_run_status(&state, &session_id, SessionRunStatus::Error { message }).await;
+    } else {
+        set_session_run_status(&state, &session_id, SessionRunStatus::Idle).await;
+    }
 
     if let Some(output_hook) = output_hook {
         if !assistant_text.trim().is_empty() {
