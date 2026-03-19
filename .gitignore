@@ -8,3 +8,4 @@ plans/
 docs/plans/
 # Cargo local config
 .cargo/config.toml
+.workbench/
