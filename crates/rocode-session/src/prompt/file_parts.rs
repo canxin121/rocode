@@ -3,7 +3,8 @@ use std::path::Path;
 
 use base64::Engine;
 
-use crate::system::SystemPrompt;
+use rocode_config::resolve_agents_for_file;
+use rocode_orchestrator::SystemPrompt;
 use crate::SessionMessage;
 
 use super::SessionPrompt;
@@ -253,7 +254,7 @@ impl SessionPrompt {
         let mut loaded = Self::loaded_instruction_paths(msg);
         let mut prompt_chunks = Vec::new();
 
-        for instruction in crate::instruction::resolve_agents_for_file(file_path, project_root) {
+        for instruction in resolve_agents_for_file(file_path, project_root) {
             if loaded.insert(instruction.path.clone()) {
                 prompt_chunks.push(format!(
                     "Instructions from: {}\n{}",
