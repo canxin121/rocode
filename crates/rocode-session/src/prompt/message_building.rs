@@ -3,9 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rocode_provider::{
-    get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider,
-};
+use rocode_provider::{get_model_context_limit, ChatResponse, Content, Provider};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -13,13 +11,12 @@ use crate::compaction::{
     ToolPartStatus,
 };
 use crate::message_v2::{
-    AssistantTime, AssistantTokens, CacheTokens, CompactionPart as V2CompactionPart, MessageInfo,
-    MessagePath, MessageWithParts, ModelRef as V2ModelRef, Part as V2Part, StepFinishPart,
-    StepStartPart, StepTokens, UserTime,
+    canonical_tool_state_to_v2, AssistantTime, AssistantTokens, CacheTokens,
+    CompactionPart as V2CompactionPart, MessageInfo, MessagePath, MessageWithParts,
+    ModelRef as V2ModelRef, Part as V2Part, StepFinishPart, StepStartPart, StepTokens, UserTime,
 };
 use crate::summary::{summarize_into_session, SummarizeInput};
 use crate::{PartType, Role, Session, SessionMessage};
-use rocode_message::ToolState as MessageToolState;
 
 use super::tools_and_output::{compose_session_title_source, generate_session_title_for_session};
 use super::SessionPrompt;
@@ -159,181 +156,6 @@ struct LegacyToolStateInput<'a> {
 }
 
 impl SessionPrompt {
-    pub(super) fn build_chat_messages(
-        session_messages: &[SessionMessage],
-        system_prompt: Option<&str>,
-    ) -> anyhow::Result<Vec<Message>> {
-        let mut messages = Vec::new();
-
-        if let Some(system) = system_prompt {
-            messages.push(Message::system(system));
-        }
-
-        for msg in session_messages {
-            // Skip messages with no parts — empty Tool/Assistant messages
-            // confuse providers (especially Anthropic which rejects empty content).
-            if msg.parts.is_empty() {
-                continue;
-            }
-
-            if matches!(msg.role, Role::Assistant)
-                && msg
-                    .parts
-                    .iter()
-                    .any(|p| matches!(p.part_type, PartType::ToolResult { .. }))
-            {
-                // Backward-compat: old sessions may carry tool_result parts on
-                // assistant messages. Split those into a synthetic tool-role
-                // message to preserve provider role expectations.
-                let mut assistant_parts = Vec::new();
-                let mut tool_parts = Vec::new();
-                for part in &msg.parts {
-                    if matches!(part.part_type, PartType::ToolResult { .. }) {
-                        tool_parts.push(part.clone());
-                    } else {
-                        assistant_parts.push(part.clone());
-                    }
-                }
-
-                if !assistant_parts.is_empty() {
-                    messages.push(Message {
-                        role: Role::Assistant,
-                        content: Self::parts_to_content(&assistant_parts),
-                        cache_control: None,
-                        provider_options: None,
-                    });
-                }
-                if !tool_parts.is_empty() {
-                    messages.push(Message {
-                        role: Role::Tool,
-                        content: Self::parts_to_content(&tool_parts),
-                        cache_control: None,
-                        provider_options: None,
-                    });
-                }
-                continue;
-            }
-
-            let content = Self::parts_to_content(&msg.parts);
-            let role = msg.role;
-
-            messages.push(Message {
-                role,
-                content,
-                cache_control: None,
-                provider_options: None,
-            });
-        }
-
-        Ok(messages)
-    }
-
-    pub(super) fn parts_to_content(parts: &[crate::MessagePart]) -> Content {
-        let has_parts = parts
-            .iter()
-            .any(|p| !matches!(p.part_type, PartType::Text { .. }));
-
-        if !has_parts {
-            let text = parts
-                .iter()
-                .filter_map(|p| match &p.part_type {
-                    PartType::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Content::Text(text);
-        }
-
-        let content_parts: Vec<ContentPart> = parts
-            .iter()
-            .filter_map(|p| match &p.part_type {
-                PartType::Text { text, .. } => Some(ContentPart {
-                    content_type: "text".to_string(),
-                    text: Some(text.clone()),
-                    image_url: None,
-                    tool_use: None,
-                    tool_result: None,
-                    cache_control: None,
-                    filename: None,
-                    media_type: None,
-                    provider_options: None,
-                }),
-                PartType::ToolCall {
-                    id, name, input, ..
-                } => Some(ContentPart {
-                    content_type: "tool_use".to_string(),
-                    text: None,
-                    image_url: None,
-                    tool_use: Some(rocode_provider::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                    }),
-                    tool_result: None,
-                    cache_control: None,
-                    filename: None,
-                    media_type: None,
-                    provider_options: None,
-                }),
-                PartType::ToolResult {
-                    tool_call_id,
-                    content,
-                    is_error,
-                    ..
-                } => Some(ContentPart {
-                    content_type: "tool_result".to_string(),
-                    text: None,
-                    image_url: None,
-                    tool_use: None,
-                    tool_result: Some(rocode_provider::ToolResult {
-                        tool_use_id: tool_call_id.clone(),
-                        content: content.clone(),
-                        is_error: Some(*is_error),
-                    }),
-                    cache_control: None,
-                    filename: None,
-                    media_type: None,
-                    provider_options: None,
-                }),
-                PartType::File {
-                    url,
-                    filename,
-                    mime,
-                } => {
-                    if mime.starts_with("image/") {
-                        Some(ContentPart {
-                            content_type: "image_url".to_string(),
-                            text: None,
-                            image_url: Some(rocode_provider::ImageUrl { url: url.clone() }),
-                            tool_use: None,
-                            tool_result: None,
-                            cache_control: None,
-                            filename: Some(filename.clone()),
-                            media_type: Some(mime.clone()),
-                            provider_options: None,
-                        })
-                    } else {
-                        Some(ContentPart {
-                            content_type: "text".to_string(),
-                            text: Some(format!("[File: {} ({})]", filename, mime)),
-                            image_url: None,
-                            tool_use: None,
-                            tool_result: None,
-                            cache_control: None,
-                            filename: Some(filename.clone()),
-                            media_type: Some(mime.clone()),
-                            provider_options: None,
-                        })
-                    }
-                }
-                _ => None,
-            })
-            .collect();
-
-        Content::Parts(content_parts)
-    }
-
     #[allow(dead_code)]
     pub(super) fn process_response(response: &ChatResponse) -> SessionMessage {
         let now = chrono::Utc::now();
@@ -417,34 +239,6 @@ impl SessionPrompt {
             usage: None,
             finish: finish_reason,
         }
-    }
-
-    pub(super) fn filter_compacted_messages(messages: &[SessionMessage]) -> Vec<SessionMessage> {
-        let start = messages
-            .iter()
-            .rposition(|m| {
-                m.parts
-                    .iter()
-                    .any(|p| matches!(p.part_type, PartType::Compaction { .. }))
-            })
-            .unwrap_or(0);
-        let tail = messages[start..].to_vec();
-        if tail.iter().any(|m| matches!(m.role, Role::User)) {
-            return tail;
-        }
-
-        // Keep the latest user anchor before the compaction boundary so prompt
-        // loop invariants hold (`last_user_idx` must exist).
-        if let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m.role, Role::User)) {
-            if last_user_idx < start {
-                let mut anchored = Vec::with_capacity(messages.len() - last_user_idx);
-                anchored.push(messages[last_user_idx].clone());
-                anchored.extend_from_slice(&messages[start..]);
-                return anchored;
-            }
-        }
-
-        tail
     }
 
     pub(super) fn token_usage_from_messages(messages: &[SessionMessage]) -> TokenUsage {
@@ -603,6 +397,14 @@ impl SessionPrompt {
             let meta = parse_message_metadata(&msg.metadata);
             let input = clamp_u64_to_i32(meta.tokens_input);
             let output = clamp_u64_to_i32(meta.tokens_output);
+            let tool_call_ids_in_message: HashSet<String> = msg
+                .parts
+                .iter()
+                .filter_map(|part| match &part.part_type {
+                    PartType::ToolCall { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect();
             let mut parts: Vec<V2Part> = msg
                 .parts
                 .iter()
@@ -646,7 +448,7 @@ impl SessionPrompt {
                     } => {
                         let state = state
                             .as_ref()
-                            .map(Self::message_tool_state_to_v2)
+                            .map(canonical_tool_state_to_v2)
                             .unwrap_or_else(|| {
                                 Self::legacy_tool_state_to_v2(LegacyToolStateInput {
                                     tool_call_id: id,
@@ -668,6 +470,43 @@ impl SessionPrompt {
                             state,
                             metadata: None,
                         }))
+                    }
+                    PartType::ToolResult {
+                        tool_call_id,
+                        content,
+                        title,
+                        metadata,
+                        ..
+                    } => {
+                        if tool_call_ids_in_message.contains(tool_call_id) {
+                            None
+                        } else {
+                            let now = chrono::Utc::now().timestamp_millis();
+                            Some(V2Part::Tool(crate::message_v2::ToolPart {
+                                id: part.id.clone(),
+                                session_id: msg.session_id.clone(),
+                                message_id: msg.id.clone(),
+                                call_id: tool_call_id.clone(),
+                                tool: title
+                                    .clone()
+                                    .unwrap_or_else(|| "legacy_tool_result".to_string()),
+                                state: crate::ToolState::Completed {
+                                    input: serde_json::json!({}),
+                                    output: content.clone(),
+                                    title: title
+                                        .clone()
+                                        .unwrap_or_else(|| "Legacy Tool Result".to_string()),
+                                    metadata: metadata.clone().unwrap_or_default(),
+                                    time: crate::CompletedTime {
+                                        start: now,
+                                        end: now,
+                                        compacted: None,
+                                    },
+                                    attachments: None,
+                                },
+                                metadata: None,
+                            }))
+                        }
                     }
                     _ => None,
                 })
@@ -775,70 +614,6 @@ impl SessionPrompt {
         }
 
         out
-    }
-
-    fn message_tool_state_to_v2(state: &MessageToolState) -> crate::message_v2::ToolState {
-        match state {
-            MessageToolState::Pending { input, raw } => crate::message_v2::ToolState::Pending {
-                input: input.clone(),
-                raw: raw.clone(),
-            },
-            MessageToolState::Running {
-                input,
-                title,
-                metadata,
-                time,
-            } => crate::message_v2::ToolState::Running {
-                input: input.clone(),
-                title: title.clone(),
-                metadata: metadata.clone(),
-                time: crate::RunningTime { start: time.start },
-            },
-            MessageToolState::Completed {
-                input,
-                output,
-                title,
-                metadata,
-                time,
-                attachments,
-            } => {
-                let files = attachments.as_ref().map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| {
-                            serde_json::from_value::<crate::message_v2::FilePart>(value.clone())
-                                .ok()
-                        })
-                        .collect::<Vec<_>>()
-                });
-                crate::message_v2::ToolState::Completed {
-                    input: input.clone(),
-                    output: output.clone(),
-                    title: title.clone(),
-                    metadata: metadata.clone(),
-                    time: crate::CompletedTime {
-                        start: time.start,
-                        end: time.end,
-                        compacted: time.compacted,
-                    },
-                    attachments: files,
-                }
-            }
-            MessageToolState::Error {
-                input,
-                error,
-                metadata,
-                time,
-            } => crate::message_v2::ToolState::Error {
-                input: input.clone(),
-                error: error.clone(),
-                metadata: metadata.clone(),
-                time: crate::ErrorTime {
-                    start: time.start,
-                    end: time.end,
-                },
-            },
-        }
     }
 
     fn legacy_tool_state_to_v2(input_data: LegacyToolStateInput<'_>) -> crate::ToolState {
@@ -1156,7 +931,7 @@ mod tests {
         });
         let after = SessionMessage::user(session_id, "after");
 
-        let filtered = SessionPrompt::filter_compacted_messages(&[before, compact, after]);
+        let filtered = rocode_message::filter_compacted_messages(&[before, compact, after]);
         assert_eq!(filtered.len(), 2);
         assert!(filtered[0]
             .parts
@@ -1181,7 +956,7 @@ mod tests {
 
         let assistant_after = SessionMessage::assistant(session_id);
         let filtered =
-            SessionPrompt::filter_compacted_messages(&[user.clone(), compact, assistant_after]);
+            rocode_message::filter_compacted_messages(&[user.clone(), compact, assistant_after]);
 
         assert_eq!(filtered.len(), 3);
         assert!(matches!(filtered[0].role, Role::User));
@@ -1352,13 +1127,16 @@ mod tests {
     }
 
     #[test]
-    fn build_chat_messages_splits_legacy_assistant_tool_results() {
+    fn to_model_messages_splits_legacy_assistant_tool_results() {
         let sid = "sid".to_string();
         let mut assistant = SessionMessage::assistant(sid);
         assistant.add_text("working");
         assistant.add_tool_result("call_1", "ok", false);
 
-        let messages = SessionPrompt::build_chat_messages(&[assistant], None).unwrap();
+        let message_with_parts =
+            SessionPrompt::to_message_with_parts(&[assistant], "openai", "gpt-4o", ".");
+        let model = rocode_message::message_v2::model_context_from_ids("openai", "gpt-4o");
+        let messages = rocode_message::message_v2::to_model_messages(&message_with_parts, &model);
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0].role, Role::Assistant));
         assert!(matches!(messages[1].role, Role::Tool));

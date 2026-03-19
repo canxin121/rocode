@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::{PartType, Session, SessionMessage};
+use rocode_message::message_v2::v2_tool_state_to_canonical;
 use rocode_message::{ErrorTime as MessageErrorTime, ToolState as MessageToolState};
 
 use super::SessionPrompt;
@@ -60,7 +61,7 @@ impl SessionPrompt {
                         *part_status = next_status.clone();
                     }
                     if let Some(next_state) = tool_state.as_ref() {
-                        *state = Some(Self::v2_tool_state_to_message(next_state));
+                        *state = Some(v2_tool_state_to_canonical(next_state));
                     }
                     found = true;
                     break;
@@ -80,71 +81,11 @@ impl SessionPrompt {
                 input: input.unwrap_or_else(|| serde_json::json!({})),
                 status: status.unwrap_or(crate::ToolCallStatus::Pending),
                 raw: raw_input,
-                state: tool_state
-                    .as_ref()
-                    .map(SessionPrompt::v2_tool_state_to_message),
+                state: tool_state.as_ref().map(v2_tool_state_to_canonical),
             },
             created_at: chrono::Utc::now(),
             message_id: None,
         });
-    }
-
-    pub(super) fn v2_tool_state_to_message(state: &crate::ToolState) -> MessageToolState {
-        match state {
-            crate::ToolState::Pending { input, raw } => MessageToolState::Pending {
-                input: input.clone(),
-                raw: raw.clone(),
-            },
-            crate::ToolState::Running {
-                input,
-                title,
-                metadata,
-                time,
-            } => MessageToolState::Running {
-                input: input.clone(),
-                title: title.clone(),
-                metadata: metadata.clone(),
-                time: rocode_message::RunningTime { start: time.start },
-            },
-            crate::ToolState::Completed {
-                input,
-                output,
-                title,
-                metadata,
-                time,
-                attachments,
-            } => MessageToolState::Completed {
-                input: input.clone(),
-                output: output.clone(),
-                title: title.clone(),
-                metadata: metadata.clone(),
-                time: rocode_message::CompletedTime {
-                    start: time.start,
-                    end: time.end,
-                    compacted: time.compacted,
-                },
-                attachments: attachments.as_ref().map(|files| {
-                    files
-                        .iter()
-                        .filter_map(|file| serde_json::to_value(file).ok())
-                        .collect()
-                }),
-            },
-            crate::ToolState::Error {
-                input,
-                error,
-                metadata,
-                time,
-            } => MessageToolState::Error {
-                input: input.clone(),
-                error: error.clone(),
-                metadata: metadata.clone(),
-                time: MessageErrorTime {
-                    start: time.start,
-                    end: time.end,
-                },
-            },
-        }
     }
 
     pub(super) fn state_projection(

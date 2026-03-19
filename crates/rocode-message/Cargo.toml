@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 rocode-types = { path = "../rocode-types" }
+rocode-provider = { path = "../rocode-provider" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+anyhow = { workspace = true }

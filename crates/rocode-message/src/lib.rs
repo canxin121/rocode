@@ -10,12 +10,13 @@
 mod finish;
 mod id;
 mod message;
+pub mod message_v2;
 mod part;
 mod status;
 mod usage;
 
 pub use finish::{normalize_finish_reason, FinishReason};
-pub use message::{Message, SessionMessage};
+pub use message::{filter_compacted_messages, Message, SessionMessage};
 pub use part::{CompletedTime, ErrorTime, MessagePart, PartKind, PartType, RunningTime, ToolState};
 pub use rocode_types::Role;
 pub use status::ToolCallStatus;

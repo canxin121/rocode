@@ -7,6 +7,11 @@ use rocode_provider::{
     ToolResult as ProviderToolResult, ToolUse,
 };
 
+use crate::{
+    CompletedTime as CanonCompletedTime, ErrorTime as CanonErrorTime,
+    RunningTime as CanonRunningTime, ToolState as CanonToolState,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum FilePartSource {
@@ -223,6 +228,126 @@ pub struct ToolPart {
     pub state: ToolState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+pub fn v2_tool_state_to_canonical(state: &ToolState) -> CanonToolState {
+    match state {
+        ToolState::Pending { input, raw } => CanonToolState::Pending {
+            input: input.clone(),
+            raw: raw.clone(),
+        },
+        ToolState::Running {
+            input,
+            title,
+            metadata,
+            time,
+        } => CanonToolState::Running {
+            input: input.clone(),
+            title: title.clone(),
+            metadata: metadata.clone(),
+            time: CanonRunningTime { start: time.start },
+        },
+        ToolState::Completed {
+            input,
+            output,
+            title,
+            metadata,
+            time,
+            attachments,
+        } => CanonToolState::Completed {
+            input: input.clone(),
+            output: output.clone(),
+            title: title.clone(),
+            metadata: metadata.clone(),
+            time: CanonCompletedTime {
+                start: time.start,
+                end: time.end,
+                compacted: time.compacted,
+            },
+            attachments: attachments.as_ref().map(|files| {
+                files
+                    .iter()
+                    .filter_map(|file| serde_json::to_value(file).ok())
+                    .collect()
+            }),
+        },
+        ToolState::Error {
+            input,
+            error,
+            metadata,
+            time,
+        } => CanonToolState::Error {
+            input: input.clone(),
+            error: error.clone(),
+            metadata: metadata.clone(),
+            time: CanonErrorTime {
+                start: time.start,
+                end: time.end,
+            },
+        },
+    }
+}
+
+pub fn canonical_tool_state_to_v2(state: &CanonToolState) -> ToolState {
+    match state {
+        CanonToolState::Pending { input, raw } => ToolState::Pending {
+            input: input.clone(),
+            raw: raw.clone(),
+        },
+        CanonToolState::Running {
+            input,
+            title,
+            metadata,
+            time,
+        } => ToolState::Running {
+            input: input.clone(),
+            title: title.clone(),
+            metadata: metadata.clone(),
+            time: RunningTime { start: time.start },
+        },
+        CanonToolState::Completed {
+            input,
+            output,
+            title,
+            metadata,
+            time,
+            attachments,
+        } => {
+            let files = attachments.as_ref().map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| serde_json::from_value::<FilePart>(value.clone()).ok())
+                    .collect::<Vec<_>>()
+            });
+
+            ToolState::Completed {
+                input: input.clone(),
+                output: output.clone(),
+                title: title.clone(),
+                metadata: metadata.clone(),
+                time: CompletedTime {
+                    start: time.start,
+                    end: time.end,
+                    compacted: time.compacted,
+                },
+                attachments: files,
+            }
+        }
+        CanonToolState::Error {
+            input,
+            error,
+            metadata,
+            time,
+        } => ToolState::Error {
+            input: input.clone(),
+            error: error.clone(),
+            metadata: metadata.clone(),
+            time: ErrorTime {
+                start: time.start,
+                end: time.end,
+            },
+        },
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -539,6 +664,23 @@ pub struct ModelContext {
     pub api_npm: String,
     /// The provider-level API id (used for Gemini version checks).
     pub api_id: String,
+}
+
+pub fn model_context_from_ids(provider_id: &str, model_id: &str) -> ModelContext {
+    let api_npm = match provider_id {
+        "anthropic" => "@ai-sdk/anthropic",
+        "openai" => "@ai-sdk/openai",
+        "bedrock" | "amazon-bedrock" => "@ai-sdk/amazon-bedrock",
+        "google" | "gemini" => "@ai-sdk/google",
+        _ => "",
+    };
+
+    ModelContext {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        api_npm: api_npm.to_string(),
+        api_id: model_id.to_string(),
+    }
 }
 
 /// Filter messages down to the window after the last compaction boundary.

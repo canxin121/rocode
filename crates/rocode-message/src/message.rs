@@ -280,6 +280,36 @@ impl SessionMessage {
     }
 }
 
+/// Keep messages after the latest compaction boundary.
+///
+/// If the resulting tail has no user message, keep the latest user message
+/// before the boundary as an anchor for prompt-loop invariants.
+pub fn filter_compacted_messages(messages: &[SessionMessage]) -> Vec<SessionMessage> {
+    let start = messages
+        .iter()
+        .rposition(|m| {
+            m.parts
+                .iter()
+                .any(|p| matches!(p.part_type, PartType::Compaction { .. }))
+        })
+        .unwrap_or(0);
+    let tail = messages[start..].to_vec();
+    if tail.iter().any(|m| matches!(m.role, Role::User)) {
+        return tail;
+    }
+
+    if let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m.role, Role::User)) {
+        if last_user_idx < start {
+            let mut anchored = Vec::with_capacity(messages.len() - last_user_idx);
+            anchored.push(messages[last_user_idx].clone());
+            anchored.extend_from_slice(&messages[start..]);
+            return anchored;
+        }
+    }
+
+    tail
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +337,33 @@ mod tests {
         let mut message = SessionMessage::assistant("ses_1");
         message.finish = Some("toolCalls".to_string());
         assert_eq!(message.finish_reason(), Some(FinishReason::ToolCalls));
+    }
+
+    #[test]
+    fn filter_compacted_keeps_tail_after_last_compaction() {
+        let before = SessionMessage::assistant("ses_1");
+        let mut compact = SessionMessage::assistant("ses_1");
+        compact.add_compaction("summary");
+        let after = SessionMessage::assistant("ses_1");
+
+        let filtered = filter_compacted_messages(&[before, compact, after]);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0]
+            .parts
+            .iter()
+            .any(|part| matches!(part.part_type, PartType::Compaction { .. })));
+    }
+
+    #[test]
+    fn filter_compacted_keeps_latest_user_anchor_when_tail_has_no_user() {
+        let user = SessionMessage::user("ses_1", "anchor");
+        let mut compact = SessionMessage::assistant("ses_1");
+        compact.add_compaction("summary");
+        let assistant_after = SessionMessage::assistant("ses_1");
+
+        let filtered = filter_compacted_messages(&[user.clone(), compact, assistant_after]);
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].id, user.id);
+        assert!(matches!(filtered[0].role, Role::User));
     }
 }

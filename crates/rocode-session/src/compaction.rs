@@ -12,11 +12,12 @@ use rocode_plugin::{HookContext, HookEvent};
 use serde::{Deserialize, Serialize};
 
 use crate::message_v2::{
-    AssistantTime, AssistantTokens, CacheTokens, CompletedTime, MessageInfo, MessagePath,
-    MessageWithParts, ModelRef, Part, TextTime, ToolState, UserTime,
+    model_context_from_ids, to_model_messages, AssistantTime, AssistantTokens, CacheTokens,
+    CompletedTime, MessageInfo, MessagePath, MessageWithParts, ModelRef, Part, TextTime, ToolState,
+    UserTime,
 };
 use crate::prompt::hooks::parse_hook_payload;
-use rocode_provider::{Content, ContentPart, ImageUrl, Message, Provider, Role};
+use rocode_provider::{Message, Provider, Role};
 
 const COMPACTION_BUFFER: u64 = 20_000;
 const PRUNE_MINIMUM: u64 = 20_000;
@@ -539,7 +540,9 @@ When constructing the summary, try to stick to this template:
         // TS: messages: [...MessageV2.toModelMessages(input.messages, model), { role: "user", ... }]
         // Convert MessageWithParts to provider messages, then append the compaction prompt.
         let mut provider_messages = if !input.messages_with_parts.is_empty() {
-            to_provider_messages_for_compaction(&input.messages_with_parts)
+            let model_context =
+                model_context_from_ids(&input.model.provider_id, &input.model.model_id);
+            to_model_messages(&input.messages_with_parts, &model_context)
         } else {
             input.messages
         };
@@ -955,97 +958,6 @@ fn resolve_compaction_prompt(
             parts.join("\n\n")
         }
     })
-}
-
-fn to_provider_messages_for_compaction(messages: &[MessageWithParts]) -> Vec<Message> {
-    messages
-        .iter()
-        .filter_map(|msg| message_to_provider_for_compaction(&msg.info, &msg.parts))
-        .collect()
-}
-
-fn message_to_provider_for_compaction(info: &MessageInfo, parts: &[Part]) -> Option<Message> {
-    let role = match info {
-        MessageInfo::User { .. } => Role::User,
-        MessageInfo::Assistant { .. } => Role::Assistant,
-    };
-
-    let content = if parts.len() == 1 {
-        match &parts[0] {
-            Part::Text { text, .. } => Content::Text(text.clone()),
-            _ => Content::Parts(
-                parts
-                    .iter()
-                    .filter_map(part_to_content_part_for_compaction)
-                    .collect(),
-            ),
-        }
-    } else {
-        Content::Parts(
-            parts
-                .iter()
-                .filter_map(part_to_content_part_for_compaction)
-                .collect(),
-        )
-    };
-
-    Some(Message {
-        role,
-        content,
-        cache_control: None,
-        provider_options: None,
-    })
-}
-
-fn part_to_content_part_for_compaction(part: &Part) -> Option<ContentPart> {
-    match part {
-        Part::Text { text, .. } => Some(ContentPart {
-            content_type: "text".to_string(),
-            text: Some(text.clone()),
-            image_url: None,
-            tool_use: None,
-            tool_result: None,
-            cache_control: None,
-            filename: None,
-            media_type: None,
-            provider_options: None,
-        }),
-        Part::File(file_part) => Some(ContentPart {
-            content_type: "file".to_string(),
-            text: None,
-            image_url: Some(ImageUrl {
-                url: file_part.url.clone(),
-            }),
-            tool_use: None,
-            tool_result: None,
-            cache_control: None,
-            filename: file_part.filename.clone(),
-            media_type: Some(file_part.mime.clone()),
-            provider_options: None,
-        }),
-        Part::Tool(tool_part) => {
-            if let crate::ToolState::Completed { output, .. } = &tool_part.state {
-                Some(ContentPart {
-                    content_type: "tool_result".to_string(),
-                    text: Some(output.clone()),
-                    image_url: None,
-                    tool_use: None,
-                    tool_result: Some(rocode_provider::ToolResult {
-                        tool_use_id: tool_part.call_id.clone(),
-                        content: output.clone(),
-                        is_error: Some(false),
-                    }),
-                    cache_control: None,
-                    filename: None,
-                    media_type: None,
-                    provider_options: None,
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 pub struct RunCompactionOptions<'a, S: SessionOps> {

@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 use rocode_content::output_blocks::{
     MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, ToolBlock,
 };
+use rocode_message::message_v2::{model_context_from_ids, to_model_messages};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -1799,8 +1800,15 @@ impl SessionPrompt {
             .last()
             .map(|m| m.id.clone())
             .unwrap_or_default();
+        let compaction_messages_with_parts = Self::to_message_with_parts(
+            filtered_messages,
+            provider_id,
+            model_id,
+            &session.directory,
+        );
+        let compaction_model_context = model_context_from_ids(provider_id, model_id);
         let compaction_messages =
-            Self::build_chat_messages(filtered_messages, None).unwrap_or_default();
+            to_model_messages(&compaction_messages_with_parts, &compaction_model_context);
         let model_ref = V2ModelRef {
             provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
@@ -1850,6 +1858,9 @@ impl SessionPrompt {
     /// final provider-format chat messages for the LLM call.
     async fn prepare_chat_messages(
         session_id: &str,
+        provider_id: &str,
+        model_id: &str,
+        session_directory: &str,
         agent_name: Option<&str>,
         system_prompt: Option<&str>,
         mut filtered_messages: Vec<SessionMessage>,
@@ -1880,7 +1891,13 @@ impl SessionPrompt {
             prompt_messages = insert_reminders(&prompt_messages, agent, was_plan);
         }
 
-        let mut chat_messages = Self::build_chat_messages(&prompt_messages, system_prompt)?;
+        let prompt_messages_with_parts =
+            Self::to_message_with_parts(&prompt_messages, provider_id, model_id, session_directory);
+        let model_context = model_context_from_ids(provider_id, model_id);
+        let mut chat_messages = to_model_messages(&prompt_messages_with_parts, &model_context);
+        if let Some(system) = system_prompt {
+            chat_messages.insert(0, rocode_provider::Message::system(system));
+        }
         apply_caching(&mut chat_messages, provider_type);
         Ok(chat_messages)
     }
@@ -2009,7 +2026,7 @@ impl SessionPrompt {
                 break;
             }
 
-            let filtered_messages = Self::filter_compacted_messages(&session.messages);
+            let filtered_messages = rocode_message::filter_compacted_messages(&session.messages);
 
             let last_user_idx = filtered_messages
                 .iter()
@@ -2081,6 +2098,9 @@ impl SessionPrompt {
             // ── Prepare chat messages (plugin transforms, reminders, caching) ──
             let chat_messages = Self::prepare_chat_messages(
                 &session_id,
+                &prompt_ctx.provider_id,
+                &prompt_ctx.model_id,
+                &session.directory,
                 prompt_ctx.agent_name.as_deref(),
                 prompt_ctx.system_prompt.as_deref(),
                 filtered_messages,

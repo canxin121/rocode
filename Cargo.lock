@@ -3495,7 +3495,9 @@ dependencies = [
 name = "rocode-message"
 version = "2026.3.16"
 dependencies = [
+ "anyhow",
  "chrono",
+ "rocode-provider",
  "rocode-types",
  "serde",
  "serde_json",
@@ -3579,7 +3581,6 @@ dependencies = [
  "reqwest",
  "reqwest-eventsource",
  "rocode-core",
- "rocode-message",
  "rocode-types",
  "rocode-util",
  "serde",
