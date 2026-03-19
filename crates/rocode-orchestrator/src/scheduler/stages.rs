@@ -167,6 +167,7 @@ impl FilteredToolExecutor {
     fn is_allowed(&self, tool_name: &str) -> bool {
         match &self.allowed_tools {
             None => true,
+            Some(allowed) if allowed.is_empty() => false,
             Some(allowed) => {
                 allowlist_allows_tool(tool_name, &allowed.iter().cloned().collect::<Vec<_>>())
             }
