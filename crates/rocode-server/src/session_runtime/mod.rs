@@ -1,8 +1,8 @@
 pub(crate) mod events;
 pub(crate) mod state;
+pub(crate) mod todo;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -13,9 +13,9 @@ use self::events::{
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
-    MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, SchedulerDecisionBlock,
-    SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
-    SchedulerStageBlock,
+    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
+    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
+    SchedulerDecisionSection, SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -26,7 +26,7 @@ use rocode_orchestrator::{
 use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
-use rocode_session::{MessageUsage, PartType, Role, Session, SessionMessage};
+use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -384,79 +384,51 @@ where
     Some(result)
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct SessionMessageMetadataWire {
-    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
-    scheduler_stage_emitted: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
-    scheduler_stage_streaming: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_stage_status: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_stage_waiting_on: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_stage_last_event: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_stage_id: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_profile: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    resolved_scheduler_profile: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_stage: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
-    scheduler_stage_index: Option<u32>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    step_start_snapshot: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    step_finish_snapshot: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_decision_kind: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    scheduler_decision_title: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_decision_spec_lossy")]
-    scheduler_decision_spec: Option<SchedulerDecisionRenderSpec>,
-    #[serde(default, deserialize_with = "deserialize_decision_fields_lossy")]
-    scheduler_decision_fields: Vec<SchedulerDecisionField>,
-    #[serde(default, deserialize_with = "deserialize_decision_sections_lossy")]
-    scheduler_decision_sections: Vec<SchedulerDecisionSection>,
-}
-
-fn session_message_metadata_wire(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> SessionMessageMetadataWire {
-    let Ok(value) = serde_json::to_value(metadata) else {
-        return SessionMessageMetadataWire::default();
-    };
-    serde_json::from_value::<SessionMessageMetadataWire>(value).unwrap_or_default()
-}
-
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
     session.messages.iter_mut().rev().find(|message| {
-        if message.role != Role::Assistant {
-            return false;
-        }
-
-        let metadata = session_message_metadata_wire(&message.metadata);
-        if !metadata.scheduler_stage_emitted.unwrap_or(false) {
-            return false;
-        }
-
-        metadata.scheduler_stage_streaming.unwrap_or(false)
-            || matches!(
-                metadata.scheduler_stage_status.as_deref(),
-                Some("running" | "waiting" | "cancelling")
-            )
+        message.role == MessageRole::Assistant
+            && message
+                .metadata
+                .get("scheduler_stage_emitted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            && (message
+                .metadata
+                .get("scheduler_stage_streaming")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || matches!(
+                    message
+                        .metadata
+                        .get("scheduler_stage_status")
+                        .and_then(|value| value.as_str()),
+                    Some("running" | "waiting" | "cancelling")
+                ))
     })
 }
 
 fn scheduler_abort_info(message: &SessionMessage) -> SchedulerAbortInfo {
-    let metadata = session_message_metadata_wire(&message.metadata);
     SchedulerAbortInfo {
-        execution_id: metadata.scheduler_stage_id,
-        scheduler_profile: metadata.scheduler_profile,
-        stage_name: metadata.scheduler_stage,
-        stage_index: metadata.scheduler_stage_index,
+        execution_id: message
+            .metadata
+            .get("scheduler_stage_id")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        scheduler_profile: message
+            .metadata
+            .get("scheduler_profile")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        stage_name: message
+            .metadata
+            .get("scheduler_stage")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        stage_index: message
+            .metadata
+            .get("scheduler_stage_index")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u32),
     }
 }
 
@@ -773,19 +745,20 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             let mut to_snapshot: Option<String> = None;
 
             for msg in &session.messages {
-                let metadata = session_message_metadata_wire(&msg.metadata);
                 if from_snapshot.is_none() {
-                    if let Some(s) = metadata
-                        .step_start_snapshot
-                        .as_deref()
+                    if let Some(s) = msg
+                        .metadata
+                        .get("step_start_snapshot")
+                        .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
                     {
                         from_snapshot = Some(s.to_string());
                     }
                 }
-                if let Some(s) = metadata
-                    .step_finish_snapshot
-                    .as_deref()
+                if let Some(s) = msg
+                    .metadata
+                    .get("step_finish_snapshot")
+                    .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                 {
                     to_snapshot = Some(s.to_string());
@@ -1199,7 +1172,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             .messages
                             .iter()
                             .rev()
-                            .find(|m| m.role == Role::Assistant)
+                            .find(|m| m.role == MessageRole::Assistant)
                         {
                             (Some(last_assistant.id.clone()), None, None, false, false)
                         } else {
@@ -1452,21 +1425,23 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 }
 
 fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatch {
-    let metadata = session_message_metadata_wire(&message.metadata);
     ExecutionPatch {
-        status: metadata
-            .scheduler_stage_status
-            .as_deref()
+        status: message
+            .metadata
+            .get("scheduler_stage_status")
+            .and_then(|value| value.as_str())
             .and_then(runtime_execution_status_from_stage_status),
-        waiting_on: metadata
-            .scheduler_stage_waiting_on
-            .as_deref()
+        waiting_on: message
+            .metadata
+            .get("scheduler_stage_waiting_on")
+            .and_then(|value| value.as_str())
             .filter(|value| *value != "none" && !value.is_empty())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Clear),
-        recent_event: metadata
-            .scheduler_stage_last_event
-            .as_deref()
+        recent_event: message
+            .metadata
+            .get("scheduler_stage_last_event")
+            .and_then(|value| value.as_str())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Keep),
         metadata: FieldUpdate::Set(scheduler_stage_runtime_metadata(message)),
@@ -1593,34 +1568,21 @@ fn summarize_tool_result_activity(
 }
 
 fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
-    #[derive(Debug, Deserialize)]
-    struct QuestionArguments {
-        #[serde(default)]
-        questions: Vec<QuestionDef>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct QuestionDef {
-        #[serde(default)]
-        header: Option<String>,
-        #[serde(default)]
-        question: String,
-    }
-
-    let args = serde_json::from_value::<QuestionArguments>(tool_args.clone()).ok()?;
-    if args.questions.is_empty() {
+    let questions = tool_args.get("questions")?.as_array()?;
+    if questions.is_empty() {
         return None;
     }
-
-    let mut lines = vec![format!("Question ({})", args.questions.len())];
-    for question in args.questions.iter().take(3) {
+    let mut lines = vec![format!("Question ({})", questions.len())];
+    for question in questions.iter().take(3) {
         let header = question
-            .header
-            .as_deref()
-            .map(str::trim)
+            .get("header")
+            .and_then(|value| value.as_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("Prompt");
-        let text = question.question.trim();
+        let text = question
+            .get("question")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         if !text.is_empty() {
             lines.push(format!("- {header}: {}", collapse_text(text, 96)));
         }
@@ -1629,63 +1591,41 @@ fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
-    #[derive(Debug, Deserialize)]
-    struct TodoArguments {
-        #[serde(default)]
-        todos: Vec<TodoItem>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TodoItem {
-        #[serde(default)]
-        content: Option<String>,
-        #[serde(default)]
-        status: Option<String>,
-    }
-
-    let args = serde_json::from_value::<TodoArguments>(tool_args.clone()).ok()?;
-    if args.todos.is_empty() {
+    let todos = tool_args.get("todos")?.as_array()?;
+    if todos.is_empty() {
         return None;
     }
-
-    let mut lines = vec![format!("Todo list ({})", args.todos.len())];
-    for todo in args.todos.iter().take(5) {
-        let content = todo.content.as_deref().map(str::trim).unwrap_or("");
-        if content.is_empty() {
-            continue;
-        }
-        let status = todo.status.as_deref().unwrap_or("pending");
+    let mut lines = vec![format!("Todo list ({})", todos.len())];
+    for todo in todos.iter().take(5) {
+        let content = todo.get("content").and_then(|value| value.as_str())?;
+        let status = todo
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("pending");
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
             collapse_text(content, 88)
         ));
     }
-
     Some(lines.join("\n"))
 }
 
 fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
-    #[derive(Debug, Deserialize, Default)]
-    struct TaskArguments {
-        #[serde(default, rename = "subagent_type", alias = "subagentType")]
-        subagent_type: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
-        #[serde(default)]
-        description: Option<String>,
-        #[serde(default)]
-        prompt: Option<String>,
-    }
-
-    let args = serde_json::from_value::<TaskArguments>(tool_args.clone()).unwrap_or_default();
-    let agent = args
-        .subagent_type
-        .as_deref()
-        .or_else(|| args.category.as_deref())
+    let agent = tool_args
+        .get("subagent_type")
+        .or_else(|| tool_args.get("subagentType"))
+        .or_else(|| tool_args.get("category"))
+        .and_then(|value| value.as_str())
         .unwrap_or("subagent");
-    let description = args.description.as_deref().unwrap_or("");
-    let prompt = args.prompt.as_deref().unwrap_or("");
+    let description = tool_args
+        .get("description")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let prompt = tool_args
+        .get("prompt")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let mut lines = vec![format!("Task → {}", prettify_token(agent))];
     if !description.is_empty() {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
@@ -1697,46 +1637,30 @@ fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_task_flow_args(tool_args: &serde_json::Value) -> Option<String> {
-    #[derive(Debug, Deserialize, Default)]
-    struct TaskFlowArguments {
-        #[serde(default)]
-        operation: Option<String>,
-        #[serde(default)]
-        agent: Option<String>,
-        #[serde(default)]
-        description: Option<String>,
-        #[serde(default)]
-        prompt: Option<String>,
-        #[serde(default)]
-        todo_item: Option<TodoItem>,
-    }
-
-    #[derive(Debug, Deserialize, Default)]
-    struct TodoItem {
-        #[serde(default)]
-        content: Option<String>,
-    }
-
-    let args = serde_json::from_value::<TaskFlowArguments>(tool_args.clone()).unwrap_or_default();
-    let operation = args.operation.as_deref().unwrap_or("unknown");
+    let operation = tool_args
+        .get("operation")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
     let mut lines = vec![format!("TaskFlow → {}", prettify_token(operation))];
-    if let Some(agent) = args.agent.as_deref() {
+    if let Some(agent) = tool_args.get("agent").and_then(|value| value.as_str()) {
         lines.push(format!("- agent: {}", prettify_token(agent)));
     }
-    if let Some(description) = args.description.as_deref() {
+    if let Some(description) = tool_args
+        .get("description")
+        .and_then(|value| value.as_str())
+    {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
     }
-    if let Some(prompt) = args.prompt.as_deref() {
+    if let Some(prompt) = tool_args.get("prompt").and_then(|value| value.as_str()) {
         lines.push(format!("- prompt: {}", collapse_text(prompt, 88)));
     }
-    if let Some(content) = args
-        .todo_item
-        .as_ref()
-        .and_then(|todo| todo.content.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    if let Some(todo_item) = tool_args
+        .get("todo_item")
+        .and_then(|value| value.as_object())
     {
-        lines.push(format!("- todo: {}", collapse_text(content, 88)));
+        if let Some(content) = todo_item.get("content").and_then(|value| value.as_str()) {
+            lines.push(format!("- todo: {}", collapse_text(content, 88)));
+        }
     }
     Some(lines.join("\n"))
 }
@@ -1770,8 +1694,13 @@ impl StageCapabilityActivityEvidence {
         push_unique_trimmed(&mut self.categories, value);
     }
 
-    fn push_skill(&mut self, value: Option<&str>) {
-        push_unique_trimmed(&mut self.skills, value);
+    fn push_skills_from_array(&mut self, value: Option<&serde_json::Value>) {
+        let Some(values) = value.and_then(|value| value.as_array()) else {
+            return;
+        };
+        for skill in values.iter().filter_map(|value| value.as_str()) {
+            push_unique_trimmed(&mut self.skills, Some(skill));
+        }
     }
 }
 
@@ -1802,107 +1731,47 @@ fn extract_stage_capability_activity(
                 return evidence;
             }
 
-            #[derive(Debug, Deserialize, Default)]
-            struct CapabilityArgsWire {
-                #[serde(
-                    default,
-                    rename = "subagent_type",
-                    alias = "subagentType",
-                    deserialize_with = "deserialize_opt_string_lossy"
-                )]
-                subagent_type: Option<String>,
-                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-                agent: Option<String>,
-                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-                category: Option<String>,
-                #[serde(
-                    default,
-                    rename = "load_skills",
-                    alias = "loadedSkills",
-                    deserialize_with = "deserialize_opt_vec_string_lossy"
-                )]
-                load_skills: Option<Vec<String>>,
-            }
-
-            let wire =
-                serde_json::from_value::<CapabilityArgsWire>(args.clone()).unwrap_or_default();
             evidence.push_agent(
-                wire.subagent_type
-                    .as_deref()
-                    .or_else(|| wire.agent.as_deref()),
+                args.get("subagent_type")
+                    .or_else(|| args.get("subagentType"))
+                    .or_else(|| args.get("agent"))
+                    .and_then(|value| value.as_str()),
             );
-            evidence.push_category(wire.category.as_deref());
-            if let Some(skills) = wire.load_skills.as_ref() {
-                for skill in skills {
-                    evidence.push_skill(Some(skill.as_str()));
-                }
-            }
+            evidence.push_category(args.get("category").and_then(|value| value.as_str()));
+            evidence.push_skills_from_array(
+                args.get("load_skills").or_else(|| args.get("loadedSkills")),
+            );
         }
         StageCapabilityActivitySource::ToolOutput(tool_output) => {
             let Some(metadata) = tool_output.metadata.as_ref() else {
                 return evidence;
             };
-
-            #[derive(Debug, Deserialize, Default)]
-            struct CapabilityTaskMetadataWire {
-                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-                agent: Option<String>,
-                #[serde(
-                    default,
-                    rename = "loadedSkills",
-                    deserialize_with = "deserialize_opt_vec_string_lossy"
-                )]
-                loaded_skills: Option<Vec<String>>,
-            }
-
-            #[derive(Debug, Deserialize, Default)]
-            struct CapabilityMetadataWire {
-                #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
-                delegated: Option<bool>,
-                #[serde(default, rename = "agentTaskId")]
-                agent_task_id: Option<serde_json::Value>,
-                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-                agent: Option<String>,
-                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-                category: Option<String>,
-                #[serde(
-                    default,
-                    rename = "loadedSkills",
-                    alias = "load_skills",
-                    deserialize_with = "deserialize_opt_vec_string_lossy"
-                )]
-                loaded_skills: Option<Vec<String>>,
-                #[serde(default)]
-                task: Option<CapabilityTaskMetadataWire>,
-            }
-
-            let wire = serde_json::from_value::<CapabilityMetadataWire>(metadata.clone())
-                .unwrap_or_default();
-            let supports = matches!(tool_name, "task" | "task_flow")
-                || wire.delegated.unwrap_or(false)
-                || wire.agent_task_id.is_some()
-                || wire.task.is_some();
-            if !supports {
+            if !tool_supports_stage_capability_activity_output(tool_name, metadata) {
                 return evidence;
             }
 
             evidence.push_agent(
-                wire.agent
-                    .as_deref()
-                    .or_else(|| wire.task.as_ref().and_then(|task| task.agent.as_deref())),
+                metadata
+                    .get("agent")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| {
+                        metadata
+                            .get("task")
+                            .and_then(|value| value.get("agent"))
+                            .and_then(|value| value.as_str())
+                    }),
             );
-            evidence.push_category(wire.category.as_deref());
-            if let Some(skills) = wire.loaded_skills.as_ref() {
-                for skill in skills {
-                    evidence.push_skill(Some(skill.as_str()));
-                }
-            } else if let Some(task) = wire.task.as_ref() {
-                if let Some(skills) = task.loaded_skills.as_ref() {
-                    for skill in skills {
-                        evidence.push_skill(Some(skill.as_str()));
-                    }
-                }
-            }
+            evidence.push_category(metadata.get("category").and_then(|value| value.as_str()));
+            evidence.push_skills_from_array(
+                metadata
+                    .get("loadedSkills")
+                    .or_else(|| metadata.get("load_skills"))
+                    .or_else(|| {
+                        metadata
+                            .get("task")
+                            .and_then(|value| value.get("loadedSkills"))
+                    }),
+            );
         }
     }
 
@@ -1913,97 +1782,17 @@ fn tool_supports_stage_capability_activity_args(tool_name: &str) -> bool {
     matches!(tool_name, "task" | "task_flow")
 }
 
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Bool(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => {
-            value.as_u64().and_then(|value| u32::try_from(value).ok())
-        }
-        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_decision_spec_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Option<SchedulerDecisionRenderSpec>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    Ok(serde_json::from_value::<SchedulerDecisionRenderSpec>(value).ok())
-}
-
-fn deserialize_decision_fields_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Vec<SchedulerDecisionField>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    Ok(serde_json::from_value::<Vec<SchedulerDecisionField>>(value).unwrap_or_default())
-}
-
-fn deserialize_decision_sections_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Vec<SchedulerDecisionSection>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    Ok(serde_json::from_value::<Vec<SchedulerDecisionSection>>(value).unwrap_or_default())
-}
-
-fn deserialize_opt_vec_string_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Array(values)) => Some(
-            values
-                .into_iter()
-                .filter_map(|value| value.as_str().map(|value| value.to_string()))
-                .collect(),
-        ),
-        _ => None,
-    })
+fn tool_supports_stage_capability_activity_output(
+    tool_name: &str,
+    metadata: &serde_json::Value,
+) -> bool {
+    matches!(tool_name, "task" | "task_flow")
+        || metadata
+            .get("delegated")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        || metadata.get("agentTaskId").is_some()
+        || metadata.get("task").is_some()
 }
 
 fn apply_stage_capability_activity_evidence(
@@ -2145,37 +1934,20 @@ fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
-    #[derive(Debug, Deserialize)]
-    struct BatchArguments {
-        #[serde(rename = "toolCalls", alias = "tool_calls", default)]
-        tool_calls: Option<Vec<BatchToolCall>>,
-    }
-
-    #[derive(Debug, Deserialize, Default)]
-    struct BatchToolCall {
-        #[serde(default)]
-        tool: Option<String>,
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        tool_name: Option<String>,
-    }
-
-    impl BatchToolCall {
-        fn display_name(&self) -> Option<&str> {
-            self.tool
-                .as_deref()
-                .or(self.name.as_deref())
-                .or(self.tool_name.as_deref())
-        }
-    }
-
-    let args = serde_json::from_value::<BatchArguments>(tool_args.clone()).ok()?;
-    let calls = args.tool_calls?;
+    let calls = tool_args
+        .get("toolCalls")
+        .or_else(|| tool_args.get("tool_calls"))
+        .and_then(|v| v.as_array())?;
     let count = calls.len();
     let mut names: Vec<String> = calls
         .iter()
-        .filter_map(|call| call.display_name().map(|name| name.to_string()))
+        .filter_map(|call| {
+            call.get("tool")
+                .or_else(|| call.get("name"))
+                .or_else(|| call.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
     names.dedup();
     if names.is_empty() {
@@ -2273,31 +2045,22 @@ fn format_activity_primitive_args(
 }
 
 fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    #[derive(Debug, Deserialize, Default)]
-    struct QuestionResultMetadataWire {
-        #[serde(rename = "display.fields", default)]
-        fields: Vec<QuestionResultFieldWire>,
-    }
-
-    #[derive(Debug, Deserialize, Default)]
-    struct QuestionResultFieldWire {
-        #[serde(default)]
-        key: String,
-        #[serde(default)]
-        value: String,
-    }
-
-    let metadata = metadata?;
-    let wire = serde_json::from_value::<QuestionResultMetadataWire>(metadata.clone()).ok()?;
-    if wire.fields.is_empty() {
+    let fields = metadata?
+        .get("display.fields")
+        .and_then(|value| value.as_array())?;
+    if fields.is_empty() {
         return None;
     }
-
-    let mut lines = vec![format!("Answered ({})", wire.fields.len())];
-    for field in wire.fields.iter().take(3) {
-        let key = field.key.trim();
-        let key = if key.is_empty() { "Question" } else { key };
-        let value = field.value.as_str();
+    let mut lines = vec![format!("Answered ({})", fields.len())];
+    for field in fields.iter().take(3) {
+        let key = field
+            .get("key")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Question");
+        let value = field
+            .get("value")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         lines.push(format!(
             "- {}: {}",
             collapse_text(key, 48),
@@ -2308,33 +2071,17 @@ fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<Str
 }
 
 fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    #[derive(Debug, Deserialize, Default)]
-    struct TodoResultMetadataWire {
-        #[serde(default)]
-        todos: Vec<TodoItemWire>,
-    }
-
-    #[derive(Debug, Deserialize, Default)]
-    struct TodoItemWire {
-        #[serde(default)]
-        content: Option<String>,
-        #[serde(default)]
-        status: Option<String>,
-    }
-
-    let metadata = metadata?;
-    let wire = serde_json::from_value::<TodoResultMetadataWire>(metadata.clone()).ok()?;
-    if wire.todos.is_empty() {
+    let todos = metadata?.get("todos").and_then(|value| value.as_array())?;
+    if todos.is_empty() {
         return None;
     }
-
-    let mut lines = vec![format!("Todo list ({})", wire.todos.len())];
-    for todo in wire.todos.iter().take(5) {
-        let content = todo.content.as_deref().map(str::trim).unwrap_or("");
-        if content.is_empty() {
-            continue;
-        }
-        let status = todo.status.as_deref().unwrap_or("pending");
+    let mut lines = vec![format!("Todo list ({})", todos.len())];
+    for todo in todos.iter().take(5) {
+        let content = todo.get("content").and_then(|value| value.as_str())?;
+        let status = todo
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("pending");
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
@@ -2361,39 +2108,34 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 /// stored in the TodoManager (single authority for todo state — Art. 5).
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
-) -> Option<Vec<rocode_session::TodoInfo>> {
-    #[derive(Debug, Deserialize, Default)]
-    struct TodoWriteArguments {
-        #[serde(default)]
-        todos: Vec<TodoWire>,
-    }
-
-    #[derive(Debug, Deserialize, Default)]
-    struct TodoWire {
-        #[serde(default)]
-        content: Option<String>,
-        #[serde(default)]
-        status: Option<String>,
-        #[serde(default)]
-        priority: Option<String>,
-    }
-
-    let args = serde_json::from_value::<TodoWriteArguments>(tool_args.clone()).ok()?;
-    if args.todos.is_empty() {
+) -> Option<Vec<rocode_types::TodoInfo>> {
+    let todos = tool_args.get("todos")?.as_array()?;
+    if todos.is_empty() {
         return None;
     }
-
-    let items = args
-        .todos
-        .into_iter()
+    let items = todos
+        .iter()
         .filter_map(|todo| {
-            let content = todo.content.map(|value| value.trim().to_string())?;
+            let content = todo
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?
+                .to_string();
             if content.is_empty() {
                 return None;
             }
-            let status = todo.status.unwrap_or_else(|| "pending".to_string());
-            let priority = todo.priority.unwrap_or_else(|| "medium".to_string());
-            Some(rocode_session::TodoInfo {
+            let status = todo
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pending")
+                .to_string();
+            let priority = todo
+                .get("priority")
+                .and_then(|v| v.as_str())
+                .unwrap_or("medium")
+                .to_string();
+            Some(rocode_types::TodoInfo {
                 content,
                 status,
                 priority,
@@ -2591,50 +2333,31 @@ fn write_scheduler_decision_metadata(
     );
 }
 
-#[derive(serde::Serialize)]
-struct DecisionFieldView<'a> {
-    label: &'a str,
-    value: &'a str,
-    tone: Option<&'a str>,
-}
-
-#[derive(serde::Serialize)]
-struct DecisionSectionView<'a> {
-    title: &'a str,
-    body: &'a str,
-}
-
-#[derive(serde::Serialize)]
-struct DecisionRenderSpecView {
-    version: &'static str,
-    show_header_divider: bool,
-    field_order: &'static str,
-    field_label_emphasis: &'static str,
-    status_palette: &'static str,
-    section_spacing: &'static str,
-    update_policy: &'static str,
-}
-
 fn decision_field(label: &str, value: &str, tone: Option<&str>) -> serde_json::Value {
-    serde_json::to_value(DecisionFieldView { label, value, tone })
-        .unwrap_or(serde_json::Value::Null)
+    serde_json::json!({
+        "label": label,
+        "value": value,
+        "tone": tone,
+    })
 }
 
 fn decision_section(title: &str, body: &str) -> serde_json::Value {
-    serde_json::to_value(DecisionSectionView { title, body }).unwrap_or(serde_json::Value::Null)
+    serde_json::json!({
+        "title": title,
+        "body": body,
+    })
 }
 
 fn scheduler_decision_render_spec_json() -> serde_json::Value {
-    serde_json::to_value(DecisionRenderSpecView {
-        version: "decision-card/v1",
-        show_header_divider: true,
-        field_order: "as-provided",
-        field_label_emphasis: "bold",
-        status_palette: "semantic",
-        section_spacing: "loose",
-        update_policy: "stable-shell-live-runtime-append-decision",
+    serde_json::json!({
+        "version": "decision-card/v1",
+        "show_header_divider": true,
+        "field_order": "as-provided",
+        "field_label_emphasis": "bold",
+        "status_palette": "semantic",
+        "section_spacing": "loose",
+        "update_policy": "stable-shell-live-runtime-append-decision",
     })
-    .unwrap_or(serde_json::Value::Null)
 }
 
 fn prettify_decision_value(raw: &str) -> String {
@@ -2888,20 +2611,53 @@ fn scheduler_decision_block(
 fn decision_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionBlock> {
-    let wire = session_message_metadata_wire(metadata);
-    let kind = wire.scheduler_decision_kind?;
-    let title = wire
-        .scheduler_decision_title
-        .unwrap_or_else(|| "Decision".to_string());
-
+    let kind = metadata
+        .get("scheduler_decision_kind")
+        .and_then(|value| value.as_str())?
+        .to_string();
+    let title = metadata
+        .get("scheduler_decision_title")
+        .and_then(|value| value.as_str())
+        .unwrap_or("Decision")
+        .to_string();
     Some(SchedulerDecisionBlock {
         kind,
         title,
-        spec: wire
-            .scheduler_decision_spec
-            .unwrap_or_else(default_decision_render_spec),
-        fields: wire.scheduler_decision_fields,
-        sections: wire.scheduler_decision_sections,
+        spec: decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec),
+        fields: metadata
+            .get("scheduler_decision_fields")
+            .and_then(|value| value.as_array())
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(|field| {
+                        Some(SchedulerDecisionField {
+                            label: field.get("label")?.as_str()?.to_string(),
+                            value: field.get("value")?.as_str()?.to_string(),
+                            tone: field
+                                .get("tone")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string()),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        sections: metadata
+            .get("scheduler_decision_sections")
+            .and_then(|value| value.as_array())
+            .map(|sections| {
+                sections
+                    .iter()
+                    .filter_map(|section| {
+                        Some(SchedulerDecisionSection {
+                            title: section.get("title")?.as_str()?.to_string(),
+                            body: section.get("body")?.as_str()?.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -3027,6 +2783,21 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
     }
 }
 
+fn decision_spec_from_metadata(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<SchedulerDecisionRenderSpec> {
+    let spec = metadata.get("scheduler_decision_spec")?;
+    Some(SchedulerDecisionRenderSpec {
+        version: spec.get("version")?.as_str()?.to_string(),
+        show_header_divider: spec.get("show_header_divider")?.as_bool()?,
+        field_order: spec.get("field_order")?.as_str()?.to_string(),
+        field_label_emphasis: spec.get("field_label_emphasis")?.as_str()?.to_string(),
+        status_palette: spec.get("status_palette")?.as_str()?.to_string(),
+        section_spacing: spec.get("section_spacing")?.as_str()?.to_string(),
+        update_policy: spec.get("update_policy")?.as_str()?.to_string(),
+    })
+}
+
 fn default_decision_render_spec() -> SchedulerDecisionRenderSpec {
     SchedulerDecisionRenderSpec {
         version: "decision-card/v1".to_string(),
@@ -3054,11 +2825,10 @@ fn pretty_scheduler_stage_title(
     stage: &str,
 ) -> String {
     let stage_title = prettify_decision_value(stage);
-    let wire = session_message_metadata_wire(metadata);
-    match wire
-        .resolved_scheduler_profile
-        .as_deref()
-        .or_else(|| wire.scheduler_profile.as_deref())
+    match metadata
+        .get("resolved_scheduler_profile")
+        .or_else(|| metadata.get("scheduler_profile"))
+        .and_then(|value| value.as_str())
     {
         Some(profile) if !profile.is_empty() => format!("{profile} · {stage_title}"),
         _ => stage_title,
@@ -3069,7 +2839,7 @@ pub(crate) fn first_user_message_text(session: &Session) -> Option<String> {
     session
         .messages
         .iter()
-        .find(|message| matches!(message.role, Role::User))
+        .find(|message| matches!(message.role, MessageRole::User))
         .map(|message| message.get_text())
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
@@ -3171,7 +2941,7 @@ mod tests {
 
     #[test]
     fn first_user_message_text_uses_first_real_user_message() {
-        let mut session = Session::new(".");
+        let mut session = Session::new("project", ".");
         session.add_assistant_message().add_text("hello");
         session.add_user_message("  First prompt  ");
         session.add_user_message("Second prompt");
@@ -3187,7 +2957,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3241,7 +3011,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3285,7 +3055,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3390,7 +3160,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3467,7 +3237,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3523,7 +3293,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3598,7 +3368,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3698,7 +3468,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3817,7 +3587,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3905,7 +3675,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3980,7 +3750,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -4019,7 +3789,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -4059,7 +3829,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -4098,13 +3868,12 @@ mod tests {
         let fields = message
             .metadata
             .get("scheduler_decision_fields")
-            .and_then(|value| {
-                serde_json::from_value::<Vec<SchedulerDecisionField>>(value.clone()).ok()
-            })
+            .and_then(|value| value.as_array())
             .expect("decision fields should exist");
-        assert!(fields
-            .iter()
-            .any(|field| field.label == "Outcome" && field.value == "Orchestrate"));
+        assert!(fields.iter().any(|field| {
+            field.get("label").and_then(|value| value.as_str()) == Some("Outcome")
+                && field.get("value").and_then(|value| value.as_str()) == Some("Orchestrate")
+        }));
     }
 
     #[tokio::test]
@@ -4112,7 +3881,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create(".").id
+            sessions.create("project", ".").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -4166,7 +3935,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_default_session_title_updates_default_title_only() {
-        let mut session = Session::new(".");
+        let mut session = Session::new("project", ".");
         session.add_user_message("Fix the scheduler event flow");
         ensure_default_session_title(
             &mut session,
@@ -4178,7 +3947,7 @@ mod tests {
         .await;
         assert_eq!(session.title, "Scheduler Event Flow");
 
-        let mut auto_named = Session::new(".");
+        let mut auto_named = Session::new("project", ".");
         auto_named.add_user_message("Fix the scheduler event flow");
         auto_named.set_auto_title("Fix the scheduler event flow");
         ensure_default_session_title(
@@ -4191,7 +3960,7 @@ mod tests {
         .await;
         assert_eq!(auto_named.title, "Refined Scheduler Title");
 
-        let mut named = Session::new(".");
+        let mut named = Session::new("project", ".");
         named.set_title("Pinned Title");
         named.add_user_message("Ignored input");
         ensure_default_session_title(
@@ -4204,7 +3973,7 @@ mod tests {
         .await;
         assert_eq!(named.title, "Pinned Title");
 
-        let mut legacy_buggy = Session::new(".");
+        let mut legacy_buggy = Session::new("project", ".");
         legacy_buggy.add_user_message("Fix the scheduler event flow");
         legacy_buggy.set_title("Fix the scheduler event flow");
         legacy_buggy
