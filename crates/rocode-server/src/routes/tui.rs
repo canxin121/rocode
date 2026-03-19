@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 
+use crate::routes::session::set_session_run_status;
 pub(crate) use crate::runtime_control::QuestionInfo;
-use crate::runtime_control::QuestionReply;
+use crate::runtime_control::{PendingStatusReason, QuestionReply, SessionRunStatus};
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
 
@@ -83,6 +84,15 @@ pub(crate) async fn request_question_answers_with_hook(
             serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
         )
         .await;
+    set_session_run_status(
+        &state,
+        &session_id,
+        SessionRunStatus::Pending {
+            reason: PendingStatusReason::Question,
+            message: Some("Waiting for question answer".to_string()),
+        },
+    )
+    .await;
     if let Some(hook) = event_hook.as_ref() {
         if let Some(payload) = created_event.to_json_value() {
             hook(payload);
@@ -95,6 +105,7 @@ pub(crate) async fn request_question_answers_with_hook(
 
     // Clear pending question from aggregated runtime state.
     state.runtime_state.question_resolved(&session_id).await;
+    set_session_run_status(&state, &session_id, SessionRunStatus::Busy).await;
 
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {

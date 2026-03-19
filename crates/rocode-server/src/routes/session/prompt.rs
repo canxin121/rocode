@@ -872,6 +872,7 @@ pub(super) async fn session_prompt(
             ))
         };
 
+        let mut failed_error_message: Option<String> = None;
         if let Err(error) = prompt_runner
             .prompt_with_update_hook(
                 input,
@@ -925,6 +926,16 @@ pub(super) async fn session_prompt(
                     .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
             }
             assistant.add_text(format!("Provider error: {}", error));
+            let error_message = error.to_string();
+            set_session_run_status(
+                &task_state,
+                &session_id,
+                SessionRunStatus::Error {
+                    message: error_message.clone(),
+                },
+            )
+            .await;
+            failed_error_message = Some(error_message);
         }
         match tokio::time::timeout(Duration::from_secs(1), &mut update_task).await {
             Ok(joined) => {
@@ -953,7 +964,9 @@ pub(super) async fn session_prompt(
         broadcast_session_updated(task_state.as_ref(), session_id.clone(), "prompt.final");
         // Normal path reached — defuse the guard so we handle cleanup explicitly.
         _idle_guard.defuse();
-        set_session_run_status(&task_state, &session_id, SessionRunStatus::Idle).await;
+        if failed_error_message.is_none() {
+            set_session_run_status(&task_state, &session_id, SessionRunStatus::Idle).await;
+        }
         // Only flush the current session — full sync is deferred to shutdown/startup.
         if let Err(err) = task_state.flush_session_to_storage(&session_id).await {
             tracing::error!(session_id = %session_id, %err, "failed to flush session to storage");

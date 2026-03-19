@@ -21,7 +21,7 @@ pub(crate) use self::messages::SendMessageRequest;
 pub(crate) use self::scheduler::{
     resolve_prompt_request_config, to_task_agent_info, PromptRequestConfigInput,
 };
-pub(crate) use self::session_crud::resolved_session_directory;
+pub(crate) use self::session_crud::{resolved_session_directory, set_session_run_status};
 
 // ─── Re-exports for external crates (pub) ──────────────────────────────────
 pub use self::scheduler::{
