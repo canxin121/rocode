@@ -569,8 +569,10 @@ impl ServerState {
             .into_iter()
             .filter_map(|(session_id, status)| match status {
                 crate::runtime_control::SessionRunStatus::Busy
+                | crate::runtime_control::SessionRunStatus::Pending { .. }
                 | crate::runtime_control::SessionRunStatus::Retry { .. } => Some(session_id),
-                crate::runtime_control::SessionRunStatus::Idle => None,
+                crate::runtime_control::SessionRunStatus::Idle
+                | crate::runtime_control::SessionRunStatus::Error { .. } => None,
             })
             .collect();
 

@@ -81,6 +81,17 @@ pub enum PendingReason {
     QuestionAndPermission,
 }
 
+impl PendingReason {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "question" => Some(Self::Question),
+            "permission" => Some(Self::Permission),
+            "question_and_permission" => Some(Self::QuestionAndPermission),
+            _ => None,
+        }
+    }
+}
+
 impl Default for RunStatus {
     fn default() -> Self {
         Self::Idle
@@ -205,6 +216,7 @@ impl RuntimeStateStore {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnTool;
             s.pending_reason = None;
+            s.error_message = None;
             s.active_tools.push(ActiveToolSummary {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -292,12 +304,23 @@ impl RuntimeStateStore {
         .await;
     }
 
-    /// Mark the session as ended with an error.
-    pub async fn mark_error(&self, session_id: &str, error_message: Option<String>) {
+    /// Mark the session as pending with an explicit reason.
+    pub async fn mark_pending(&self, session_id: &str, reason: String) {
+        self.update(session_id, |s| {
+            s.run_status = RunStatus::Pending;
+            s.pending_reason = PendingReason::from_str(reason.as_str());
+            s.error_message = None;
+        })
+        .await;
+    }
+
+    /// Mark the session as ended with an error message.
+    pub async fn mark_error(&self, session_id: &str, error_message: String) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Error;
-            s.error_message = error_message;
+            s.error_message = Some(error_message);
             s.pending_reason = None;
+            s.current_message_id = None;
             s.active_tools.clear();
             s.pending_question = None;
             s.pending_permission = None;
@@ -494,9 +517,7 @@ mod tests {
             .question_created("ses_1", "q_1", serde_json::json!([{"question": "ok?"}]))
             .await;
 
-        store
-            .mark_error("ses_1", Some("provider timeout".to_string()))
-            .await;
+        store.mark_error("ses_1", "provider timeout".to_string()).await;
 
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::Error);
@@ -538,5 +559,15 @@ mod tests {
         .expect("deserialize legacy waiting_on_user");
 
         assert_eq!(state.run_status, RunStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn mark_pending_maps_reason_and_sets_pending_status() {
+        let store = RuntimeStateStore::new();
+
+        store.mark_pending("ses_1", "question".to_string()).await;
+        let state = store.get("ses_1").await.unwrap();
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.pending_reason, Some(PendingReason::Question));
     }
 }
