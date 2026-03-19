@@ -18,6 +18,13 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Todos::Table)
                     .if_not_exists()
+                    .col(
+                        ColumnDef::new(Todos::Pk)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Todos::SessionId).string().not_null())
                     .col(ColumnDef::new(Todos::TodoId).string().not_null())
                     .col(ColumnDef::new(Todos::Content).string().not_null())
@@ -36,7 +43,13 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Todos::Position).big_integer().not_null())
                     .col(ColumnDef::new(Todos::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Todos::UpdatedAt).big_integer().not_null())
-                    .primary_key(Index::create().col(Todos::SessionId).col(Todos::TodoId))
+                    .index(
+                        Index::create()
+                            .name("ux_todos_session_todo")
+                            .col(Todos::SessionId)
+                            .col(Todos::TodoId)
+                            .unique(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_todos_session")

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use rocode_session::{
-    MessagePart, Role, MessageUsage, PartType, Session, SessionMessage, SessionSummary,
+    MessagePart, MessageUsage, PartType, Role, Session, SessionMessage, SessionSummary,
     SessionTime, SessionUsage, ToolCallStatus,
 };
 
@@ -76,6 +76,7 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
     let usage = session.usage.as_ref();
 
     sessions::ActiveModel {
+        pk: Default::default(),
         id: Set(session.id.clone()),
         parent_id: Set(session.parent_id.clone()),
         directory: Set(session.directory.clone()),
@@ -400,7 +401,8 @@ impl SessionRepository {
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Session>, DatabaseError> {
-        let row = sessions::Entity::find_by_id(id.to_string())
+        let row = sessions::Entity::find()
+            .filter(sessions::Column::Id.eq(id))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -523,7 +525,8 @@ impl SessionRepository {
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        sessions::Entity::delete_by_id(id.to_string())
+        sessions::Entity::delete_many()
+            .filter(sessions::Column::Id.eq(id))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -820,7 +823,7 @@ impl MessageRepository {
         let rows = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Id)
+            .order_by_asc(messages::Column::Pk)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -858,7 +861,7 @@ impl MessageRepository {
             .column(messages::Column::CreatedAt)
             .column(messages::Column::Finish)
             .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Id)
+            .order_by_asc(messages::Column::Pk)
             .limit(limit)
             .offset(offset)
             .into_tuple()
@@ -889,7 +892,7 @@ impl MessageRepository {
         let rows = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Id)
+            .order_by_asc(messages::Column::Pk)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -900,7 +903,8 @@ impl MessageRepository {
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<SessionMessage>, DatabaseError> {
-        let row = messages::Entity::find_by_id(id.to_string())
+        let row = messages::Entity::find()
+            .filter(messages::Column::Id.eq(id))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -908,7 +912,8 @@ impl MessageRepository {
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        messages::Entity::delete_by_id(id.to_string())
+        messages::Entity::delete_many()
+            .filter(messages::Column::Id.eq(id))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1004,6 +1009,7 @@ impl TodoRepository {
     pub async fn upsert(&self, session_id: &str, todo: &TodoItem) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = todos::ActiveModel {
+            pk: Default::default(),
             session_id: Set(session_id.to_string()),
             todo_id: Set(todo.id.clone()),
             content: Set(todo.content.clone()),
@@ -1071,7 +1077,8 @@ impl ShareRepository {
     }
 
     pub async fn get(&self, session_id: &str) -> Result<Option<SessionShareRow>, DatabaseError> {
-        let row = session_shares::Entity::find_by_id(session_id.to_string())
+        let row = session_shares::Entity::find()
+            .filter(session_shares::Column::SessionId.eq(session_id))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1086,6 +1093,7 @@ impl ShareRepository {
     pub async fn upsert(&self, share: &SessionShareRow) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = session_shares::ActiveModel {
+            pk: Default::default(),
             session_id: Set(share.session_id.clone()),
             id: Set(share.id.clone()),
             secret: Set(share.secret.clone()),
@@ -1110,7 +1118,8 @@ impl ShareRepository {
     }
 
     pub async fn delete(&self, session_id: &str) -> Result<(), DatabaseError> {
-        session_shares::Entity::delete_by_id(session_id.to_string())
+        session_shares::Entity::delete_many()
+            .filter(session_shares::Column::SessionId.eq(session_id))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1164,7 +1173,8 @@ impl PartRepository {
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<PartRow>, DatabaseError> {
-        let row = parts::Entity::find_by_id(id.to_string())
+        let row = parts::Entity::find()
+            .filter(parts::Column::Id.eq(id))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1196,7 +1206,7 @@ impl PartRepository {
             .filter(parts::Column::MessageId.eq(message_id))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
+            .order_by_asc(parts::Column::Pk)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1265,7 +1275,7 @@ impl PartRepository {
             .column(parts::Column::SortOrder)
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
+            .order_by_asc(parts::Column::Pk)
             .limit(limit)
             .offset(offset)
             .into_tuple()
@@ -1312,7 +1322,7 @@ impl PartRepository {
             .filter(parts::Column::MessageId.eq(message_id))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
+            .order_by_asc(parts::Column::Pk)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -1349,7 +1359,7 @@ impl PartRepository {
             .filter(parts::Column::SessionId.eq(session_id))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
+            .order_by_asc(parts::Column::Pk)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1398,7 +1408,7 @@ impl PartRepository {
             .filter(parts::Column::SessionId.eq(session_id))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
+            .order_by_asc(parts::Column::Pk)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -1485,7 +1495,8 @@ impl PartRepository {
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        parts::Entity::delete_by_id(id.to_string())
+        parts::Entity::delete_many()
+            .filter(parts::Column::Id.eq(id))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;

@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rocode_provider::{get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider};
+use rocode_provider::{
+    get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider,
+};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -16,7 +18,8 @@ use crate::message_v2::{
     StepStartPart, StepTokens, UserTime,
 };
 use crate::summary::{summarize_into_session, SummarizeInput};
-use crate::{Role, PartType, Session, SessionMessage};
+use crate::{PartType, Role, Session, SessionMessage};
+use rocode_message::ToolState as MessageToolState;
 
 use super::tools_and_output::{compose_session_title_source, generate_session_title_for_session};
 use super::SessionPrompt;
@@ -432,10 +435,7 @@ impl SessionPrompt {
 
         // Keep the latest user anchor before the compaction boundary so prompt
         // loop invariants hold (`last_user_idx` must exist).
-        if let Some(last_user_idx) = messages
-            .iter()
-            .rposition(|m| matches!(m.role, Role::User))
-        {
+        if let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m.role, Role::User)) {
             if last_user_idx < start {
                 let mut anchored = Vec::with_capacity(messages.len() - last_user_idx);
                 anchored.push(messages[last_user_idx].clone());
@@ -644,18 +644,21 @@ impl SessionPrompt {
                         raw,
                         state,
                     } => {
-                        let state = state.clone().unwrap_or_else(|| {
-                            Self::legacy_tool_state_to_v2(LegacyToolStateInput {
-                                tool_call_id: id,
-                                tool_name: name,
-                                input,
-                                status,
-                                raw: raw.as_deref().unwrap_or_default(),
-                                tool_result: legacy_tool_results.get(id),
-                                session_id: &msg.session_id,
-                                message_id: &msg.id,
-                            })
-                        });
+                        let state = state
+                            .as_ref()
+                            .map(Self::message_tool_state_to_v2)
+                            .unwrap_or_else(|| {
+                                Self::legacy_tool_state_to_v2(LegacyToolStateInput {
+                                    tool_call_id: id,
+                                    tool_name: name,
+                                    input,
+                                    status,
+                                    raw: raw.as_deref().unwrap_or_default(),
+                                    tool_result: legacy_tool_results.get(id),
+                                    session_id: &msg.session_id,
+                                    message_id: &msg.id,
+                                })
+                            });
                         Some(V2Part::Tool(crate::message_v2::ToolPart {
                             id: part.id.clone(),
                             session_id: msg.session_id.clone(),
@@ -772,6 +775,70 @@ impl SessionPrompt {
         }
 
         out
+    }
+
+    fn message_tool_state_to_v2(state: &MessageToolState) -> crate::message_v2::ToolState {
+        match state {
+            MessageToolState::Pending { input, raw } => crate::message_v2::ToolState::Pending {
+                input: input.clone(),
+                raw: raw.clone(),
+            },
+            MessageToolState::Running {
+                input,
+                title,
+                metadata,
+                time,
+            } => crate::message_v2::ToolState::Running {
+                input: input.clone(),
+                title: title.clone(),
+                metadata: metadata.clone(),
+                time: crate::RunningTime { start: time.start },
+            },
+            MessageToolState::Completed {
+                input,
+                output,
+                title,
+                metadata,
+                time,
+                attachments,
+            } => {
+                let files = attachments.as_ref().map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| {
+                            serde_json::from_value::<crate::message_v2::FilePart>(value.clone())
+                                .ok()
+                        })
+                        .collect::<Vec<_>>()
+                });
+                crate::message_v2::ToolState::Completed {
+                    input: input.clone(),
+                    output: output.clone(),
+                    title: title.clone(),
+                    metadata: metadata.clone(),
+                    time: crate::CompletedTime {
+                        start: time.start,
+                        end: time.end,
+                        compacted: time.compacted,
+                    },
+                    attachments: files,
+                }
+            }
+            MessageToolState::Error {
+                input,
+                error,
+                metadata,
+                time,
+            } => crate::message_v2::ToolState::Error {
+                input: input.clone(),
+                error: error.clone(),
+                metadata: metadata.clone(),
+                time: crate::ErrorTime {
+                    start: time.start,
+                    end: time.end,
+                },
+            },
+        }
     }
 
     fn legacy_tool_state_to_v2(input_data: LegacyToolStateInput<'_>) -> crate::ToolState {

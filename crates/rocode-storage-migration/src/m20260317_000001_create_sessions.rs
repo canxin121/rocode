@@ -19,14 +19,26 @@ impl MigrationTrait for Migration {
                     .table(Sessions::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Sessions::Id)
-                            .string()
+                        ColumnDef::new(Sessions::Pk)
+                            .big_integer()
                             .not_null()
+                            .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Sessions::ProjectId).string().not_null())
+                    .col(ColumnDef::new(Sessions::Id).string().not_null())
+                    .col(
+                        ColumnDef::new(Sessions::ProjectId)
+                            .string()
+                            .not_null()
+                            .default(""),
+                    )
                     .col(ColumnDef::new(Sessions::ParentId).string())
-                    .col(ColumnDef::new(Sessions::Slug).string().not_null())
+                    .col(
+                        ColumnDef::new(Sessions::Slug)
+                            .string()
+                            .not_null()
+                            .default(""),
+                    )
                     .col(ColumnDef::new(Sessions::Directory).string().not_null())
                     .col(ColumnDef::new(Sessions::Title).string().not_null())
                     .col(
@@ -102,6 +114,12 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Sessions::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Sessions::UpdatedAt).big_integer().not_null())
+                    .index(
+                        Index::create()
+                            .name("ux_sessions_id")
+                            .col(Sessions::Id)
+                            .unique(),
+                    )
                     .to_owned(),
             )
             .await

@@ -16,7 +16,8 @@ pub enum MessageRoleModel {
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "messages")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
+    #[sea_orm(primary_key)]
+    pub pk: i64,
     pub id: String,
     pub session_id: String,
     pub role: MessageRoleModel,
