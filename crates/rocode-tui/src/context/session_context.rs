@@ -1,4 +1,7 @@
 use chrono::{DateTime, Utc};
+use rocode_command::terminal_tool_block_display::{
+    build_file_items, build_image_items, summarize_block_items_inline,
+};
 use rocode_command::output_blocks::SchedulerStageBlock;
 pub use rocode_types::Role;
 use serde::{Deserialize, Serialize};
@@ -895,8 +898,12 @@ impl SessionContext {
                         format!("[tool-result] {}", result)
                     }
                 }
-                MessagePart::File { path, .. } => format!("[file] {}", path),
-                MessagePart::Image { url } => format!("[image] {}", url),
+                MessagePart::File { path, mime } => {
+                    summarize_block_items_inline(&build_file_items(path, mime))
+                }
+                MessagePart::Image { url } => {
+                    summarize_block_items_inline(&build_image_items(url))
+                }
             })
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()

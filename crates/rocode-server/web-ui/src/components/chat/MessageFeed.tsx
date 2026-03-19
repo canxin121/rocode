@@ -50,11 +50,57 @@ export function updateFeedMessage(id: string, text: string) {
   );
 }
 
+// Insert a message before an existing message with given id
+function insertBeforeMessageId(id: string, msg: FeedMessage) {
+  setMessages((prev) => {
+    const idx = prev.findIndex((m) => m.id === id);
+    if (idx === -1) return [...prev, msg];
+    return [...prev.slice(0, idx), msg, ...prev.slice(idx)];
+  });
+}
+
 export function applyOutputBlockToFeed(block: OutputBlock) {
   if (block.kind === "status") {
     if (!block.silent) {
       appendFeedMessage(block);
     }
+    return;
+  }
+
+  if (block.kind === "reasoning") {
+    if (block.phase === "start") {
+      // Insert reasoning BEFORE the assistant message it belongs to.
+      // This fixes ordering when message delta arrives before reasoning start.
+      const lastAssistant = messages.findLast(
+        (m) => m.kind === "message" && m.role === "assistant",
+      );
+      if (lastAssistant) {
+        const id = `msg-${nextId++}`;
+        const msg: FeedMessage = {
+          id,
+          kind: block.kind,
+          role: block.role,
+          title: block.title,
+          text: block.text ?? "",
+          tone: block.tone,
+          phase: block.phase,
+          ts: block.ts as number | undefined,
+        };
+        insertBeforeMessageId(lastAssistant.id, msg);
+        return;
+      }
+      // No assistant message yet, fall through to append
+    } else if (block.phase === "delta") {
+      const last = messages.findLast((m) => m.kind === "reasoning");
+      if (last) {
+        updateFeedMessage(last.id, block.text ?? "");
+      }
+      return;
+    } else if (block.phase === "full") {
+      appendFeedMessage(block);
+      return;
+    }
+    appendFeedMessage(block);
     return;
   }
 
