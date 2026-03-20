@@ -1,4 +1,5 @@
 use super::*;
+use rocode_types::{SessionRunStatus, SessionRunStatusWire};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -187,7 +188,7 @@ enum ServerEvent {
     SessionStatus {
         #[serde(rename = "sessionID", alias = "sessionId")]
         session_id: String,
-        status: SessionStatus,
+        status: SessionRunStatusWire,
     },
     #[serde(rename = "question.created")]
     QuestionCreated(QuestionEvent),
@@ -267,59 +268,6 @@ impl PermissionResolvedEvent {
             | PermissionResolvedEvent::RequestId { permission_id, .. } => permission_id,
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum SessionStatus {
-    Simple(String),
-    Object(SessionStatusObject),
-}
-
-impl SessionStatus {
-    fn kind(&self) -> Option<&str> {
-        match self {
-            SessionStatus::Simple(kind) => Some(kind.as_str()),
-            SessionStatus::Object(obj) => obj.kind.as_deref(),
-        }
-    }
-
-    fn retry_attempt(&self) -> u32 {
-        match self {
-            SessionStatus::Object(obj) => obj.attempt.unwrap_or(0),
-            _ => 0,
-        }
-    }
-
-    fn retry_message(&self) -> String {
-        match self {
-            SessionStatus::Object(obj) => obj.message.clone().unwrap_or_default(),
-            _ => String::new(),
-        }
-    }
-
-    fn retry_next(&self) -> i64 {
-        match self {
-            SessionStatus::Object(obj) => obj.next.unwrap_or_default(),
-            _ => 0,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct SessionStatusObject {
-    #[serde(
-        rename = "type",
-        default,
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
-    kind: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
-    attempt: Option<u32>,
-    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-    message: Option<String>,
-    #[serde(default)]
-    next: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,24 +393,48 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::ConfigUpdated,
             ))));
         }
-        ServerEvent::SessionStatus { session_id, status } => match status.kind() {
-            Some("busy") => {
+        ServerEvent::SessionStatus { session_id, status } => match status {
+            SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusBusy(session_id),
                 ))));
             }
-            Some("idle") => {
+            SessionRunStatusWire::String(kind) if kind == "busy" => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusBusy(session_id),
+                ))));
+            }
+            SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusIdle(session_id),
                 ))));
             }
-            Some("retry") => {
+            SessionRunStatusWire::String(kind) if kind == "idle" => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusIdle(session_id),
+                ))));
+            }
+            SessionRunStatusWire::Tagged(SessionRunStatus::Retry {
+                attempt,
+                message,
+                next,
+            }) => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusRetrying {
                         session_id,
-                        attempt: status.retry_attempt(),
-                        message: status.retry_message(),
-                        next: status.retry_next(),
+                        attempt,
+                        message,
+                        next,
+                    },
+                ))));
+            }
+            SessionRunStatusWire::String(kind) if kind == "retry" => {
+                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                    StateChange::SessionStatusRetrying {
+                        session_id,
+                        attempt: 0,
+                        message: String::new(),
+                        next: 0,
                     },
                 ))));
             }

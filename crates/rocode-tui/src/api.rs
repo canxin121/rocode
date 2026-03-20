@@ -37,149 +37,22 @@ pub struct SessionRevertInfo {
     pub diff: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionStatusInfo {
-    pub status: String,
-    pub idle: bool,
-    pub busy: bool,
-    #[serde(default)]
-    pub attempt: Option<u32>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub next: Option<i64>,
-}
+pub type SessionStatusInfo = rocode_session::run_status::SessionStatusInfo;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionKind {
-    PromptRun,
-    SchedulerRun,
-    SchedulerStage,
-    ToolCall,
-    AgentTask,
-    Question,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionStatus {
-    Running,
-    Waiting,
-    Cancelling,
-    Retry,
-    Done,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionExecutionNode {
-    pub id: String,
-    pub kind: ExecutionKind,
-    pub status: ExecutionStatus,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub parent_id: Option<String>,
-    #[serde(default)]
-    pub waiting_on: Option<String>,
-    #[serde(default)]
-    pub recent_event: Option<String>,
-    pub started_at: i64,
-    pub updated_at: i64,
-    #[serde(default)]
-    pub metadata: Option<serde_json::Value>,
-    #[serde(default)]
-    pub children: Vec<SessionExecutionNode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionExecutionTopology {
-    #[serde(alias = "sessionID", alias = "sessionId")]
-    pub session_id: String,
-    pub active_count: usize,
-    #[serde(default)]
-    pub done_count: usize,
-    pub running_count: usize,
-    pub waiting_count: usize,
-    pub cancelling_count: usize,
-    pub retry_count: usize,
-    #[serde(default)]
-    pub updated_at: Option<i64>,
-    #[serde(default)]
-    pub roots: Vec<SessionExecutionNode>,
-}
+pub type ExecutionKind = rocode_session::execution::ExecutionKind;
+pub type ExecutionStatus = rocode_session::execution::ExecutionStatus;
+pub type SessionExecutionNode = rocode_session::execution::SessionExecutionNode;
+pub type SessionExecutionTopology = rocode_session::execution::SessionExecutionTopology;
 
 // ── Session Runtime State (from GET /session/{id}/runtime) ──────────────
 
-/// Aggregated runtime snapshot for a single session.
-///
-/// This is the client-side mirror of `rocode_server::session_runtime::state::SessionRuntimeState`.
-/// Deserialized from the `GET /session/{id}/runtime` endpoint response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRuntimeState {
-    pub session_id: String,
-    pub run_status: SessionRunStatusKind,
-    #[serde(default)]
-    pub pending_reason: Option<PendingReason>,
-    #[serde(default)]
-    pub error_message: Option<String>,
-    #[serde(default)]
-    pub current_message_id: Option<String>,
-    #[serde(default)]
-    pub active_tools: Vec<ActiveToolSummary>,
-    #[serde(default)]
-    pub pending_question: Option<PendingQuestionSummary>,
-    #[serde(default)]
-    pub pending_permission: Option<PendingPermissionSummary>,
-    #[serde(default)]
-    pub child_sessions: Vec<ChildSessionSummary>,
-}
-
-/// Coarse run-status for the session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionRunStatusKind {
-    Idle,
-    Running,
-    WaitingOnTool,
-    #[serde(alias = "waiting_on_user")]
-    Pending,
-    Cancelling,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PendingReason {
-    Question,
-    Permission,
-    QuestionAndPermission,
-}
-
-/// Summary of a currently executing tool call.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActiveToolSummary {
-    pub tool_call_id: String,
-    pub tool_name: String,
-    pub started_at: i64,
-}
-
-/// Summary of a pending question awaiting user answer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingQuestionSummary {
-    pub request_id: String,
-    pub questions: serde_json::Value,
-}
-
-/// Summary of a pending permission request awaiting user decision.
-pub type PendingPermissionSummary = rocode_permission::PendingPermissionSummary;
-
-/// Summary of an attached child session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChildSessionSummary {
-    pub child_id: String,
-    pub parent_id: String,
-}
+pub type SessionRuntimeState = rocode_session::runtime_state::SessionRuntimeState;
+pub type SessionRunStatusKind = rocode_session::runtime_state::RunStatus;
+pub type PendingReason = rocode_session::runtime_state::PendingReason;
+pub type ActiveToolSummary = rocode_session::runtime_state::ActiveToolSummary;
+pub type PendingQuestionSummary = rocode_session::runtime_state::PendingQuestionSummary;
+pub type PendingPermissionSummary = rocode_session::runtime_state::PendingPermissionSummary;
+pub type ChildSessionSummary = rocode_session::runtime_state::ChildSessionSummary;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -255,36 +128,9 @@ pub struct ExecuteRecoveryRequest {
     pub target_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionOptionInfo {
-    pub label: String,
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionItemInfo {
-    pub question: String,
-    #[serde(default)]
-    pub header: Option<String>,
-    #[serde(default)]
-    pub options: Vec<QuestionOptionInfo>,
-    #[serde(default)]
-    pub multiple: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionInfo {
-    pub id: String,
-    #[serde(alias = "sessionID", alias = "sessionId")]
-    pub session_id: String,
-    pub questions: Vec<String>,
-    #[serde(default)]
-    pub options: Option<Vec<Vec<String>>>,
-    /// Full-fidelity question items with descriptions, headers, multi-select.
-    #[serde(default)]
-    pub items: Vec<QuestionItemInfo>,
-}
+pub type QuestionOptionInfo = rocode_session::question::QuestionOptionInfo;
+pub type QuestionItemInfo = rocode_session::question::QuestionItemInfo;
+pub type QuestionInfo = rocode_session::question::QuestionInfo;
 
 pub type PermissionRequestInfo = rocode_permission::PermissionRequestInfo;
 

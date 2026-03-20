@@ -14,6 +14,7 @@ use crate::session_runtime::events::{
     broadcast_server_event, broadcast_session_updated, ServerEvent,
 };
 use crate::{ApiError, Result, ServerState};
+use rocode_session::run_status::SessionStatusInfo;
 
 fn map_storage_err(err: rocode_storage::DatabaseError) -> ApiError {
     ApiError::InternalError(format!("storage error: {}", err))
@@ -143,21 +144,6 @@ pub struct SessionRevertInfo {
 }
 
 pub type PermissionRulesetInfo = rocode_session::PermissionRuleset;
-
-#[derive(Debug, Serialize)]
-pub struct SessionStatusInfo {
-    pub status: String,
-    pub idle: bool,
-    pub busy: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next: Option<i64>,
-}
 
 #[derive(Debug, Serialize)]
 pub struct TodoInfo {
@@ -540,59 +526,7 @@ pub(super) async fn session_status(
         .into_iter()
         .map(|s| {
             let run = run_status.get(&s.id).cloned().unwrap_or_default();
-            let (status, idle, busy, reason, attempt, message, next) = match run {
-                SessionRunStatus::Idle => {
-                    if s.active {
-                        ("busy".to_string(), false, true, None, None, None, None)
-                    } else {
-                        ("idle".to_string(), true, false, None, None, None, None)
-                    }
-                }
-                SessionRunStatus::Busy => ("busy".to_string(), false, true, None, None, None, None),
-                SessionRunStatus::Pending { reason, message } => (
-                    "pending".to_string(),
-                    false,
-                    true,
-                    Some(reason.as_str().to_string()),
-                    None,
-                    message,
-                    None,
-                ),
-                SessionRunStatus::Retry {
-                    attempt,
-                    message,
-                    next,
-                } => (
-                    "retry".to_string(),
-                    false,
-                    true,
-                    None,
-                    Some(attempt),
-                    Some(message),
-                    Some(next),
-                ),
-                SessionRunStatus::Error { message } => (
-                    "error".to_string(),
-                    false,
-                    false,
-                    None,
-                    None,
-                    Some(message),
-                    None,
-                ),
-            };
-            (
-                s.id.clone(),
-                SessionStatusInfo {
-                    status,
-                    idle,
-                    busy,
-                    reason,
-                    attempt,
-                    message,
-                    next,
-                },
-            )
+            (s.id.clone(), run.to_info(s.active))
         })
         .collect();
     Ok(Json(status))

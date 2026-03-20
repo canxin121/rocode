@@ -1,45 +1,19 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+
 use tokio::sync::RwLock;
 
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::{events::BusEventName, wire};
 
-// ============================================================================
-// Bus event definitions (matches TS SessionStatus.Event)
-// ============================================================================
+use crate::run_status::{PendingStatusReason, SessionRunStatus};
 
-/// Event published when a session's run status changes.
 pub static SESSION_STATUS_EVENT: BusEventDef =
     BusEventDef::new(BusEventName::SessionStatus.as_str());
 
-/// Deprecated event published when a session becomes idle.
 pub static SESSION_IDLE_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionIdle.as_str());
 
-// ============================================================================
-// Status types (matches TS SessionStatus.Info union type)
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(tag = "type")]
-pub enum SessionStatusInfo {
-    #[serde(rename = "idle")]
-    #[default]
-    Idle,
-    #[serde(rename = "retry")]
-    Retry {
-        attempt: u32,
-        message: String,
-        next: u64,
-    },
-    #[serde(rename = "busy")]
-    Busy,
-}
-
-// ============================================================================
-// Status manager (matches TS SessionStatus namespace)
-// ============================================================================
+pub type SessionStatusInfo = SessionRunStatus;
 
 pub struct SessionStatusManager {
     state: Arc<RwLock<HashMap<String, SessionStatusInfo>>>,
@@ -54,7 +28,6 @@ impl SessionStatusManager {
         }
     }
 
-    /// Create a status manager with bus event publishing.
     pub fn with_bus(bus: Arc<Bus>) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
@@ -62,24 +35,17 @@ impl SessionStatusManager {
         }
     }
 
-    /// Get the status for a session. Returns Idle if not tracked.
-    /// Matches TS `SessionStatus.get(sessionID)`.
     pub async fn get(&self, session_id: &str) -> SessionStatusInfo {
         let state = self.state.read().await;
         state.get(session_id).cloned().unwrap_or_default()
     }
 
-    /// List all tracked session statuses.
-    /// Matches TS `SessionStatus.list()`.
     pub async fn list(&self) -> HashMap<String, SessionStatusInfo> {
         let state = self.state.read().await;
         state.clone()
     }
 
-    /// Set the status for a session and publish bus events.
-    /// Matches TS `SessionStatus.set(sessionID, status)`.
     pub async fn set(&self, session_id: &str, status: SessionStatusInfo) {
-        // Publish status event
         if let Some(ref bus) = self.bus {
             let mut event_data = serde_json::Map::new();
             event_data.insert(
@@ -97,7 +63,6 @@ impl SessionStatusManager {
         let mut state = self.state.write().await;
         match &status {
             SessionStatusInfo::Idle => {
-                // Publish deprecated idle event
                 if let Some(ref bus) = self.bus {
                     let mut idle_data = serde_json::Map::new();
                     idle_data.insert(
@@ -115,36 +80,54 @@ impl SessionStatusManager {
         }
     }
 
-    /// Convenience: set status to idle.
     pub async fn set_idle(&self, session_id: &str) {
         self.set(session_id, SessionStatusInfo::Idle).await;
     }
 
-    /// Convenience: set status to busy.
     pub async fn set_busy(&self, session_id: &str) {
         self.set(session_id, SessionStatusInfo::Busy).await;
     }
 
-    /// Convenience: set status to retry with details.
-    /// Matches TS retry status with message and next timestamp.
     pub async fn set_retry(&self, session_id: &str, attempt: u32, message: String, next: u64) {
         self.set(
             session_id,
             SessionStatusInfo::Retry {
                 attempt,
                 message,
-                next,
+                next: i64::try_from(next).unwrap_or(i64::MAX),
             },
         )
         .await;
     }
 
-    /// Check if a session is busy (busy or retrying).
+    pub async fn set_pending(
+        &self,
+        session_id: &str,
+        reason: Option<String>,
+        message: Option<String>,
+    ) {
+        let reason = reason
+            .as_deref()
+            .and_then(PendingStatusReason::from_str)
+            .unwrap_or(PendingStatusReason::Question);
+        self.set(session_id, SessionStatusInfo::Pending { reason, message })
+            .await;
+    }
+
+    pub async fn set_error(&self, session_id: &str, message: String) {
+        self.set(session_id, SessionStatusInfo::Error { message })
+            .await;
+    }
+
     pub async fn is_busy(&self, session_id: &str) -> bool {
         let state = self.state.read().await;
         matches!(
             state.get(session_id),
-            Some(SessionStatusInfo::Busy | SessionStatusInfo::Retry { .. })
+            Some(
+                SessionStatusInfo::Busy
+                    | SessionStatusInfo::Pending { .. }
+                    | SessionStatusInfo::Retry { .. }
+            )
         )
     }
 }
@@ -154,10 +137,6 @@ impl Default for SessionStatusManager {
         Self::new()
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -206,6 +185,43 @@ mod tests {
             _ => panic!("Expected Retry status"),
         }
         assert!(mgr.is_busy("ses_123").await);
+    }
+
+    #[tokio::test]
+    async fn test_set_pending() {
+        let mgr = SessionStatusManager::new();
+        mgr.set_pending(
+            "ses_123",
+            Some("question".to_string()),
+            Some("waiting user reply".to_string()),
+        )
+        .await;
+
+        let status = mgr.get("ses_123").await;
+        match status {
+            SessionStatusInfo::Pending { reason, message } => {
+                assert_eq!(reason, PendingStatusReason::Question);
+                assert_eq!(message.as_deref(), Some("waiting user reply"));
+            }
+            _ => panic!("Expected Pending status"),
+        }
+        assert!(mgr.is_busy("ses_123").await);
+    }
+
+    #[tokio::test]
+    async fn test_set_error_not_busy() {
+        let mgr = SessionStatusManager::new();
+        mgr.set_error("ses_123", "provider timeout".to_string())
+            .await;
+
+        let status = mgr.get("ses_123").await;
+        match status {
+            SessionStatusInfo::Error { message } => {
+                assert_eq!(message, "provider timeout");
+            }
+            _ => panic!("Expected Error status"),
+        }
+        assert!(!mgr.is_busy("ses_123").await);
     }
 
     #[tokio::test]

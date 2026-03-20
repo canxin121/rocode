@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use rocode_types::SessionRunStatusWire;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
@@ -149,7 +150,7 @@ enum ServerEventWire {
             default
         )]
         session_id: String,
-        status: SessionStatusWire,
+        status: SessionRunStatusWire,
     },
     #[serde(rename = "question.created")]
     QuestionCreated(QuestionCreatedWire),
@@ -355,32 +356,6 @@ struct UsageWire {
     completion_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     message_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum SessionStatusWire {
-    Simple(String),
-    Object(SessionStatusObjectWire),
-}
-
-impl SessionStatusWire {
-    fn kind(&self) -> Option<&str> {
-        match self {
-            SessionStatusWire::Simple(kind) => Some(kind.as_str()),
-            SessionStatusWire::Object(obj) => obj.kind.as_deref(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct SessionStatusObjectWire {
-    #[serde(
-        rename = "type",
-        default,
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
-    kind: Option<String>,
 }
 
 // ── SSE subscriber ───────────────────────────────────────────────────

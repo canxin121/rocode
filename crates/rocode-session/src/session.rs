@@ -130,6 +130,12 @@ pub enum RunStatus {
     #[default]
     Idle,
     Busy,
+    Pending {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     Retrying {
         attempt: u32,
         #[serde(default)]
@@ -137,6 +143,10 @@ pub enum RunStatus {
         /// Timestamp (millis) of the next retry attempt.
         #[serde(default)]
         next: i64,
+    },
+    Error {
+        #[serde(default)]
+        message: String,
     },
 }
 
@@ -174,7 +184,7 @@ impl SessionStateManager {
     pub fn is_busy(&self, session_id: &str) -> bool {
         matches!(
             self.get(session_id),
-            RunStatus::Busy | RunStatus::Retrying { .. }
+            RunStatus::Busy | RunStatus::Pending { .. } | RunStatus::Retrying { .. }
         )
     }
 
@@ -202,6 +212,19 @@ impl SessionStateManager {
         );
     }
 
+    pub fn set_pending(
+        &mut self,
+        session_id: &str,
+        reason: Option<String>,
+        message: Option<String>,
+    ) {
+        self.set(session_id, RunStatus::Pending { reason, message });
+    }
+
+    pub fn set_error(&mut self, session_id: &str, message: String) {
+        self.set(session_id, RunStatus::Error { message });
+    }
+
     pub fn set_idle(&mut self, session_id: &str) {
         self.set(session_id, RunStatus::Idle);
     }
@@ -213,7 +236,12 @@ impl SessionStateManager {
     pub fn busy_sessions(&self) -> Vec<&str> {
         self.states
             .iter()
-            .filter(|(_, s)| matches!(s, RunStatus::Busy | RunStatus::Retrying { .. }))
+            .filter(|(_, s)| {
+                matches!(
+                    s,
+                    RunStatus::Busy | RunStatus::Pending { .. } | RunStatus::Retrying { .. }
+                )
+            })
             .map(|(id, _)| id.as_str())
             .collect()
     }

@@ -1,5 +1,10 @@
 use chrono::Utc;
 use rocode_command::stage_protocol::{ExecutionNode, ExecutionNodeKind, ExecutionNodeStatus};
+pub use rocode_session::execution::{
+    ExecutionKind, ExecutionStatus, SessionExecutionNode, SessionExecutionTopology,
+};
+pub use rocode_session::question::{QuestionInfo, QuestionItemInfo, QuestionOptionInfo};
+pub use rocode_session::run_status::{PendingStatusReason, SessionRunStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -125,27 +130,6 @@ pub(crate) struct TopologyChangeContext {
 /// Receives the session_id, triggering execution_id, and its stage_id.
 pub(crate) type TopologyChangedCallback = Arc<dyn Fn(&TopologyChangeContext) + Send + Sync>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionKind {
-    PromptRun,
-    SchedulerRun,
-    SchedulerStage,
-    ToolCall,
-    AgentTask,
-    Question,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionStatus {
-    Running,
-    Waiting,
-    Cancelling,
-    Retry,
-    Done,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRecord {
     pub id: String,
@@ -212,44 +196,6 @@ impl ExecutionRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionExecutionNode {
-    pub id: String,
-    pub kind: ExecutionKind,
-    pub status: ExecutionStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stage_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub waiting_on: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recent_event: Option<String>,
-    pub started_at: i64,
-    pub updated_at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-    #[serde(default)]
-    pub children: Vec<SessionExecutionNode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionExecutionTopology {
-    pub session_id: String,
-    pub active_count: usize,
-    pub done_count: usize,
-    pub running_count: usize,
-    pub waiting_count: usize,
-    pub cancelling_count: usize,
-    pub retry_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<i64>,
-    #[serde(default)]
-    pub roots: Vec<SessionExecutionNode>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExecutionPatch {
     pub status: Option<ExecutionStatus>,
@@ -265,83 +211,6 @@ pub(crate) enum FieldUpdate<T> {
     Keep,
     Set(T),
     Clear,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-#[derive(Default)]
-pub enum SessionRunStatus {
-    #[default]
-    Idle,
-    Busy,
-    Pending {
-        reason: PendingStatusReason,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        message: Option<String>,
-    },
-    Retry {
-        attempt: u32,
-        message: String,
-        next: i64,
-    },
-    Error {
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PendingStatusReason {
-    Question,
-    Permission,
-}
-
-impl PendingStatusReason {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Question => "question",
-            Self::Permission => "permission",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "question" => Some(Self::Question),
-            "permission" => Some(Self::Permission),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionOptionInfo {
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionItemInfo {
-    pub question: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
-    #[serde(default)]
-    pub options: Vec<QuestionOptionInfo>,
-    #[serde(default)]
-    pub multiple: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuestionInfo {
-    pub id: String,
-    pub session_id: String,
-    /// Legacy: flat question strings (kept for backward compat).
-    pub questions: Vec<String>,
-    /// Legacy: flat option labels per question (kept for backward compat).
-    pub options: Option<Vec<Vec<String>>>,
-    /// Full-fidelity question items with descriptions, headers, multi-select.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<QuestionItemInfo>,
 }
 
 #[derive(Debug)]
