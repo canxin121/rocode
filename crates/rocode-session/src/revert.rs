@@ -1,11 +1,11 @@
 use anyhow::Result;
+use rocode_core::snapshot::{FileDiff as SnapshotFileDiff, Snapshot};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
-use crate::session::{FileDiff as SessionFileDiff, Session, SessionManager};
-use crate::snapshot::Snapshot;
+use crate::session::{Session, SessionManager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevertInput {
@@ -36,8 +36,8 @@ pub struct FileDiff {
     pub deletions: u64,
 }
 
-impl From<SessionFileDiff> for FileDiff {
-    fn from(d: SessionFileDiff) -> Self {
+impl From<SnapshotFileDiff> for FileDiff {
+    fn from(d: SnapshotFileDiff) -> Self {
         Self {
             path: d.path,
             additions: d.additions,

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use rocode_core::bus::Bus;
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_core::snapshot::Snapshot;
 use rocode_orchestrator::message_title_request;
 use rocode_provider::{Content, Message, Provider, Role as ProviderRole};
 
@@ -11,7 +12,6 @@ use crate::message_model::{
     StepStartPart,
 };
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionSummary as SessionSummaryInfo};
-use crate::snapshot::Snapshot;
 use crate::Role;
 
 // ============================================================================

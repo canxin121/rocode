@@ -12,7 +12,7 @@ use crate::mcp_oauth::{
     McpServerInfo as McpServerInfoStruct, McpServerLogEntry, RemoteMcpConfig,
 };
 use crate::{ApiError, Result, ServerState};
-use rocode_config::McpServerConfig as LoadedMcpServerConfig;
+use rocode_config::{McpOAuthConfig as LoadedMcpOAuthConfig, McpServerConfig as LoadedMcpServerConfig};
 
 pub(crate) fn mcp_routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -358,12 +358,17 @@ fn parse_runtime_from_loaded_config(
             let enabled = server.enabled.unwrap_or(true);
 
             if let Some(url) = server.url {
+                let (oauth_enabled, client_id) = match server.oauth {
+                    Some(LoadedMcpOAuthConfig::Disabled(false)) => (false, None),
+                    Some(LoadedMcpOAuthConfig::Config(cfg)) => (true, cfg.client_id),
+                    _ => (true, None),
+                };
                 return Ok(Some((
                     McpRuntimeConfig::Remote(RemoteMcpConfig {
                         url,
-                        oauth_enabled: true,
-                        client_id: server.client_id,
-                        authorization_url: server.authorization_url,
+                        oauth_enabled,
+                        client_id,
+                        authorization_url: None,
                     }),
                     enabled,
                 )));
@@ -372,13 +377,12 @@ fn parse_runtime_from_loaded_config(
             if !server.command.is_empty() {
                 let mut cmd_iter = server.command.into_iter();
                 let command = cmd_iter.next().unwrap();
-                let mut args: Vec<String> = cmd_iter.collect();
-                args.extend(server.args);
+                let args: Vec<String> = cmd_iter.collect();
                 return Ok(Some((
                     McpRuntimeConfig::Local(LocalMcpConfig {
                         command,
                         args,
-                        env: server.env,
+                        env: server.environment,
                         timeout: server.timeout,
                     }),
                     enabled,
