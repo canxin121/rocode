@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
-use crate::compat_parts::try_parse_compatible_parts;
+use rocode_session::message_model::try_parse_unified_parts;
 use rocode_session::{MessagePart, PartType, ToolCallStatus};
 use tracing::{info, warn};
 
@@ -47,7 +47,7 @@ fn parse_message_parts_for_backfill(
     message_id: &str,
 ) -> Option<Vec<MessagePart>> {
     let fallback = DateTime::from_timestamp_millis(message_created_at).unwrap_or_else(Utc::now);
-    try_parse_compatible_parts(data, fallback, message_id)
+    try_parse_unified_parts(data, fallback, message_id)
 }
 
 #[async_trait::async_trait]
@@ -201,7 +201,7 @@ impl MigrationTrait for Migration {
 #[cfg(test)]
 mod tests {
     use super::parse_message_parts_for_backfill;
-    use rocode_session::PartType;
+    use rocode_session::{MessagePart, PartType};
 
     #[test]
     fn parse_message_parts_for_backfill_supports_unified_tool_parts() {
@@ -270,5 +270,18 @@ mod tests {
             &parts[0].part_type,
             PartType::Text { text, .. } if text == "hello"
         ));
+    }
+
+    #[test]
+    fn parse_message_parts_for_backfill_rejects_canonical_parts_array() {
+        let raw = serde_json::to_string(&vec![MessagePart::new(PartType::Text {
+            text: "legacy".to_string(),
+            synthetic: None,
+            ignored: None,
+        })])
+        .expect("serialize canonical parts");
+
+        let parts = parse_message_parts_for_backfill(&raw, 1, "2");
+        assert!(parts.is_none());
     }
 }

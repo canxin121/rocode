@@ -76,10 +76,10 @@ struct SnapshotMetadataWire {
 fn snapshot_metadata_wire(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> SnapshotMetadataWire {
-    let Ok(value) = serde_json::to_value(metadata) else {
-        return SnapshotMetadataWire::default();
-    };
-    serde_json::from_value::<SnapshotMetadataWire>(value).unwrap_or_default()
+    SnapshotMetadataWire::deserialize(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
 }
 
 impl RevertManager {

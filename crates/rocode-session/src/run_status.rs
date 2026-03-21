@@ -1,27 +1,12 @@
 use serde::{Deserialize, Serialize};
+use strum_macros::{AsRefStr, EnumString};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum PendingStatusReason {
     Question,
     Permission,
-}
-
-impl PendingStatusReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Question => "question",
-            Self::Permission => "permission",
-        }
-    }
-
-    pub fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "question" => Some(Self::Question),
-            "permission" => Some(Self::Permission),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +80,7 @@ impl SessionRunStatus {
                 status: "pending".to_string(),
                 idle: false,
                 busy: true,
-                reason: Some(reason.as_str().to_string()),
+                reason: Some(reason.as_ref().to_string()),
                 attempt: None,
                 message: message.clone(),
                 next: None,

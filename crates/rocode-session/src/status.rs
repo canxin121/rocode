@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -108,7 +109,7 @@ impl SessionStatusManager {
     ) {
         let reason = reason
             .as_deref()
-            .and_then(PendingStatusReason::from_str)
+            .and_then(|value| PendingStatusReason::from_str(value).ok())
             .unwrap_or(PendingStatusReason::Question);
         self.set(session_id, SessionStatusInfo::Pending { reason, message })
             .await;

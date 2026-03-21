@@ -88,7 +88,7 @@ where
     let Some(value) = value else {
         return Ok(None);
     };
-    Ok(serde_json::from_value::<HistoricalUsageWire>(value).ok())
+    Ok(HistoricalUsageWire::deserialize(value).ok())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -133,8 +133,7 @@ fn parse_message_metadata(metadata: &HashMap<String, serde_json::Value>) -> Mess
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    serde_json::from_value::<MessageMetadataWire>(serde_json::Value::Object(map))
-        .unwrap_or_default()
+    MessageMetadataWire::deserialize(serde_json::Value::Object(map)).unwrap_or_default()
 }
 
 fn clamp_u64_to_i32(value: Option<u64>) -> i32 {
@@ -370,7 +369,13 @@ impl SessionPrompt {
                         if *is_error {
                             Some((
                                 tool_call_id.clone(),
-                                (content.clone(), true, Some(tool_name), metadata.clone(), None),
+                                (
+                                    content.clone(),
+                                    true,
+                                    Some(tool_name),
+                                    metadata.clone(),
+                                    None,
+                                ),
                             ))
                         } else {
                             Some((
@@ -448,16 +453,16 @@ impl SessionPrompt {
 
                 let (state_input, state_raw, status) = Self::state_projection(&tool.state);
 
-                    tool.state = Self::hydrate_tool_state_for_unified(ToolStateHydrationInput {
-                        tool_call_id: &tool.call_id,
-                        tool_name: &tool.tool,
-                        input: &state_input,
-                        status: &status,
-                        raw: state_raw.as_deref().unwrap_or_default(),
-                        tool_result: historical_tool_results.get(&tool.call_id),
-                        session_id: &msg.session_id,
-                        message_id: &msg.id,
-                    });
+                tool.state = Self::hydrate_tool_state_for_unified(ToolStateHydrationInput {
+                    tool_call_id: &tool.call_id,
+                    tool_name: &tool.tool,
+                    input: &state_input,
+                    status: &status,
+                    raw: state_raw.as_deref().unwrap_or_default(),
+                    tool_result: historical_tool_results.get(&tool.call_id),
+                    session_id: &msg.session_id,
+                    message_id: &msg.id,
+                });
             }
 
             if let Some(snapshot) = meta
@@ -580,9 +585,7 @@ impl SessionPrompt {
         out
     }
 
-    fn hydrate_tool_state_for_unified(
-        input_data: ToolStateHydrationInput<'_>,
-    ) -> crate::ToolState {
+    fn hydrate_tool_state_for_unified(input_data: ToolStateHydrationInput<'_>) -> crate::ToolState {
         let now = chrono::Utc::now().timestamp_millis();
         match input_data.status {
             crate::ToolCallStatus::Pending => crate::ToolState::Pending {

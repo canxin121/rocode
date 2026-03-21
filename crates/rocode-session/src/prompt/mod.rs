@@ -57,9 +57,9 @@ use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_model::{
     session_message_to_unified_message, ModelRef as V2ModelRef, Part as ModelPart,
 };
-use crate::{Role, Session, SessionMessage, SessionStateManager};
 #[cfg(test)]
 use crate::PartType;
+use crate::{Role, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
@@ -148,19 +148,19 @@ impl TryFrom<serde_json::Value> for PartInput {
     type Error = String;
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value).map_err(|e| format!("Invalid PartInput: {}", e))
+        Self::deserialize(value).map_err(|e| format!("Invalid PartInput: {}", e))
     }
 }
 
 impl PartInput {
     /// Parse a JSON array of parts into a Vec<PartInput>, skipping invalid entries.
     pub fn parse_array(value: &serde_json::Value) -> Vec<PartInput> {
-        match value.as_array() {
-            Some(arr) => arr
+        match value {
+            serde_json::Value::Array(arr) => arr
                 .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .filter_map(|value| Self::deserialize(value.clone()).ok())
                 .collect(),
-            None => Vec::new(),
+            _ => Vec::new(),
         }
     }
 }
@@ -856,12 +856,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         .await;
                     }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
-                        SessionPrompt::upsert_tool_call_part(
-                            assistant,
-                            id,
-                            None,
-                            Some(tool_state),
-                        );
+                        SessionPrompt::upsert_tool_call_part(assistant, id, None, Some(tool_state));
                     }
                 }
             }
@@ -1567,10 +1562,10 @@ impl SessionPrompt {
             model_variant: Option<String>,
         }
 
-        let metadata = serde_json::to_value(&session.metadata)
-            .ok()
-            .and_then(|value| serde_json::from_value::<ResumeSessionMetadataWire>(value).ok())
-            .unwrap_or_default();
+        let metadata = ResumeSessionMetadataWire::deserialize(serde_json::Value::Object(
+            session.metadata.clone().into_iter().collect(),
+        ))
+        .unwrap_or_default();
 
         let model = session.messages.iter().rev().find_map(|m| match m.role {
             Role::User => metadata
@@ -2254,10 +2249,10 @@ impl SessionPrompt {
             pending_subtasks: Vec<serde_json::Value>,
         }
 
-        let Ok(value) = serde_json::to_value(metadata) else {
-            return Vec::new();
-        };
-        let wire = serde_json::from_value::<PendingSubtasksWire>(value).unwrap_or_default();
+        let wire = PendingSubtasksWire::deserialize(serde_json::Value::Object(
+            metadata.clone().into_iter().collect(),
+        ))
+        .unwrap_or_default();
         wire.pending_subtasks
     }
 
@@ -2277,29 +2272,27 @@ impl SessionPrompt {
         let pending = Self::pending_subtasks_metadata_values(&message.metadata);
 
         let metadata_by_id: HashMap<String, (String, String, String)> =
-            serde_json::from_value::<Vec<PendingSubtaskMetadataWire>>(serde_json::Value::Array(
-                pending,
-            ))
-            .ok()
-            .map(|items| {
-                items
-                    .into_iter()
-                    .filter_map(|item| {
-                        if item.id.trim().is_empty() {
-                            return None;
-                        }
-                        let agent = item
-                            .agent
-                            .unwrap_or_else(|| "general".to_string())
-                            .trim()
-                            .to_string();
-                        let prompt = item.prompt.unwrap_or_default();
-                        let description = item.description.unwrap_or_default();
-                        Some((item.id, (agent, prompt, description)))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+            Vec::<PendingSubtaskMetadataWire>::deserialize(serde_json::Value::Array(pending))
+                .ok()
+                .map(|items| {
+                    items
+                        .into_iter()
+                        .filter_map(|item| {
+                            if item.id.trim().is_empty() {
+                                return None;
+                            }
+                            let agent = item
+                                .agent
+                                .unwrap_or_else(|| "general".to_string())
+                                .trim()
+                                .to_string();
+                            let prompt = item.prompt.unwrap_or_default();
+                            let description = item.description.unwrap_or_default();
+                            Some((item.id, (agent, prompt, description)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
         session_message_to_unified_message(message)
             .parts
@@ -2313,10 +2306,8 @@ impl SessionPrompt {
                     return None;
                 }
 
-                let (agent, prompt, meta_description) = metadata_by_id
-                    .get(&subtask.id)
-                    .cloned()
-                    .unwrap_or_else(|| {
+                let (agent, prompt, meta_description) =
+                    metadata_by_id.get(&subtask.id).cloned().unwrap_or_else(|| {
                         (
                             subtask.id.clone(),
                             subtask.description.clone(),
