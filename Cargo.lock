@@ -3417,6 +3417,7 @@ dependencies = [
 name = "rocode-core"
 version = "2026.3.16"
 dependencies = [
+ "anyhow",
  "chrono",
  "hex",
  "libc",
@@ -3427,6 +3428,7 @@ dependencies = [
  "serde_json",
  "strum 0.26.3",
  "strum_macros",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

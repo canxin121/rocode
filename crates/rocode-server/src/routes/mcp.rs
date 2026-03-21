@@ -12,7 +12,7 @@ use crate::mcp_oauth::{
     McpServerInfo as McpServerInfoStruct, McpServerLogEntry, RemoteMcpConfig,
 };
 use crate::{ApiError, Result, ServerState};
-use rocode_config::McpServerConfig as LoadedMcpServerConfig;
+use rocode_config::{McpOAuthConfig as LoadedMcpOAuthConfig, McpServerConfig as LoadedMcpServerConfig};
 
 pub(crate) fn mcp_routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -359,9 +359,9 @@ fn parse_runtime_from_loaded_config(
 
             if let Some(url) = server.url {
                 let (oauth_enabled, client_id) = match server.oauth {
-                    Some(rocode_config::McpOAuthConfig::Disabled(value)) => (value, None),
-                    Some(rocode_config::McpOAuthConfig::Config(oauth)) => (true, oauth.client_id),
-                    None => (true, None),
+                    Some(LoadedMcpOAuthConfig::Disabled(false)) => (false, None),
+                    Some(LoadedMcpOAuthConfig::Config(cfg)) => (true, cfg.client_id),
+                    _ => (true, None),
                 };
                 return Ok(Some((
                     McpRuntimeConfig::Remote(RemoteMcpConfig {
