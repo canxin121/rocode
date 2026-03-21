@@ -1,10 +1,6 @@
-use crate::schema::{
-    AgentConfig, AgentConfigs, AgentMode, PermissionAction, PermissionConfig, PermissionRule,
-    PluginConfig,
-};
+use crate::schema::{AgentConfig, PermissionConfig, PluginConfig};
 use crate::Config;
 use anyhow::{Context, Result};
-use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -130,21 +126,8 @@ pub fn deduplicate_plugins(
     plugins
 }
 
-/// Apply post-load transforms: legacy migrations, flag overrides, plugin dedup.
+/// Apply post-load transforms: flag overrides and plugin dedup.
 pub(super) fn apply_post_load_transforms(config: &mut Config) {
-    // Migrate deprecated `mode` field to `agent` field
-    if let Some(mode_configs) = config.mode.take() {
-        let agent_configs = config.agent.get_or_insert_with(AgentConfigs::default);
-        for (name, mut mode_agent) in mode_configs.entries {
-            mode_agent.mode = Some(AgentMode::Primary);
-            if let Some(existing) = agent_configs.entries.get_mut(&name) {
-                merge_agent_config(existing, mode_agent);
-            } else {
-                agent_configs.entries.insert(name, mode_agent);
-            }
-        }
-    }
-
     // ROCODE_PERMISSION env var override
     if let Ok(perm_json) = env::var("ROCODE_PERMISSION") {
         if let Ok(perm) = serde_json::from_str::<PermissionConfig>(&perm_json) {
@@ -157,50 +140,9 @@ pub(super) fn apply_post_load_transforms(config: &mut Config) {
         }
     }
 
-    // Backwards compatibility: legacy top-level `tools` config -> permission
-    if let Some(tools) = config.tools.take() {
-        let mut perms = HashMap::new();
-        for (tool, enabled) in tools {
-            let action = if enabled {
-                PermissionAction::Allow
-            } else {
-                PermissionAction::Deny
-            };
-            // write, edit, patch, multiedit all map to "edit" permission
-            if matches!(
-                BuiltinToolName::parse(&tool),
-                Some(
-                    BuiltinToolName::Write
-                        | BuiltinToolName::Edit
-                        | BuiltinToolName::ApplyPatch
-                        | BuiltinToolName::MultiEdit
-                )
-            ) {
-                perms.insert(
-                    BuiltinToolName::Edit.as_str().to_string(),
-                    PermissionRule::Action(action),
-                );
-            } else {
-                perms.insert(tool, PermissionRule::Action(action));
-            }
-        }
-        // Legacy tools have lower priority than explicit permission config
-        if let Some(existing) = &config.permission {
-            for (k, v) in existing.rules.clone() {
-                perms.insert(k, v);
-            }
-        }
-        config.permission = Some(PermissionConfig { rules: perms });
-    }
-
     // Set default username from system
     if config.username.is_none() {
         config.username = env::var("USER").or_else(|_| env::var("USERNAME")).ok();
-    }
-
-    // Handle migration from autoshare to share field
-    if config.autoshare == Some(true) && config.share.is_none() {
-        config.share = Some(crate::schema::ShareMode::Auto);
     }
 
     // Apply flag overrides for compaction settings

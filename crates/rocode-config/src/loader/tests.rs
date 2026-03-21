@@ -1,6 +1,4 @@
-use super::file_ops::{
-    migrate_legacy_toml_config, parse_jsonc, resolve_file_references, substitute_env_vars,
-};
+use super::file_ops::{parse_jsonc, resolve_file_references, substitute_env_vars};
 use super::markdown_parser::{
     fallback_sanitize_yaml, parse_markdown_agent, parse_markdown_command,
     serde_yaml_frontmatter_to_json, split_frontmatter,
@@ -73,17 +71,16 @@ fn test_parse_jsonc_allows_trailing_comma_in_object() {
 fn test_parse_jsonc_allows_trailing_comma_in_array() {
     let content = r#"{
         "instructions": ["a.md", "b.md",],
-        "plugin": [
-            "p1",
-            "p2",
-        ],
+        "plugin": {
+            "p1": { "type": "npm", "package": "p1" },
+            "p2": { "type": "npm", "package": "p2" },
+        },
     }"#;
     let config: Config = parse_jsonc(content).unwrap();
     assert_eq!(
         config.instructions,
         vec!["a.md".to_string(), "b.md".to_string()]
     );
-    // Old array format is backward-compatible: converted to HashMap
     assert_eq!(config.plugin.len(), 2);
     assert!(config.plugin.contains_key("p1"));
     assert!(config.plugin.contains_key("p2"));
@@ -370,7 +367,9 @@ fn test_load_all_preserves_explicit_file_plugin() {
     fs::write(
         root.join("rocode.json"),
         r#"{
-  "plugin": ["file:///tmp/should-not-be-loaded.ts"]
+  "plugin": {
+    "should-not-be-loaded": { "type": "file", "path": "/tmp/should-not-be-loaded.ts" }
+  }
 }"#,
     )
     .unwrap();
@@ -715,42 +714,4 @@ fn test_parse_markdown_agent_colon_in_description_fallback() {
     let (_name, config) = result.unwrap();
     let desc = config.description.unwrap();
     assert!(desc.contains("model: claude"));
-}
-
-#[test]
-fn legacy_toml_config_migrates_to_rocode_json() {
-    let temp = TestDir::new("rocode_legacy_toml");
-    let config_dir = temp.path.join("rocode");
-    fs::create_dir_all(&config_dir).unwrap();
-    fs::write(
-        config_dir.join("config"),
-        r#"
-provider = "anthropic"
-model = "claude-3-5-sonnet"
-theme = "dark"
-"#,
-    )
-    .unwrap();
-
-    let mut config = Config::default();
-    let migrated = migrate_legacy_toml_config(&config_dir, &mut config);
-    assert!(migrated.is_some());
-    assert_eq!(config.model.as_deref(), Some("anthropic/claude-3-5-sonnet"));
-    assert_eq!(config.theme.as_deref(), Some("dark"));
-    assert_eq!(
-        config.schema.as_deref(),
-        Some("https://opencode.ai/config.json") //no rocode.ai domain name now
-    );
-
-    let json_path = config_dir.join("rocode.json");
-    assert!(json_path.exists());
-    assert!(!config_dir.join("config").exists());
-
-    let content = fs::read_to_string(json_path).unwrap();
-    let written: Config = serde_json::from_str(&content).unwrap();
-    assert_eq!(
-        written.model.as_deref(),
-        Some("anthropic/claude-3-5-sonnet")
-    );
-    assert_eq!(written.theme.as_deref(), Some("dark"));
 }

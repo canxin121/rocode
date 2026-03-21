@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,11 +58,7 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watcher: Option<WatcherConfig>,
 
-    #[serde(
-        default,
-        deserialize_with = "plugin::deserialize_plugin_map",
-        skip_serializing_if = "HashMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin: HashMap<String, PluginConfig>,
 
     #[serde(
@@ -77,9 +73,6 @@ pub struct Config {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share: Option<ShareMode>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub autoshare: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autoupdate: Option<AutoUpdateMode>,
@@ -101,9 +94,6 @@ pub struct Config {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<AgentConfigs>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentConfigs>,
@@ -138,9 +128,6 @@ pub struct Config {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<PermissionConfig>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<HashMap<String, bool>>,
 
     #[serde(
         rename = "webSearch",
@@ -494,14 +481,6 @@ pub struct KeybindsConfig {
     pub tips_toggle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_thinking: Option<String>,
-
-    // Legacy fields kept for backward compatibility
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub submit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cancel: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interrupt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -852,8 +831,6 @@ pub struct PluginConfig {
     pub options: HashMap<String, serde_json::Value>,
 }
 
-/// Backward-compatible deserializer: accepts both the old `["pkg@ver"]` array
-/// format and the new `{"name": {"type": "npm", ...}}` map format.
 mod merge;
 pub mod plugin;
 

@@ -26,8 +26,7 @@ use discovery::{
     load_plugins_from_path, normalize_existing_path,
 };
 use file_ops::{
-    get_global_config_paths, migrate_legacy_toml_config, parse_jsonc, resolve_file_references,
-    substitute_env_vars,
+    get_global_config_paths, parse_jsonc, resolve_file_references, substitute_env_vars,
 };
 use transforms::{apply_post_load_transforms, merge_agent_config};
 
@@ -97,16 +96,6 @@ impl ConfigLoader {
                     break;
                 }
             }
-
-            if let Some(global_config_dir) = global_config_path.parent() {
-                if let Some(migrated_path) =
-                    migrate_legacy_toml_config(global_config_dir, &mut self.config)
-                {
-                    if !self.config_paths.contains(&migrated_path) {
-                        self.config_paths.push(migrated_path);
-                    }
-                }
-            }
         }
 
         Ok(())
@@ -163,7 +152,7 @@ impl ConfigLoader {
     /// 5. Inline config (ROCODE_CONFIG_CONTENT)
     /// 6. Managed config directory (enterprise, highest priority)
     ///
-    /// Then: plugin_paths/default plugin dir scan, legacy migrations, flag overrides, plugin dedup
+    /// Then: plugin_paths/default plugin dir scan, flag overrides, plugin dedup
     pub fn load_all<P: AsRef<Path>>(&mut self, project_dir: P) -> Result<Config> {
         let project_dir = project_dir.as_ref();
 
@@ -237,7 +226,7 @@ impl ConfigLoader {
         // Load managed config (enterprise, highest priority)
         self.load_managed_config()?;
 
-        // Apply legacy migrations and flag overrides
+        // Apply post-load transforms and flag overrides
         apply_post_load_transforms(&mut self.config);
 
         Ok(self.config.clone())

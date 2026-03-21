@@ -199,7 +199,6 @@ rocode run --help
 项目纯净性说明：
 
 - 项目级配置入口以 `rocode.jsonc` / `rocode.json` 为准
-- 历史 `opencode` 配置排查建议使用仓库脚本 `scripts/scan_legacy_config.py`
 
 ## 7. 推荐工作流
 

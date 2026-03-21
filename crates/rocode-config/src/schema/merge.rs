@@ -256,10 +256,6 @@ impl DeepMerge for KeybindsConfig {
         merge_option_replace(&mut self.terminal_title_toggle, other.terminal_title_toggle);
         merge_option_replace(&mut self.tips_toggle, other.tips_toggle);
         merge_option_replace(&mut self.display_thinking, other.display_thinking);
-        // Legacy fields
-        merge_option_replace(&mut self.submit, other.submit);
-        merge_option_replace(&mut self.cancel, other.cancel);
-        merge_option_replace(&mut self.interrupt, other.interrupt);
     }
 }
 
@@ -413,13 +409,6 @@ impl DeepMerge for McpServer {
         merge_option_replace(&mut self.timeout, other.timeout);
         merge_option_map_overwrite_values(&mut self.headers, other.headers);
         merge_option_replace(&mut self.oauth, other.oauth);
-        // Legacy fields
-        if !other.args.is_empty() {
-            self.args = other.args;
-        }
-        merge_option_map_overwrite_values(&mut self.env, other.env);
-        merge_option_replace(&mut self.client_id, other.client_id);
-        merge_option_replace(&mut self.authorization_url, other.authorization_url);
     }
 }
 
@@ -583,13 +572,11 @@ impl Config {
         merge_option_deep(&mut self.watcher, other.watcher);
         merge_option_replace(&mut self.snapshot, other.snapshot);
         merge_option_replace(&mut self.share, other.share);
-        merge_option_replace(&mut self.autoshare, other.autoshare);
         merge_option_replace(&mut self.autoupdate, other.autoupdate);
         merge_option_replace(&mut self.model, other.model);
         merge_option_replace(&mut self.small_model, other.small_model);
         merge_option_replace(&mut self.default_agent, other.default_agent);
         merge_option_replace(&mut self.username, other.username);
-        merge_option_deep(&mut self.mode, other.mode);
         merge_option_deep(&mut self.agent, other.agent);
         merge_option_deep(&mut self.composition, other.composition);
         merge_option_map_deep_values(&mut self.provider, other.provider);
@@ -599,7 +586,6 @@ impl Config {
         merge_option_replace(&mut self.layout, other.layout);
         merge_option_deep(&mut self.ui_preferences, other.ui_preferences);
         merge_option_deep(&mut self.permission, other.permission);
-        merge_option_map_overwrite_values(&mut self.tools, other.tools);
         merge_option_deep(&mut self.web_search, other.web_search);
         merge_option_deep(&mut self.enterprise, other.enterprise);
         merge_option_deep(&mut self.compaction, other.compaction);

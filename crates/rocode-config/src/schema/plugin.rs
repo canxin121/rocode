@@ -1,37 +1,5 @@
 use super::*;
-use serde::Deserialize;
 use std::collections::HashMap;
-
-pub fn deserialize_plugin_map<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, PluginConfig>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum PluginField {
-        Map(HashMap<String, PluginConfig>),
-        List(Vec<String>),
-    }
-
-    match PluginField::deserialize(deserializer)? {
-        PluginField::Map(map) => Ok(map),
-        PluginField::List(list) => {
-            let mut map = HashMap::new();
-            for spec in list {
-                let (key, config) = legacy_spec_to_plugin_config(&spec);
-                map.entry(key).or_insert(config);
-            }
-            Ok(map)
-        }
-    }
-}
-
-/// Convert a legacy string spec (e.g. "oh-my-opencode@latest") to a PluginConfig.
-fn legacy_spec_to_plugin_config(spec: &str) -> (String, PluginConfig) {
-    PluginConfig::from_legacy_spec(spec)
-}
 
 /// Parse "pkg@version" into (name, version). Handles scoped packages like "@scope/pkg@1.0".
 fn parse_npm_spec(spec: &str) -> (&str, &str) {
@@ -83,15 +51,6 @@ impl PluginConfig {
                 ..Default::default()
             },
         )
-    }
-
-    /// Convert a legacy string spec to a PluginConfig entry.
-    pub fn from_legacy_spec(spec: &str) -> (String, Self) {
-        if spec.starts_with("file://") {
-            Self::from_file_spec(spec)
-        } else {
-            Self::from_npm_spec(spec)
-        }
     }
 
     /// Create a dylib-type plugin from a shared library path.
@@ -183,16 +142,6 @@ pub struct McpServer {
     /// For remote: OAuth config (or false to disable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
-
-    // Legacy fields kept for backward compatibility
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorization_url: Option<String>,
 }
 
 /// OAuth configuration for remote MCP servers.
