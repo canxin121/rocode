@@ -57,9 +57,9 @@ use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_model::{
     session_message_to_unified_message, ModelRef as V2ModelRef, Part as ModelPart,
 };
-use crate::{Role, Session, SessionMessage, SessionStateManager};
 #[cfg(test)]
 use crate::PartType;
+use crate::{Role, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
@@ -856,12 +856,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         .await;
                     }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
-                        SessionPrompt::upsert_tool_call_part(
-                            assistant,
-                            id,
-                            None,
-                            Some(tool_state),
-                        );
+                        SessionPrompt::upsert_tool_call_part(assistant, id, None, Some(tool_state));
                     }
                 }
             }
@@ -2313,10 +2308,8 @@ impl SessionPrompt {
                     return None;
                 }
 
-                let (agent, prompt, meta_description) = metadata_by_id
-                    .get(&subtask.id)
-                    .cloned()
-                    .unwrap_or_else(|| {
+                let (agent, prompt, meta_description) =
+                    metadata_by_id.get(&subtask.id).cloned().unwrap_or_else(|| {
                         (
                             subtask.id.clone(),
                             subtask.description.clone(),

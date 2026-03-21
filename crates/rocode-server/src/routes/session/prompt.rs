@@ -720,14 +720,16 @@ pub(super) async fn session_prompt(
                     };
                     if let Some(s_repo) = &s_repo {
                         let hydrated = persist_state.is_session_hydrated(&snapshot.id).await;
-                        match rocode_session::SessionPersistPlan::from_snapshot(snapshot, hydrated) {
+                        match rocode_session::SessionPersistPlan::from_snapshot(snapshot, hydrated)
+                        {
                             rocode_session::SessionPersistPlan::MetadataOnly(session) => {
                                 if let Err(e) = s_repo.upsert(&session).await {
                                     tracing::warn!(session_id = %session.id, %e, "incremental session upsert failed");
                                 }
                             }
                             rocode_session::SessionPersistPlan::Full { session, messages } => {
-                                if let Err(e) = s_repo.flush_with_messages(&session, &messages).await
+                                if let Err(e) =
+                                    s_repo.flush_with_messages(&session, &messages).await
                                 {
                                     tracing::warn!(session_id = %session.id, %e, "incremental transactional flush failed");
                                 }

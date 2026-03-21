@@ -45,10 +45,7 @@ pub fn structured_output_system_prompt() -> String {
 pub fn extract_structured_output(parts: &[crate::MessagePart]) -> Option<serde_json::Value> {
     for part in parts {
         let PartType::ToolCall {
-            name,
-            input,
-            state,
-            ..
+            name, input, state, ..
         } = &part.part_type
         else {
             continue;

@@ -23,7 +23,11 @@ pub struct PlanExitTool;
 const PLAN_FILE: &str = "PLAN.md";
 
 fn parse_model_ref(model: &Option<String>) -> ModelRef {
-    let Some(raw) = model.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(raw) = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return ModelRef {
             provider_id: "unknown".to_string(),
             model_id: "unknown".to_string(),

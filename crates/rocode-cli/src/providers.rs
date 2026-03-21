@@ -323,7 +323,7 @@ async fn load_plugin_auth_store(config: &rocode_config::Config) -> HashMap<Strin
                 if spec.is_none() {
                     tracing::info!(
                         plugin = name,
-                        r#type = cfg.plugin_type.as_str(),
+                        r#type = ?cfg.plugin_type,
                         "plugin type not yet supported by loader, skipping"
                     );
                 }
