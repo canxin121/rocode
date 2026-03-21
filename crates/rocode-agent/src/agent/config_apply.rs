@@ -13,9 +13,6 @@ use rocode_permission::{
 
 impl AgentRegistry {
     pub(crate) fn apply_config(&mut self, config: &LoadedConfig) {
-        if let Some(mode_configs) = &config.mode {
-            self.apply_agent_configs(mode_configs, Some(AgentMode::Primary));
-        }
         if let Some(agent_configs) = &config.agent {
             self.apply_agent_configs(agent_configs, None);
         }
