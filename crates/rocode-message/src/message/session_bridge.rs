@@ -72,9 +72,8 @@ pub fn session_message_to_unified_message(message: &SessionMessage) -> MessageWi
     let usage_ref = usage.as_ref();
     let metadata = message.metadata.clone();
 
-    let model_provider = metadata_string(&metadata, "model_provider")
-        .or_else(|| metadata_string(&metadata, "provider_id"))
-        .unwrap_or_else(|| "unknown".to_string());
+    let model_provider =
+        metadata_string(&metadata, "model_provider").unwrap_or_else(|| "unknown".to_string());
     let model_id = metadata_string(&metadata, "model_id").unwrap_or_else(|| "unknown".to_string());
     let agent = metadata_string(&metadata, "agent").unwrap_or_else(|| "general".to_string());
     let mode = metadata_string(&metadata, "mode").unwrap_or_else(|| "default".to_string());

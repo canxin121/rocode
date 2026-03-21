@@ -13,7 +13,6 @@ use crate::usage::MessageUsage;
 mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
     pub const MODEL_ID: &str = "model_id";
-    pub const LEGACY_PROVIDER_ID: &str = "provider_id";
     pub const MODE: &str = "mode";
     pub const FINISH_REASON: &str = "finish_reason";
 }
@@ -279,7 +278,6 @@ impl SessionMessage {
 
     pub fn model_provider(&self) -> Option<&str> {
         self.metadata_str(keys::MODEL_PROVIDER)
-            .or_else(|| self.metadata_str(keys::LEGACY_PROVIDER_ID))
     }
 
     pub fn model_id(&self) -> Option<&str> {

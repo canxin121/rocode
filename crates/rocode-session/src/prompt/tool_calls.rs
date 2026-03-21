@@ -17,34 +17,14 @@ impl SessionPrompt {
         message: &mut SessionMessage,
         tool_call_id: &str,
         tool_name: Option<&str>,
-        input: Option<serde_json::Value>,
-        raw_input: Option<String>,
-        status: Option<crate::ToolCallStatus>,
         tool_state: Option<crate::ToolState>,
     ) {
-        let mut input = input;
-        let mut raw_input = raw_input;
-        let mut status = status;
-        if let Some(state) = tool_state.as_ref() {
-            let (state_input, state_raw, state_status) = Self::state_projection(state);
-            input = Some(state_input);
-            // Only override raw_input if state_projection returns Some.
-            // Running/Completed/Error states return None for raw, but the
-            // caller may have explicitly provided a raw value that should
-            // be preserved.
-            if state_raw.is_some() {
-                raw_input = state_raw;
-            }
-            status = Some(state_status);
-        }
         let created_at = chrono::Utc::now();
         let created_ms = created_at.timestamp_millis();
         let explicit_name = tool_name
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(ToString::to_string);
-        let has_state_update =
-            tool_state.is_some() || input.is_some() || raw_input.is_some() || status.is_some();
 
         for part in &mut message.parts {
             let PartType::ToolCall {
@@ -66,39 +46,12 @@ impl SessionPrompt {
                 *name = explicit_tool_name.clone();
             }
 
-            if has_state_update {
-                let next_state = if let Some(next_state) = tool_state.as_ref() {
-                    next_state.clone()
-                } else if let Some(existing_state) = current_state.as_ref() {
-                    if input.is_some() || raw_input.is_some() || status.is_some() {
-                        tracing::debug!(
-                            tool_call_id,
-                            "ignoring legacy tool-call field update because canonical state exists"
-                        );
-                    }
-                    canonical_tool_state_to_message(existing_state)
-                } else {
-                    let (baseline_input, baseline_raw, baseline_status) = current_state
-                        .as_ref()
-                        .map(|state| {
-                            (
-                                state.input().clone(),
-                                state.raw().map(ToString::to_string),
-                                state.status(),
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            (current_input.clone(), current_raw.clone(), *current_status)
-                        });
-                    Self::synthesize_tool_state(
-                        status.unwrap_or(baseline_status),
-                        input.clone().unwrap_or(baseline_input),
-                        raw_input.clone().or(baseline_raw),
-                        created_ms,
-                        name,
-                    )
-                };
+            let next_state = tool_state
+                .as_ref()
+                .cloned()
+                .or_else(|| current_state.as_ref().map(canonical_tool_state_to_message));
 
+            if let Some(next_state) = next_state {
                 let (state_input, state_raw, state_status) = Self::state_projection(&next_state);
                 *current_input = state_input;
                 *current_raw = state_raw;
@@ -108,14 +61,12 @@ impl SessionPrompt {
             return;
         }
 
-        let resolved_input = input.unwrap_or_else(|| serde_json::json!({}));
-        let resolved_status = status.unwrap_or(crate::ToolCallStatus::Pending);
         let resolved_name = explicit_name.unwrap_or_default();
         let resolved_state = tool_state.unwrap_or_else(|| {
             Self::synthesize_tool_state(
-                resolved_status,
-                resolved_input.clone(),
-                raw_input.clone(),
+                crate::ToolCallStatus::Pending,
+                serde_json::json!({}),
+                None,
                 created_ms,
                 &resolved_name,
             )
@@ -1038,15 +989,7 @@ mod tests {
             message_id: Some(message.id.clone()),
         });
 
-        SessionPrompt::upsert_tool_call_part(
-            &mut message,
-            "call_1",
-            None,
-            None,
-            None,
-            Some(crate::ToolCallStatus::Running),
-            None,
-        );
+        SessionPrompt::upsert_tool_call_part(&mut message, "call_1", None, None);
 
         let updated = message
             .parts
@@ -1072,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_tool_call_ignores_legacy_field_override_when_state_present() {
+    fn upsert_tool_call_prefers_explicit_tool_state_over_existing_state() {
         let mut message = SessionMessage::assistant("ses_1");
         message.parts.push(crate::MessagePart {
             id: "prt_existing".to_string(),
@@ -1097,10 +1040,12 @@ mod tests {
             &mut message,
             "call_2",
             None,
-            Some(serde_json::json!({"legacy": true})),
-            Some("{\"legacy\":true}".to_string()),
-            Some(crate::ToolCallStatus::Error),
-            None,
+            Some(crate::ToolState::Error {
+                input: serde_json::json!({"next": true}),
+                error: "boom".to_string(),
+                metadata: None,
+                time: crate::ErrorTime { start: 2, end: 3 },
+            }),
         );
 
         let updated = message
@@ -1118,11 +1063,12 @@ mod tests {
             })
             .expect("updated tool call part missing");
 
-        assert_eq!(updated.0, &serde_json::json!({"from_state": true}));
-        assert!(matches!(updated.1, crate::ToolCallStatus::Running));
+        assert_eq!(updated.0, &serde_json::json!({"next": true}));
+        assert!(matches!(updated.1, crate::ToolCallStatus::Error));
         assert!(matches!(
             updated.2,
-            Some(CanonToolState::Running { input, .. }) if input == &serde_json::json!({"from_state": true})
+            Some(CanonToolState::Error { input, error, .. })
+                if input == &serde_json::json!({"next": true}) && error == "boom"
         ));
     }
 

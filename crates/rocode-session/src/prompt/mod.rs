@@ -794,9 +794,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             assistant,
                             id,
                             Some(next_name),
-                            None,
-                            None,
-                            None,
                             Some(tool_state),
                         );
                     }
@@ -862,9 +859,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         SessionPrompt::upsert_tool_call_part(
                             assistant,
                             id,
-                            None,
-                            None,
-                            None,
                             None,
                             Some(tool_state),
                         );
@@ -957,9 +951,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         assistant,
                         &call.id,
                         Some(&call.name),
-                        None,
-                        None,
-                        None,
                         Some(tool_state),
                     );
                 }
@@ -1059,9 +1050,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     assistant,
                     &call.id,
                     Some(&result.tool_name),
-                    Some(call.arguments.clone()),
-                    Some(serde_json::to_string(&call.arguments).unwrap_or_default()),
-                    None,
                     Some(entry.state.clone()),
                 );
             }

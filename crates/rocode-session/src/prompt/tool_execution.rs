@@ -201,9 +201,6 @@ impl SessionPrompt {
                     assistant_msg,
                     call_id,
                     Some(tool_name),
-                    None,
-                    None,
-                    None,
                     Some(crate::ToolState::Running {
                         input: input.clone(),
                         title: None,
@@ -415,9 +412,6 @@ impl SessionPrompt {
                         assistant_msg,
                         &call_id,
                         Some(&effective_tool_name),
-                        None,
-                        None,
-                        None,
                         Some(next_state),
                     );
                 }
