@@ -261,12 +261,9 @@ fn collect_plugins_in_dir(dir: &Path, plugins: &mut Vec<String>) {
 
 /// Load plugin paths from a directory.
 /// - Direct files in `path`
-/// - Compatibility subdirectories `path/plugin` and `path/plugins`
 pub(super) fn load_plugins_from_path(path: &Path) -> Vec<String> {
     let mut plugins = Vec::new();
     collect_plugins_in_dir(path, &mut plugins);
-    collect_plugins_in_dir(&path.join("plugin"), &mut plugins);
-    collect_plugins_in_dir(&path.join("plugins"), &mut plugins);
     plugins
 }
 

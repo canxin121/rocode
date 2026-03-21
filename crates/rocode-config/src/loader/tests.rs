@@ -4,7 +4,7 @@ use super::markdown_parser::{
     serde_yaml_frontmatter_to_json, split_frontmatter,
 };
 use super::*;
-use crate::{ShareMode, UiPreferencesConfig};
+use crate::{PluginType, ShareMode, UiPreferencesConfig};
 use rocode_core::contracts::tools::BuiltinToolName;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -327,10 +327,39 @@ fn test_load_all_reads_plugins_from_plugin_paths() {
         cfg.plugin
     );
     let plugin_cfg = &cfg.plugin["legacy-plugin"];
-    assert_eq!(plugin_cfg.plugin_type, "file");
+    assert_eq!(plugin_cfg.plugin_type, PluginType::File);
     assert_eq!(
         plugin_cfg.path.as_deref(),
         Some(plugin_path.to_str().unwrap())
+    );
+}
+
+#[test]
+fn test_load_all_does_not_scan_legacy_plugin_subdirectories_for_plugin_paths_entries() {
+    let temp = TestDir::new("rocode_config_plugin_paths_strict");
+    let root = temp.path.join("repo");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("custom-root/plugins")).unwrap();
+    let plugin_path = root.join("custom-root/plugins/legacy-subdir-plugin.ts");
+    fs::write(&plugin_path, "export default {};\n").unwrap();
+    fs::create_dir_all(root.join(".rocode")).unwrap();
+    fs::write(
+        root.join(".rocode/rocode.json"),
+        r#"{
+  "plugin_paths": {
+    "custom-root": "custom-root"
+  }
+}"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    let cfg = loader.load_all(&root).unwrap();
+
+    assert!(
+        !cfg.plugin.contains_key("legacy-subdir-plugin"),
+        "did not expect plugin from nested legacy directory to be auto-loaded: {:?}",
+        cfg.plugin
     );
 }
 
@@ -352,7 +381,7 @@ fn test_load_all_reads_plugins_from_default_rocode_plugin_dir() {
         cfg.plugin
     );
     let plugin_cfg = &cfg.plugin["default-plugin"];
-    assert_eq!(plugin_cfg.plugin_type, "file");
+    assert_eq!(plugin_cfg.plugin_type, PluginType::File);
     assert_eq!(
         plugin_cfg.path.as_deref(),
         Some(plugin_path.to_str().unwrap())
@@ -384,7 +413,10 @@ fn test_load_all_preserves_explicit_file_plugin() {
         "expected explicit file plugin to be preserved, got {:?}",
         cfg.plugin
     );
-    assert_eq!(cfg.plugin["should-not-be-loaded"].plugin_type, "file");
+    assert_eq!(
+        cfg.plugin["should-not-be-loaded"].plugin_type,
+        PluginType::File
+    );
 }
 
 #[test]

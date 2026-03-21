@@ -105,7 +105,7 @@ fn plugin_map_merge_and_instruction_arrays_append_unique() {
             (
                 "a".to_string(),
                 PluginConfig {
-                    plugin_type: "npm".to_string(),
+                    plugin_type: PluginType::Npm,
                     package: Some("a".to_string()),
                     ..Default::default()
                 },
@@ -113,7 +113,7 @@ fn plugin_map_merge_and_instruction_arrays_append_unique() {
             (
                 "b".to_string(),
                 PluginConfig {
-                    plugin_type: "npm".to_string(),
+                    plugin_type: PluginType::Npm,
                     package: Some("b".to_string()),
                     ..Default::default()
                 },
@@ -128,7 +128,7 @@ fn plugin_map_merge_and_instruction_arrays_append_unique() {
             (
                 "b".to_string(),
                 PluginConfig {
-                    plugin_type: "npm".to_string(),
+                    plugin_type: PluginType::Npm,
                     package: Some("b-updated".to_string()),
                     ..Default::default()
                 },
@@ -136,7 +136,7 @@ fn plugin_map_merge_and_instruction_arrays_append_unique() {
             (
                 "c".to_string(),
                 PluginConfig {
-                    plugin_type: "npm".to_string(),
+                    plugin_type: PluginType::Npm,
                     package: Some("c".to_string()),
                     ..Default::default()
                 },
@@ -373,6 +373,151 @@ fn scheduler_path_merge_replaces_previous_value() {
         base.scheduler_path.as_deref(),
         Some("/override/scheduler.jsonc")
     );
+}
+
+#[test]
+fn legacy_field_aliases_are_not_deserialized_for_top_level_and_ui_sections() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "log_level": "debug",
+        "scheduler_path": "./old-scheduler.jsonc",
+        "task_category_path": "./old-category.json",
+        "skillPaths": { "legacy": "./skills" },
+        "pluginPaths": { "legacy": "./plugins" },
+        "ui_preferences": {
+            "web_theme": "dark",
+            "show_thinking": true,
+            "recent_models": [{ "provider": "openai", "model": "gpt-4o" }]
+        },
+        "web_search": {
+            "default_search_type": "deep",
+            "default_num_results": 12
+        }
+    }))
+    .expect("config should deserialize");
+
+    assert!(config.log_level.is_none());
+    assert!(config.scheduler_path.is_none());
+    assert!(config.task_category_path.is_none());
+    assert!(config.skill_paths.is_empty());
+    assert!(config.plugin_paths.is_empty());
+    assert!(config.ui_preferences.is_none());
+    assert!(config.web_search.is_none());
+}
+
+#[test]
+fn legacy_provider_model_and_agent_aliases_are_not_deserialized() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "agent": {
+            "reviewer": {
+                "maxSteps": 10
+            }
+        },
+        "provider": {
+            "openai": {
+                "baseProvider": "upstream",
+                "apiKey": "provider-key",
+                "baseURL": "https://api.example.com",
+                "models": {
+                    "gpt-4o": {
+                        "id": "gpt-4o-2026",
+                        "apiKey": "model-key",
+                        "baseURL": "https://model.example.com",
+                        "toolCall": true,
+                        "releaseDate": "2026-01-01"
+                    }
+                }
+            }
+        }
+    }))
+    .expect("config should deserialize");
+
+    let agent = config
+        .agent
+        .as_ref()
+        .and_then(|agents| agents.entries.get("reviewer"))
+        .expect("reviewer agent");
+    assert!(agent.max_steps.is_none());
+
+    let provider = config
+        .provider
+        .as_ref()
+        .and_then(|providers| providers.get("openai"))
+        .expect("openai provider");
+    assert!(provider.base.is_none());
+    assert!(provider.api_key.is_none());
+    assert!(provider.base_url.is_none());
+
+    let model = provider
+        .models
+        .as_ref()
+        .and_then(|models| models.get("gpt-4o"))
+        .expect("gpt-4o model");
+    assert!(model.model.is_none());
+    assert!(model.api_key.is_none());
+    assert!(model.base_url.is_none());
+    assert!(model.tool_call.is_none());
+    assert!(model.release_date.is_none());
+}
+
+#[test]
+fn legacy_composition_and_experimental_aliases_are_not_deserialized() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "composition": {
+            "skill_tree": {
+                "enabled": true
+            }
+        },
+        "experimental": {
+            "openTelemetry": true
+        }
+    }))
+    .expect("config should deserialize");
+
+    assert!(config
+        .composition
+        .as_ref()
+        .and_then(|composition| composition.skill_tree.as_ref())
+        .is_none());
+    assert!(config
+        .experimental
+        .as_ref()
+        .and_then(|experimental| experimental.open_telemetry)
+        .is_none());
+}
+
+#[test]
+fn serialization_uses_only_canonical_field_names() {
+    let config = Config {
+        scheduler_path: Some("./scheduler.jsonc".to_string()),
+        ui_preferences: Some(UiPreferencesConfig {
+            show_thinking: Some(true),
+            ..Default::default()
+        }),
+        web_search: Some(WebSearchConfig {
+            default_search_type: Some("deep".to_string()),
+            ..Default::default()
+        }),
+        composition: Some(CompositionConfig {
+            skill_tree: Some(SkillTreeConfig {
+                enabled: Some(true),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    };
+
+    let value = serde_json::to_value(&config).expect("serialize config");
+    let json = serde_json::to_string(&value).expect("stringify config");
+
+    assert!(value.get("schedulerPath").is_some());
+    assert!(value.get("uiPreferences").is_some());
+    assert!(value.get("webSearch").is_some());
+    assert!(value["composition"].get("skillTree").is_some());
+
+    assert!(!json.contains("scheduler_path"));
+    assert!(!json.contains("ui_preferences"));
+    assert!(!json.contains("web_search"));
+    assert!(!json.contains("skill_tree"));
 }
 
 #[test]

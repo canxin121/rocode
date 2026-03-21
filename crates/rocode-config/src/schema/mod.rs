@@ -12,11 +12,7 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keybinds: Option<KeybindsConfig>,
 
-    #[serde(
-        rename = "logLevel",
-        alias = "log_level",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "logLevel", skip_serializing_if = "Option::is_none")]
     pub log_level: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,25 +30,13 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs: Option<DocsConfig>,
 
-    #[serde(
-        rename = "schedulerPath",
-        alias = "scheduler_path",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "schedulerPath", skip_serializing_if = "Option::is_none")]
     pub scheduler_path: Option<String>,
 
-    #[serde(
-        rename = "taskCategoryPath",
-        alias = "task_category_path",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "taskCategoryPath", skip_serializing_if = "Option::is_none")]
     pub task_category_path: Option<String>,
 
-    #[serde(
-        default,
-        alias = "skillPaths",
-        skip_serializing_if = "HashMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub skill_paths: HashMap<String, String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,11 +45,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin: HashMap<String, PluginConfig>,
 
-    #[serde(
-        default,
-        alias = "pluginPaths",
-        skip_serializing_if = "HashMap::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin_paths: HashMap<String, String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,21 +99,13 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutMode>,
 
-    #[serde(
-        rename = "uiPreferences",
-        alias = "ui_preferences",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "uiPreferences", skip_serializing_if = "Option::is_none")]
     pub ui_preferences: Option<UiPreferencesConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<PermissionConfig>,
 
-    #[serde(
-        rename = "webSearch",
-        alias = "web_search",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "webSearch", skip_serializing_if = "Option::is_none")]
     pub web_search: Option<WebSearchConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,79 +126,38 @@ pub struct UiPreferencesConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
 
-    #[serde(
-        rename = "webTheme",
-        alias = "web_theme",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "webTheme", skip_serializing_if = "Option::is_none")]
     pub web_theme: Option<String>,
 
-    #[serde(
-        rename = "webMode",
-        alias = "web_mode",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "webMode", skip_serializing_if = "Option::is_none")]
     pub web_mode: Option<String>,
 
-    #[serde(
-        rename = "showHeader",
-        alias = "show_header",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "showHeader", skip_serializing_if = "Option::is_none")]
     pub show_header: Option<bool>,
 
-    #[serde(
-        rename = "showScrollbar",
-        alias = "show_scrollbar",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "showScrollbar", skip_serializing_if = "Option::is_none")]
     pub show_scrollbar: Option<bool>,
 
-    #[serde(
-        rename = "tipsHidden",
-        alias = "tips_hidden",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "tipsHidden", skip_serializing_if = "Option::is_none")]
     pub tips_hidden: Option<bool>,
 
-    #[serde(
-        rename = "showTimestamps",
-        alias = "show_timestamps",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "showTimestamps", skip_serializing_if = "Option::is_none")]
     pub show_timestamps: Option<bool>,
 
-    #[serde(
-        rename = "showThinking",
-        alias = "show_thinking",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "showThinking", skip_serializing_if = "Option::is_none")]
     pub show_thinking: Option<bool>,
 
-    #[serde(
-        rename = "showToolDetails",
-        alias = "show_tool_details",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "showToolDetails", skip_serializing_if = "Option::is_none")]
     pub show_tool_details: Option<bool>,
 
-    #[serde(
-        rename = "messageDensity",
-        alias = "message_density",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "messageDensity", skip_serializing_if = "Option::is_none")]
     pub message_density: Option<String>,
 
-    #[serde(
-        rename = "semanticHighlight",
-        alias = "semantic_highlight",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "semanticHighlight", skip_serializing_if = "Option::is_none")]
     pub semantic_highlight: Option<bool>,
 
     #[serde(
         rename = "recentModels",
-        alias = "recent_models",
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
@@ -255,19 +186,11 @@ pub struct WebSearchConfig {
 
     /// Default search type sent when the caller does not specify one
     /// (e.g. `"auto"`, `"fast"`, `"deep"`).
-    #[serde(
-        rename = "defaultSearchType",
-        alias = "default_search_type",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "defaultSearchType", skip_serializing_if = "Option::is_none")]
     pub default_search_type: Option<String>,
 
     /// Default number of results (default `8`).
-    #[serde(
-        rename = "defaultNumResults",
-        alias = "default_num_results",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "defaultNumResults", skip_serializing_if = "Option::is_none")]
     pub default_num_results: Option<usize>,
 
     /// Provider-specific key-value options that are forwarded as extra MCP
@@ -510,11 +433,7 @@ pub struct ServerConfig {
     pub hostname: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mdns: Option<bool>,
-    #[serde(
-        rename = "mdnsDomain",
-        alias = "mdns_domain",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "mdnsDomain", skip_serializing_if = "Option::is_none")]
     pub mdns_domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cors: Option<Vec<String>>,
@@ -548,7 +467,6 @@ pub struct SkillsConfig {
 pub struct DocsConfig {
     #[serde(
         rename = "contextDocsRegistryPath",
-        alias = "context_docs_registry_path",
         skip_serializing_if = "Option::is_none"
     )]
     pub context_docs_registry_path: Option<String>,
@@ -594,7 +512,7 @@ pub struct AgentConfig {
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none", alias = "maxSteps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
@@ -614,11 +532,7 @@ pub enum AgentMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CompositionConfig {
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "skillTree",
-        alias = "skill_tree"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", rename = "skillTree")]
     pub skill_tree: Option<SkillTreeConfig>,
 }
 
@@ -650,30 +564,11 @@ pub struct ProviderConfig {
     ///
     /// This enables creating multiple provider "variants" that share the built-in
     /// model catalogue (and protocol wiring) without duplicating model entries.
-    #[serde(
-        alias = "baseProvider",
-        alias = "base_provider",
-        alias = "baseProviderId",
-        alias = "base_provider_id",
-        alias = "cloneOf",
-        alias = "clone_of",
-        alias = "inherits",
-        alias = "from",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
-    #[serde(
-        alias = "apiKey",
-        alias = "apikey",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    #[serde(
-        alias = "baseURL",
-        alias = "baseUrl",
-        alias = "api",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<HashMap<String, ModelConfig>>,
@@ -693,29 +588,16 @@ pub struct ProviderConfig {
 pub struct ModelConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(alias = "id", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(
-        alias = "apiKey",
-        alias = "apikey",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    #[serde(
-        alias = "baseURL",
-        alias = "baseUrl",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variants: Option<HashMap<String, ModelVariantConfig>>,
 
-    #[serde(
-        default,
-        alias = "tools",
-        alias = "toolCall",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modalities: Option<ModelModalities>,
@@ -740,11 +622,7 @@ pub struct ModelConfig {
     pub family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(
-        default,
-        alias = "releaseDate",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental: Option<bool>,
@@ -804,11 +682,22 @@ pub struct ModelVariantConfig {
 // PluginConfig
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginType {
+    #[default]
+    Npm,
+    Pip,
+    Cargo,
+    File,
+    Dylib,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfig {
     /// Plugin type: "npm", "pip", "cargo", "file", "dylib"
     #[serde(rename = "type")]
-    pub plugin_type: String,
+    pub plugin_type: PluginType,
 
     /// Package name (npm package, pip package, cargo crate)
     #[serde(skip_serializing_if = "Option::is_none")]

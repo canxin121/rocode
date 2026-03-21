@@ -27,7 +27,7 @@ impl PluginConfig {
         (
             name,
             Self {
-                plugin_type: "file".to_string(),
+                plugin_type: PluginType::File,
                 path: Some(path.to_string()),
                 ..Default::default()
             },
@@ -41,7 +41,7 @@ impl PluginConfig {
         (
             key,
             Self {
-                plugin_type: "npm".to_string(),
+                plugin_type: PluginType::Npm,
                 package: Some(pkg_name.to_string()),
                 version: if version != "*" {
                     Some(version.to_string())
@@ -66,7 +66,7 @@ impl PluginConfig {
         (
             name,
             Self {
-                plugin_type: "dylib".to_string(),
+                plugin_type: PluginType::Dylib,
                 path: Some(path.to_string()),
                 ..Default::default()
             },
@@ -76,8 +76,8 @@ impl PluginConfig {
     /// Convert this config back to a loader-compatible spec string.
     /// Returns None for types that bypass the subprocess loader (pip, cargo, dylib).
     pub fn to_loader_spec(&self, name: &str) -> Option<String> {
-        match self.plugin_type.as_str() {
-            "npm" => {
+        match self.plugin_type {
+            PluginType::Npm => {
                 let pkg = self.package.as_deref().unwrap_or(name);
                 if let Some(ver) = &self.version {
                     Some(format!("{pkg}@{ver}"))
@@ -85,14 +85,14 @@ impl PluginConfig {
                     Some(pkg.to_string())
                 }
             }
-            "file" => self.path.as_ref().map(|p| format!("file://{p}")),
+            PluginType::File => self.path.as_ref().map(|p| format!("file://{p}")),
             _ => None,
         }
     }
 
     /// Whether this plugin should be loaded as a native dylib (in-process).
     pub fn is_native(&self) -> bool {
-        self.plugin_type == "dylib"
+        self.plugin_type == PluginType::Dylib
     }
 
     /// Return the dylib path if this is a native plugin.
@@ -155,17 +155,9 @@ pub enum McpOAuthConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpOAuth {
-    #[serde(
-        rename = "clientId",
-        alias = "client_id",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
-    #[serde(
-        rename = "clientSecret",
-        alias = "client_secret",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "clientSecret", skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -269,7 +261,7 @@ pub struct ExperimentalConfig {
     pub disable_paste_summary: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_tool: Option<bool>,
-    #[serde(alias = "openTelemetry", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub open_telemetry: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub primary_tools: Vec<String>,

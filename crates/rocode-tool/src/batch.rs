@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_message::message::{
-    CompletedTime, ErrorTime, FilePart, Part as ModelPart, RunningTime,
-    ToolPart as ModelToolPart, ToolState as ModelToolState,
+    CompletedTime, ErrorTime, FilePart, Part as ModelPart, RunningTime, ToolPart as ModelToolPart,
+    ToolState as ModelToolState,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -68,7 +68,11 @@ fn attachment_values_to_file_parts(
     values
         .into_iter()
         .enumerate()
-        .filter_map(|(idx, value)| serde_json::from_value::<AttachmentWire>(value).ok().map(|item| (idx, item)))
+        .filter_map(|(idx, value)| {
+            serde_json::from_value::<AttachmentWire>(value)
+                .ok()
+                .map(|item| (idx, item))
+        })
         .map(|(idx, item)| FilePart {
             id: format!("att_{}_{}", call_id, idx),
             session_id: session_id.to_string(),
