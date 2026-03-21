@@ -1,11 +1,55 @@
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
+use rocode_session::message_model::{
+    MessageWithParts as UnifiedMessageWithParts, Part as UnifiedPart,
+};
 use rocode_session::{MessagePart, PartType};
 use serde_json::Value;
 use tracing::{info, warn};
 
 pub struct Migration;
+
+enum StoredMessageData {
+    Legacy(Vec<MessagePart>),
+    UnifiedParts(Vec<UnifiedPart>),
+    UnifiedMessage(UnifiedMessageWithParts),
+}
+
+fn parse_stored_message_data(data: &str) -> Option<StoredMessageData> {
+    if let Ok(parts) = serde_json::from_str::<Vec<MessagePart>>(data) {
+        return Some(StoredMessageData::Legacy(parts));
+    }
+    if let Ok(parts) = serde_json::from_str::<Vec<UnifiedPart>>(data) {
+        return Some(StoredMessageData::UnifiedParts(parts));
+    }
+    if let Ok(message) = serde_json::from_str::<UnifiedMessageWithParts>(data) {
+        return Some(StoredMessageData::UnifiedMessage(message));
+    }
+    None
+}
+
+fn sanitize_unified_part_input(part: &mut UnifiedPart) -> (bool, bool, bool) {
+    let UnifiedPart::Tool(tool) = part else {
+        return (false, false, false);
+    };
+
+    let input = match &mut tool.state {
+        rocode_session::message_model::ToolState::Pending { input, .. }
+        | rocode_session::message_model::ToolState::Running { input, .. }
+        | rocode_session::message_model::ToolState::Completed { input, .. }
+        | rocode_session::message_model::ToolState::Error { input, .. } => input,
+    };
+
+    let (sanitized, was_recovered, rerouted_invalid) =
+        sanitize_tool_call_input_for_storage(&tool.tool, input);
+    if *input == sanitized {
+        return (false, was_recovered, rerouted_invalid);
+    }
+
+    *input = sanitized;
+    (true, was_recovered, rerouted_invalid)
+}
 
 impl MigrationName for Migration {
     fn name(&self) -> &str {
@@ -37,32 +81,65 @@ impl MigrationTrait for Migration {
         for row in rows {
             let id: String = row.try_get("", "id")?;
             let data: String = row.try_get("", "data")?;
-            let mut parts: Vec<MessagePart> = match serde_json::from_str(&data) {
-                Ok(parts) => parts,
-                Err(error) => {
+            let mut changed = false;
+            let mut parsed = match parse_stored_message_data(&data) {
+                Some(parsed) => parsed,
+                None => {
                     warn!(
                         message_id = %id,
-                        %error,
-                        "skipping tool-call input migration for message with invalid parts JSON"
+                        "skipping tool-call input migration for message with unsupported parts JSON"
                     );
                     continue;
                 }
             };
 
-            let mut changed = false;
-            for part in &mut parts {
-                if let PartType::ToolCall { name, input, .. } = &mut part.part_type {
-                    let (sanitized, was_recovered, rerouted_invalid) =
-                        sanitize_tool_call_input_for_storage(name, input);
-                    if *input != sanitized {
-                        *input = sanitized;
-                        changed = true;
+            match &mut parsed {
+                StoredMessageData::Legacy(parts) => {
+                    for part in parts {
+                        if let PartType::ToolCall { name, input, .. } = &mut part.part_type {
+                            let (sanitized, was_recovered, rerouted_invalid) =
+                                sanitize_tool_call_input_for_storage(name, input);
+                            if *input != sanitized {
+                                *input = sanitized;
+                                changed = true;
+                            }
+                            if was_recovered {
+                                recovered_inputs += 1;
+                            }
+                            if rerouted_invalid {
+                                invalid_reroutes += 1;
+                            }
+                        }
                     }
-                    if was_recovered {
-                        recovered_inputs += 1;
+                }
+                StoredMessageData::UnifiedParts(parts) => {
+                    for part in parts {
+                        let (was_changed, was_recovered, rerouted_invalid) =
+                            sanitize_unified_part_input(part);
+                        if was_changed {
+                            changed = true;
+                        }
+                        if was_recovered {
+                            recovered_inputs += 1;
+                        }
+                        if rerouted_invalid {
+                            invalid_reroutes += 1;
+                        }
                     }
-                    if rerouted_invalid {
-                        invalid_reroutes += 1;
+                }
+                StoredMessageData::UnifiedMessage(message) => {
+                    for part in &mut message.parts {
+                        let (was_changed, was_recovered, rerouted_invalid) =
+                            sanitize_unified_part_input(part);
+                        if was_changed {
+                            changed = true;
+                        }
+                        if was_recovered {
+                            recovered_inputs += 1;
+                        }
+                        if rerouted_invalid {
+                            invalid_reroutes += 1;
+                        }
                     }
                 }
             }
@@ -71,8 +148,17 @@ impl MigrationTrait for Migration {
                 continue;
             }
 
-            let next_data =
-                serde_json::to_string(&parts).map_err(|e| DbErr::Custom(e.to_string()))?;
+            let next_data = match parsed {
+                StoredMessageData::Legacy(parts) => {
+                    serde_json::to_string(&parts).map_err(|e| DbErr::Custom(e.to_string()))?
+                }
+                StoredMessageData::UnifiedParts(parts) => {
+                    serde_json::to_string(&parts).map_err(|e| DbErr::Custom(e.to_string()))?
+                }
+                StoredMessageData::UnifiedMessage(message) => {
+                    serde_json::to_string(&message).map_err(|e| DbErr::Custom(e.to_string()))?
+                }
+            };
             let update_stmt = Statement::from_sql_and_values(
                 backend,
                 "UPDATE messages SET data = ? WHERE id = ?".to_string(),
@@ -182,7 +268,9 @@ fn sanitize_tool_call_input_for_storage(tool_name: &str, input: &Value) -> (Valu
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_tool_call_input_for_storage;
+    use super::{
+        parse_stored_message_data, sanitize_tool_call_input_for_storage, StoredMessageData,
+    };
 
     #[test]
     fn sanitize_tool_call_input_for_storage_recovers_jsonish() {
@@ -230,5 +318,28 @@ mod tests {
             sanitized["receivedArgs"]["source"],
             "legacy-unrecoverable-sentinel"
         );
+    }
+
+    #[test]
+    fn parse_stored_message_data_supports_unified_parts_array() {
+        let raw = serde_json::json!([
+            {
+                "type": "tool",
+                "id": "prt_1",
+                "session_id": "1",
+                "message_id": "2",
+                "call_id": "call_1",
+                "tool": "bash",
+                "state": {
+                    "status": "pending",
+                    "input": {"command": "ls"},
+                    "raw": "{\"command\":\"ls\"}"
+                }
+            }
+        ])
+        .to_string();
+
+        let parsed = parse_stored_message_data(&raw);
+        assert!(matches!(parsed, Some(StoredMessageData::UnifiedParts(_))));
     }
 }

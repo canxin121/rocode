@@ -6,6 +6,8 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use rocode_session::message_model::{session_message_to_unified_message, Part as ModelPart};
+
 use crate::runtime_control::{
     ExecutionKind, ExecutionStatus, SessionExecutionNode, SessionExecutionTopology,
 };
@@ -149,12 +151,12 @@ fn short_recovery_text(text: &str, max_chars: usize) -> Option<String> {
 /// this module independent of the session message internals.
 fn assistant_visible_text_from_message(message: &rocode_session::SessionMessage) -> String {
     let mut out = String::new();
-    for part in &message.parts {
-        if let rocode_session::PartType::Text { text, ignored, .. } = &part.part_type {
+    for part in session_message_to_unified_message(message).parts {
+        if let ModelPart::Text { text, ignored, .. } = part {
             if ignored.unwrap_or(false) {
                 continue;
             }
-            out.push_str(text);
+            out.push_str(&text);
         }
     }
     out
@@ -321,30 +323,29 @@ pub(crate) fn collect_subtask_recovery_targets(
         if !matches!(message.role, rocode_session::Role::User) {
             continue;
         }
-        for part in message.parts.iter().rev() {
-            if let rocode_session::PartType::Subtask {
-                id,
-                description,
-                status,
-            } = &part.part_type
-            {
+        for part in session_message_to_unified_message(message)
+            .parts
+            .into_iter()
+            .rev()
+        {
+            if let ModelPart::Subtask(subtask) = part {
                 targets.push(SubtaskRecoveryTarget {
                     checkpoint: RecoveryCheckpointInfo {
-                        id: id.clone(),
+                        id: subtask.id.clone(),
                         kind: "subtask".to_string(),
-                        label: if description.trim().is_empty() {
-                            format!("Subtask {id}")
+                        label: if subtask.description.trim().is_empty() {
+                            format!("Subtask {}", subtask.id)
                         } else {
-                            description.clone()
+                            subtask.description.clone()
                         },
-                        status: status.clone(),
-                        summary: Some(format!("Subtask is currently `{status}`.")),
+                        status: "running".to_string(),
+                        summary: Some("Subtask is currently `running`.".to_string()),
                         scheduler_profile: None,
                         stage: None,
                         stage_index: None,
                         stage_total: None,
                     },
-                    description: description.clone(),
+                    description: subtask.description.clone(),
                 });
             }
         }

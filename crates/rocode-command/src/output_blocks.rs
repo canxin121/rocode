@@ -482,18 +482,23 @@ fn render_session_event_rich(event: &SessionEventBlock, style: &CliStyle) -> Str
         style.dim(&format!("[{}]", event.event))
     );
     if let Some(summary) = event.summary.as_deref().filter(|value| !value.is_empty()) {
-        out.push_str(&format!("  {}\n", style.dim(summary)));
+        out.push_str(&format!(
+            "  {} {}\n",
+            style.dim(style.tree_end()),
+            style.dim(summary)
+        ));
     }
     for field in &event.fields {
         out.push_str(&format!(
-            "  {}: {}\n",
+            "  {} {}: {}\n",
+            style.dim(style.tree_end()),
             style.bold(&field.label),
             field.value
         ));
     }
     if let Some(body) = event.body.as_deref().filter(|value| !value.is_empty()) {
         for line in body.lines() {
-            out.push_str(&format!("  {}\n", line));
+            out.push_str(&format!("  {} {}\n", style.dim(style.tree_end()), line));
         }
     }
     out

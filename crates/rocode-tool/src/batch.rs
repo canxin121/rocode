@@ -1,6 +1,8 @@
 use async_trait::async_trait;
-use rocode_core::contracts::tools::{
-    arg_keys as tool_arg_keys, BuiltinToolName, ToolCallStatusWire,
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_message::message::{
+    CompletedTime, ErrorTime, FilePart, Part as ModelPart, RunningTime,
+    ToolPart as ModelToolPart, ToolState as ModelToolState,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -39,52 +41,12 @@ pub struct BatchTool;
 
 type BatchFuture = Pin<Box<dyn Future<Output = BatchResult> + Send>>;
 
-#[derive(Debug, Serialize)]
-struct RunningToolState {
-    status: &'static str,
-    input: serde_json::Value,
-    time: ToolCallTime,
-}
-
-#[derive(Debug, Serialize)]
-struct CompletedToolState {
-    status: &'static str,
-    input: serde_json::Value,
-    output: String,
-    title: String,
-    metadata: Metadata,
-    attachments: Vec<serde_json::Value>,
-    time: ToolCallTime,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorToolState {
-    status: &'static str,
-    input: serde_json::Value,
-    error: String,
-    time: ToolCallTime,
-}
-
-#[derive(Debug, Serialize)]
-struct ToolCallTime {
-    start: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    end: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-struct BatchToolPartWire<T: Serialize> {
-    id: String,
-    #[serde(rename = "type")]
-    part_type: &'static str,
-    tool: String,
-    #[serde(rename = "callID")]
-    call_id: String,
-    state: T,
-    #[serde(rename = "messageID")]
-    message_id: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
+#[derive(Debug, Deserialize)]
+struct AttachmentWire {
+    url: String,
+    mime: String,
+    #[serde(default)]
+    filename: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,6 +57,28 @@ struct BatchResultDetail<'a> {
 
 fn to_value_or_null<T: Serialize>(value: T) -> serde_json::Value {
     serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
+fn attachment_values_to_file_parts(
+    values: Vec<serde_json::Value>,
+    session_id: &str,
+    message_id: &str,
+    call_id: &str,
+) -> Vec<FilePart> {
+    values
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, value)| serde_json::from_value::<AttachmentWire>(value).ok().map(|item| (idx, item)))
+        .map(|(idx, item)| FilePart {
+            id: format!("att_{}_{}", call_id, idx),
+            session_id: session_id.to_string(),
+            message_id: message_id.to_string(),
+            mime: item.mime,
+            url: item.url,
+            filename: item.filename,
+            source: None,
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -196,25 +180,25 @@ impl Tool for BatchTool {
             let call_start_time = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_millis() as u64;
+                .as_millis() as i64;
 
             futures.push(Box::pin(async move {
-                let running_part = to_value_or_null(BatchToolPartWire {
+                let running_part = to_value_or_null(ModelPart::Tool(ModelToolPart {
                     id: call_id.clone(),
-                    part_type: "tool",
-                    tool: tool_name.clone(),
+                    session_id: session_id.clone(),
+                    message_id: message_id.clone(),
                     call_id: call_id.clone(),
-                    state: RunningToolState {
-                        status: ToolCallStatusWire::Running.as_str(),
+                    tool: tool_name.clone(),
+                    state: ModelToolState::Running {
                         input: tool_params.clone(),
-                        time: ToolCallTime {
+                        title: None,
+                        metadata: None,
+                        time: RunningTime {
                             start: call_start_time,
-                            end: None,
                         },
                     },
-                    message_id: message_id.clone(),
-                    session_id: session_id.clone(),
-                });
+                    metadata: None,
+                }));
                 let _ = ctx_clone.do_update_part(running_part).await;
 
                 let result = match registry.get(&tool_name).await {
@@ -225,31 +209,39 @@ impl Tool for BatchTool {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .as_millis()
-                                    as u64;
+                                    as i64;
 
-                                let completed_part = to_value_or_null(BatchToolPartWire {
+                                let metadata = strip_attachments_from_metadata(&res.metadata);
+                                let attachments = collect_attachments_from_metadata(&res.metadata);
+                                let attachment_parts = attachment_values_to_file_parts(
+                                    attachments.clone(),
+                                    &session_id,
+                                    &message_id,
+                                    &call_id,
+                                );
+
+                                let completed_part = to_value_or_null(ModelPart::Tool(ModelToolPart {
                                     id: call_id.clone(),
-                                    part_type: "tool",
-                                    tool: tool_name.clone(),
+                                    session_id: session_id.clone(),
+                                    message_id: message_id.clone(),
                                     call_id: call_id.clone(),
-                                    state: CompletedToolState {
-                                        status: ToolCallStatusWire::Completed.as_str(),
+                                    tool: tool_name.clone(),
+                                    state: ModelToolState::Completed {
                                         input: tool_params.clone(),
                                         output: res.output.clone(),
                                         title: res.title.clone(),
-                                        metadata: strip_attachments_from_metadata(&res.metadata),
-                                        attachments: collect_attachments_from_metadata(&res.metadata),
-                                        time: ToolCallTime {
+                                        metadata,
+                                        time: CompletedTime {
                                             start: call_start_time,
-                                            end: Some(call_end_time),
+                                            end: call_end_time,
+                                            compacted: None,
                                         },
+                                        attachments: (!attachment_parts.is_empty())
+                                            .then_some(attachment_parts),
                                     },
-                                    message_id: message_id.clone(),
-                                    session_id: session_id.clone(),
-                                });
+                                    metadata: None,
+                                }));
                                 let _ = ctx_clone.do_update_part(completed_part).await;
-
-                                let attachments = collect_attachments_from_metadata(&res.metadata);
 
                                 BatchResult {
                                     tool: tool_name,
@@ -263,25 +255,25 @@ impl Tool for BatchTool {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .as_millis()
-                                    as u64;
+                                    as i64;
 
-                                let error_part = to_value_or_null(BatchToolPartWire {
+                                let error_part = to_value_or_null(ModelPart::Tool(ModelToolPart {
                                     id: call_id.clone(),
-                                    part_type: "tool",
-                                    tool: tool_name.clone(),
+                                    session_id: session_id.clone(),
+                                    message_id: message_id.clone(),
                                     call_id: call_id.clone(),
-                                    state: ErrorToolState {
-                                        status: ToolCallStatusWire::Error.as_str(),
+                                    tool: tool_name.clone(),
+                                    state: ModelToolState::Error {
                                         input: tool_params.clone(),
                                         error: e.to_string(),
-                                        time: ToolCallTime {
+                                        metadata: None,
+                                        time: ErrorTime {
                                             start: call_start_time,
-                                            end: Some(call_end_time),
+                                            end: call_end_time,
                                         },
                                     },
-                                    message_id: message_id.clone(),
-                                    session_id: session_id.clone(),
-                                });
+                                    metadata: None,
+                                }));
                                 let _ = ctx_clone.do_update_part(error_part).await;
 
                                 BatchResult {

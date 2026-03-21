@@ -11,7 +11,7 @@ use rocode_orchestrator::runtime::{SimpleModelCaller, SimpleModelCallerConfig};
 use rocode_plugin::{HookContext, HookEvent};
 use serde::{Deserialize, Serialize};
 
-use crate::message_v2::{
+use crate::message_model::{
     model_context_from_ids, to_model_messages, AssistantTime, AssistantTokens, CacheTokens,
     CompletedTime, MessageInfo, MessagePath, MessageWithParts, ModelRef, Part, TextTime, ToolState,
     UserTime,
@@ -719,14 +719,11 @@ When constructing the summary, try to stick to this template:
         };
         let persisted_msg = session_ops.update_message(user_msg.clone()).await?;
 
-        let persisted_id = match &persisted_msg {
-            MessageInfo::User { id, .. } => id.clone(),
-            MessageInfo::Assistant { id, .. } => id.clone(),
-        };
+        let persisted_id = persisted_msg.id().to_string();
 
         // TS: await Session.updatePart({ type: "compaction", auto: input.auto, ... })
         let part_id = rocode_core::id::create(rocode_core::id::Prefix::Part, false, None);
-        let compaction_part = Part::Compaction(crate::message_v2::CompactionPart {
+        let compaction_part = Part::Compaction(crate::message_model::CompactionPart {
             id: part_id,
             session_id: input.session_id.clone(),
             message_id: persisted_id.clone(),
@@ -759,10 +756,7 @@ When constructing the summary, try to stick to this template:
         // Persist the compacted timestamps back via session ops.
         // We need to map pruned IDs back to their message_id + part for update.
         for msg in &msgs {
-            let message_id = match &msg.info {
-                MessageInfo::User { id, .. } => id,
-                MessageInfo::Assistant { id, .. } => id,
-            };
+            let message_id = msg.info.id();
             for part in &msg.parts {
                 if let Part::Tool(tool_part) = part {
                     if pruned_ids.contains(&tool_part.id) {
@@ -776,7 +770,7 @@ When constructing the summary, try to stick to this template:
                             attachments,
                         } = &tool_part.state
                         {
-                            let updated_part = Part::Tool(crate::message_v2::ToolPart {
+                            let updated_part = Part::Tool(crate::message_model::ToolPart {
                                 id: tool_part.id.clone(),
                                 session_id: tool_part.session_id.clone(),
                                 message_id: tool_part.message_id.clone(),
@@ -1003,9 +997,9 @@ pub fn messages_to_prune_format(messages: &[MessageWithParts]) -> Vec<MessageFor
     messages
         .iter()
         .map(|msg| {
-            let role = match &msg.info {
-                MessageInfo::User { .. } => Role::User,
-                MessageInfo::Assistant { .. } => Role::Assistant,
+            let role = match msg.info.role() {
+                rocode_types::Role::User | rocode_types::Role::System => Role::User,
+                rocode_types::Role::Assistant | rocode_types::Role::Tool => Role::Assistant,
             };
             let summary = match &msg.info {
                 MessageInfo::Assistant { summary, .. } => summary.unwrap_or(false),

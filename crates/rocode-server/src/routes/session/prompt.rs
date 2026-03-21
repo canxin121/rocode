@@ -226,7 +226,17 @@ pub(super) async fn session_prompt(
         .as_deref()
         .and_then(|profile_name| resolve_scheduler_profile_config(&task_config, Some(profile_name)))
         .map(|(_, profile)| profile);
+
+    // Mark busy before spawning to avoid a race window where eviction can observe idle.
+    set_session_run_status(&state, &id, SessionRunStatus::Busy).await;
+
     tokio::spawn(async move {
+        // Safety guard: always restore idle status on any early return/panic path.
+        let mut _idle_guard = IdleGuard {
+            state: task_state.clone(),
+            session_id: Some(session_id.clone()),
+        };
+
         let mut session = {
             let sessions = task_state.sessions.lock().await;
             let Some(session) = sessions.get(&session_id).cloned() else {
@@ -238,15 +248,6 @@ pub(super) async fn session_prompt(
         if session.directory != normalized_directory {
             session.directory = normalized_directory;
         }
-        set_session_run_status(&task_state, &session_id, SessionRunStatus::Busy).await;
-
-        // Safety guard: ensure status is always set to idle when this block
-        // exits, mirroring the TS `defer(() => cancel(sessionID))` pattern.
-        // This prevents the spinner from getting stuck if anything panics.
-        let mut _idle_guard = IdleGuard {
-            state: task_state.clone(),
-            session_id: Some(session_id.clone()),
-        };
 
         if let Some(variant) = task_variant.as_deref() {
             session.metadata.insert(
@@ -699,7 +700,6 @@ pub(super) async fn session_prompt(
             tokio::sync::mpsc::unbounded_channel::<rocode_session::Session>();
         let update_state = task_state.clone();
         let update_session_repo = task_state.session_repo.clone();
-        let update_message_repo = task_state.message_repo.clone();
 
         // Coalescing persistence worker — only persists the latest snapshot, not every tick.
         let persist_latest: Arc<tokio::sync::Mutex<Option<rocode_session::Session>>> =
@@ -709,7 +709,7 @@ pub(super) async fn session_prompt(
             let latest = persist_latest.clone();
             let notify = persist_notify.clone();
             let s_repo = update_session_repo.clone();
-            let m_repo = update_message_repo.clone();
+            let persist_state = task_state.clone();
             tokio::spawn(async move {
                 loop {
                     notify.notified().await;
@@ -718,21 +718,18 @@ pub(super) async fn session_prompt(
                     let Some(snapshot) = snapshot else {
                         continue;
                     };
-                    if let (Some(s_repo), Some(m_repo)) = (&s_repo, &m_repo) {
-                        match rocode_session::SessionPersistPlan::from_snapshot(snapshot, true) {
+                    if let Some(s_repo) = &s_repo {
+                        let hydrated = persist_state.is_session_hydrated(&snapshot.id).await;
+                        match rocode_session::SessionPersistPlan::from_snapshot(snapshot, hydrated) {
                             rocode_session::SessionPersistPlan::MetadataOnly(session) => {
                                 if let Err(e) = s_repo.upsert(&session).await {
                                     tracing::warn!(session_id = %session.id, %e, "incremental session upsert failed");
                                 }
                             }
                             rocode_session::SessionPersistPlan::Full { session, messages } => {
-                                if let Err(e) = s_repo.upsert(&session).await {
-                                    tracing::warn!(session_id = %session.id, %e, "incremental session upsert failed");
-                                }
-                                for msg in messages {
-                                    if let Err(e) = m_repo.upsert(&msg).await {
-                                        tracing::warn!(message_id = %msg.id, %e, "incremental message upsert failed");
-                                    }
+                                if let Err(e) = s_repo.flush_with_messages(&session, &messages).await
+                                {
+                                    tracing::warn!(session_id = %session.id, %e, "incremental transactional flush failed");
                                 }
                             }
                         }

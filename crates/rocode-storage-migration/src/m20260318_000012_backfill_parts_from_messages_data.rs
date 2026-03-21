@@ -1,6 +1,8 @@
+use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
+use crate::compat_parts::try_parse_compatible_parts;
 use rocode_session::{MessagePart, PartType, ToolCallStatus};
 use tracing::{info, warn};
 
@@ -39,6 +41,15 @@ fn tool_status_to_str(status: &ToolCallStatus) -> &'static str {
     }
 }
 
+fn parse_message_parts_for_backfill(
+    data: &str,
+    message_created_at: i64,
+    message_id: &str,
+) -> Option<Vec<MessagePart>> {
+    let fallback = DateTime::from_timestamp_millis(message_created_at).unwrap_or_else(Utc::now);
+    try_parse_compatible_parts(data, fallback, message_id)
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -50,7 +61,8 @@ impl MigrationTrait for Migration {
         // payload for every message.
         let select_stmt = Statement::from_sql_and_values(
             backend,
-            "SELECT id, session_id, data FROM messages WHERE data IS NOT NULL".to_string(),
+            "SELECT id, session_id, created_at, data FROM messages WHERE data IS NOT NULL"
+                .to_string(),
             vec![],
         );
         let rows = conn.query_all(select_stmt).await?;
@@ -63,20 +75,21 @@ impl MigrationTrait for Migration {
             message_rows += 1;
             let message_id: String = row.try_get("", "id")?;
             let session_id: String = row.try_get("", "session_id")?;
+            let message_created_at: i64 = row.try_get("", "created_at")?;
             let data: String = row.try_get("", "data")?;
 
-            let parts: Vec<MessagePart> = match serde_json::from_str(&data) {
-                Ok(parts) => parts,
-                Err(error) => {
-                    skipped_invalid += 1;
-                    warn!(
-                        message_id = %message_id,
-                        %error,
-                        "skipping parts backfill for message with invalid parts JSON"
-                    );
-                    continue;
-                }
-            };
+            let parts: Vec<MessagePart> =
+                match parse_message_parts_for_backfill(&data, message_created_at, &message_id) {
+                    Some(parts) => parts,
+                    None => {
+                        skipped_invalid += 1;
+                        warn!(
+                            message_id = %message_id,
+                            "skipping parts backfill for message with unsupported parts JSON"
+                        );
+                        continue;
+                    }
+                };
 
             for (idx, part) in parts.iter().enumerate() {
                 let created_at = part.created_at.timestamp_millis();
@@ -182,5 +195,80 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_message_parts_for_backfill;
+    use rocode_session::PartType;
+
+    #[test]
+    fn parse_message_parts_for_backfill_supports_unified_tool_parts() {
+        let raw = serde_json::json!([
+            {
+                "type": "tool",
+                "id": "prt_1",
+                "session_id": "1",
+                "message_id": "2",
+                "call_id": "call_1",
+                "tool": "bash",
+                "state": {
+                    "status": "completed",
+                    "input": {"command": "ls"},
+                    "output": "ok",
+                    "title": "bash",
+                    "metadata": {},
+                    "time": {"start": 1, "end": 2}
+                }
+            }
+        ])
+        .to_string();
+
+        let parts = parse_message_parts_for_backfill(&raw, 1, "2").expect("parse unified parts");
+        assert!(parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::ToolCall { id, .. } if id == "call_1"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::ToolResult {
+                tool_call_id,
+                content,
+                is_error,
+                ..
+            } if tool_call_id == "call_1" && content == "ok" && !is_error
+        )));
+    }
+
+    #[test]
+    fn parse_message_parts_for_backfill_supports_unified_message_object() {
+        let raw = serde_json::json!({
+            "info": {
+                "role": "user",
+                "id": "2",
+                "session_id": "1",
+                "time": {"created": 1},
+                "agent": "general",
+                "model": {"provider_id": "openai", "model_id": "gpt-4o"}
+            },
+            "parts": [
+                {
+                    "type": "text",
+                    "id": "prt_text_1",
+                    "session_id": "1",
+                    "message_id": "2",
+                    "text": "hello"
+                }
+            ]
+        })
+        .to_string();
+
+        let parts = parse_message_parts_for_backfill(&raw, 1, "2").expect("parse unified object");
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            &parts[0].part_type,
+            PartType::Text { text, .. } if text == "hello"
+        ));
     }
 }

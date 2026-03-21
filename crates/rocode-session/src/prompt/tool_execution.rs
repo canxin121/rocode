@@ -10,7 +10,12 @@ use tokio_util::sync::CancellationToken;
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
-use crate::{FilePart, PartType, Role, Session, SessionMessage};
+use crate::message_model::{
+    session_message_to_unified_message, Part as ModelPart,
+};
+use crate::{FilePart, Role, Session, SessionMessage};
+#[cfg(test)]
+use crate::PartType;
 
 use super::subtask::SubtaskExecutor;
 use super::{
@@ -147,36 +152,42 @@ impl SessionPrompt {
             .messages
             .iter()
             .skip(last_assistant_index + 1)
-            .flat_map(|m| m.parts.iter())
-            .filter_map(|p| match &p.part_type {
-                PartType::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
-                _ => None,
+            .flat_map(|message| session_message_to_unified_message(message).parts.into_iter())
+            .filter_map(|part| {
+                let ModelPart::Tool(tool) = part else {
+                    return None;
+                };
+                match tool.state.status() {
+                    crate::ToolCallStatus::Completed | crate::ToolCallStatus::Error => {
+                        Some(tool.call_id)
+                    }
+                    crate::ToolCallStatus::Pending | crate::ToolCallStatus::Running => None,
+                }
             })
             .collect();
 
-        let tool_calls: Vec<(String, String, serde_json::Value)> = session.messages
-            [last_assistant_index]
+        let assistant_message = &session.messages[last_assistant_index];
+        let tool_calls: Vec<(String, String, serde_json::Value)> =
+            session_message_to_unified_message(assistant_message)
             .parts
-            .iter()
-            .filter_map(|p| match &p.part_type {
-                PartType::ToolCall {
-                    id,
-                    name,
-                    input,
-                    status,
-                    raw,
-                    state,
-                    ..
-                } if !resolved_call_ids.contains(id) && !name.trim().is_empty() => {
-                    Self::tool_call_input_for_execution(
-                        status,
-                        input,
-                        raw.as_deref(),
-                        state.as_ref(),
-                    )
-                    .map(|args| (id.clone(), name.clone(), args))
+            .into_iter()
+            .filter_map(|part| {
+                let ModelPart::Tool(tool) = part else {
+                    return None;
+                };
+                if resolved_call_ids.contains(&tool.call_id) || tool.tool.trim().is_empty() {
+                    return None;
                 }
-                _ => None,
+
+                let (input, raw, status) = Self::state_projection(&tool.state);
+
+                Self::tool_call_input_for_execution(
+                    &status,
+                    &input,
+                    raw.as_deref(),
+                    Some(&tool.state),
+                )
+                .map(|args| (tool.call_id, tool.tool, args))
             })
             .collect();
 
@@ -190,9 +201,9 @@ impl SessionPrompt {
                     assistant_msg,
                     call_id,
                     Some(tool_name),
-                    Some(input.clone()),
                     None,
-                    Some(crate::ToolCallStatus::Running),
+                    None,
+                    None,
                     Some(crate::ToolState::Running {
                         input: input.clone(),
                         title: None,
@@ -404,13 +415,9 @@ impl SessionPrompt {
                         assistant_msg,
                         &call_id,
                         Some(&effective_tool_name),
-                        Some(history_input),
                         None,
-                        Some(if is_error {
-                            crate::ToolCallStatus::Error
-                        } else {
-                            crate::ToolCallStatus::Completed
-                        }),
+                        None,
+                        None,
                         Some(next_state),
                     );
                 }

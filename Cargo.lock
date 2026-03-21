@@ -3696,6 +3696,7 @@ name = "rocode-storage-migration"
 version = "2026.3.16"
 dependencies = [
  "async-trait",
+ "chrono",
  "rocode-session",
  "rocode-util",
  "sea-orm",

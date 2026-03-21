@@ -1,5 +1,6 @@
 use sea_orm_migration::prelude::*;
 
+mod compat_parts;
 mod idents;
 mod m20260317_000001_create_sessions;
 mod m20260317_000002_create_messages;
@@ -15,6 +16,7 @@ mod m20260317_000011_add_part_todo_pagination_indexes;
 mod m20260318_000012_backfill_parts_from_messages_data;
 mod m20260319_000013_int_primary_keys;
 mod m20260319_000014_session_shares_session_id_pk;
+mod m20260320_000015_rewrite_messages_data_unified_parts;
 
 pub struct Migrator;
 
@@ -36,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260318_000012_backfill_parts_from_messages_data::Migration),
             Box::new(m20260319_000013_int_primary_keys::Migration),
             Box::new(m20260319_000014_session_shares_session_id_pk::Migration),
+            Box::new(m20260320_000015_rewrite_messages_data_unified_parts::Migration),
         ]
     }
 }

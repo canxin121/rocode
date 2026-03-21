@@ -2,8 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use rocode_types::Role;
+
+use crate::finish::FinishReason;
 use crate::id::new_message_id;
-use crate::{FinishReason, MessagePart, MessageUsage, PartKind, PartType, Role, ToolCallStatus};
+use crate::part::{MessagePart, PartKind, PartType, RunningTime, ToolState};
+use crate::status::ToolCallStatus;
+use crate::usage::MessageUsage;
 
 mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
@@ -114,13 +119,19 @@ impl SessionMessage {
         name: impl Into<String>,
         input: serde_json::Value,
     ) {
+        let now = Utc::now().timestamp_millis();
         self.add_part(PartType::ToolCall {
             id: id.into(),
             name: name.into(),
-            input,
+            input: input.clone(),
             status: ToolCallStatus::Running,
             raw: None,
-            state: None,
+            state: Some(ToolState::Running {
+                input,
+                title: None,
+                metadata: None,
+                time: RunningTime { start: now },
+            }),
         });
     }
 

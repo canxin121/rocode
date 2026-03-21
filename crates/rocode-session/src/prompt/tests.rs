@@ -1,5 +1,5 @@
 use super::*;
-use crate::message::MessagePart;
+use crate::MessagePart;
 use async_trait::async_trait;
 use futures::stream;
 use rocode_core::contracts::provider::ProviderFinishReasonWire;

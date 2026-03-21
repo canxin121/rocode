@@ -2,9 +2,13 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::{PartType, Session, SessionMessage};
-use rocode_message::message_v2::v2_tool_state_to_canonical;
-use rocode_message::{ErrorTime as MessageErrorTime, ToolState as MessageToolState};
+use crate::{PartKind, PartType, Session, SessionMessage};
+use rocode_message::message::{
+    canonical_tool_state_to_message, session_message_to_unified_message, tool_state_to_canonical,
+    unified_parts_to_session, CompletedTime as ModelCompletedTime, ErrorTime as ModelErrorTime,
+    Part as ModelPart, RunningTime as ModelRunningTime, ToolPart as ModelToolPart,
+    ToolState as ModelToolState,
+};
 
 use super::SessionPrompt;
 
@@ -33,80 +37,185 @@ impl SessionPrompt {
             }
             status = Some(state_status);
         }
+        let created_at = chrono::Utc::now();
+        let created_ms = created_at.timestamp_millis();
+        let explicit_name = tool_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToString::to_string);
+        let has_state_update =
+            tool_state.is_some() || input.is_some() || raw_input.is_some() || status.is_some();
 
-        let mut found = false;
         for part in &mut message.parts {
-            if let PartType::ToolCall {
+            let PartType::ToolCall {
                 id,
                 name,
-                input: part_input,
-                status: part_status,
-                raw,
-                state,
+                input: current_input,
+                status: current_status,
+                raw: current_raw,
+                state: current_state,
             } = &mut part.part_type
-            {
-                if id == tool_call_id {
-                    if let Some(next_name) = tool_name {
-                        if !next_name.is_empty() {
-                            *name = next_name.to_string();
-                        }
-                    }
-                    if let Some(next_input) = input.as_ref() {
-                        *part_input = next_input.clone();
-                    }
-                    if let Some(next_raw) = raw_input.as_ref() {
-                        *raw = Some(next_raw.clone());
-                    }
-                    if let Some(next_status) = status.as_ref() {
-                        *part_status = next_status.clone();
-                    }
-                    if let Some(next_state) = tool_state.as_ref() {
-                        *state = Some(v2_tool_state_to_canonical(next_state));
-                    }
-                    found = true;
-                    break;
-                }
+            else {
+                continue;
+            };
+            if id != tool_call_id {
+                continue;
             }
-        }
 
-        if found {
+            if let Some(explicit_tool_name) = explicit_name.as_ref() {
+                *name = explicit_tool_name.clone();
+            }
+
+            if has_state_update {
+                let next_state = if let Some(next_state) = tool_state.as_ref() {
+                    next_state.clone()
+                } else if let Some(existing_state) = current_state.as_ref() {
+                    if input.is_some() || raw_input.is_some() || status.is_some() {
+                        tracing::debug!(
+                            tool_call_id,
+                            "ignoring legacy tool-call field update because canonical state exists"
+                        );
+                    }
+                    canonical_tool_state_to_message(existing_state)
+                } else {
+                    let (baseline_input, baseline_raw, baseline_status) = current_state
+                        .as_ref()
+                        .map(|state| {
+                            (
+                                state.input().clone(),
+                                state.raw().map(ToString::to_string),
+                                state.status(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            (current_input.clone(), current_raw.clone(), *current_status)
+                        });
+                    Self::synthesize_tool_state(
+                        status.unwrap_or(baseline_status),
+                        input.clone().unwrap_or(baseline_input),
+                        raw_input.clone().or(baseline_raw),
+                        created_ms,
+                        name,
+                    )
+                };
+
+                let (state_input, state_raw, state_status) = Self::state_projection(&next_state);
+                *current_input = state_input;
+                *current_raw = state_raw;
+                *current_status = state_status;
+                *current_state = Some(tool_state_to_canonical(&next_state));
+            }
             return;
         }
 
-        message.parts.push(crate::MessagePart {
-            id: rocode_core::id::create(rocode_core::id::Prefix::Part, true, None),
-            part_type: PartType::ToolCall {
-                id: tool_call_id.to_string(),
-                name: tool_name.unwrap_or_default().to_string(),
-                input: input.unwrap_or_else(|| serde_json::json!({})),
-                status: status.unwrap_or(crate::ToolCallStatus::Pending),
-                raw: raw_input,
-                state: tool_state.as_ref().map(v2_tool_state_to_canonical),
-            },
-            created_at: chrono::Utc::now(),
-            message_id: None,
+        let resolved_input = input.unwrap_or_else(|| serde_json::json!({}));
+        let resolved_status = status.unwrap_or(crate::ToolCallStatus::Pending);
+        let resolved_name = explicit_name.unwrap_or_default();
+        let resolved_state = tool_state.unwrap_or_else(|| {
+            Self::synthesize_tool_state(
+                resolved_status,
+                resolved_input.clone(),
+                raw_input.clone(),
+                created_ms,
+                &resolved_name,
+            )
         });
+
+        let model_tool_part = ModelToolPart {
+            id: rocode_core::id::create(rocode_core::id::Prefix::Part, true, None),
+            session_id: message.session_id.clone(),
+            message_id: message.id.clone(),
+            call_id: tool_call_id.to_string(),
+            tool: resolved_name.clone(),
+            state: resolved_state.clone(),
+            metadata: None,
+        };
+
+        if let Some(part) = Self::tool_part_to_session_part(
+            model_tool_part,
+            created_at,
+            &message.id,
+            PartKind::ToolCall,
+        ) {
+            message.parts.push(part);
+        } else {
+            tracing::warn!(
+                tool_call_id = tool_call_id,
+                "failed to append converted tool call part"
+            );
+        }
     }
 
     pub(super) fn state_projection(
         state: &crate::ToolState,
     ) -> (serde_json::Value, Option<String>, crate::ToolCallStatus) {
-        match state {
-            crate::ToolState::Pending { input, raw } => (
-                input.clone(),
-                Some(raw.clone()),
-                crate::ToolCallStatus::Pending,
-            ),
-            crate::ToolState::Running { input, .. } => {
-                (input.clone(), None, crate::ToolCallStatus::Running)
-            }
-            crate::ToolState::Completed { input, .. } => {
-                (input.clone(), None, crate::ToolCallStatus::Completed)
-            }
-            crate::ToolState::Error { input, .. } => {
-                (input.clone(), None, crate::ToolCallStatus::Error)
-            }
+        (
+            state.input().clone(),
+            state.raw().map(ToString::to_string),
+            state.status(),
+        )
+    }
+
+    fn synthesize_tool_state(
+        status: crate::ToolCallStatus,
+        input: serde_json::Value,
+        raw_input: Option<String>,
+        created_ms: i64,
+        tool_name: &str,
+    ) -> ModelToolState {
+        match status {
+            crate::ToolCallStatus::Pending => ModelToolState::Pending {
+                input: input.clone(),
+                raw: raw_input.unwrap_or_else(|| serde_json::to_string(&input).unwrap_or_default()),
+            },
+            crate::ToolCallStatus::Running => ModelToolState::Running {
+                input,
+                title: None,
+                metadata: None,
+                time: ModelRunningTime { start: created_ms },
+            },
+            crate::ToolCallStatus::Completed => ModelToolState::Completed {
+                input,
+                output: String::new(),
+                title: if tool_name.trim().is_empty() {
+                    "tool".to_string()
+                } else {
+                    tool_name.to_string()
+                },
+                metadata: HashMap::new(),
+                time: ModelCompletedTime {
+                    start: created_ms,
+                    end: created_ms,
+                    compacted: None,
+                },
+                attachments: None,
+            },
+            crate::ToolCallStatus::Error => ModelToolState::Error {
+                input,
+                error: "Tool execution failed".to_string(),
+                metadata: None,
+                time: ModelErrorTime {
+                    start: created_ms,
+                    end: created_ms,
+                },
+            },
         }
+    }
+
+    fn tool_part_to_session_part(
+        tool_part: ModelToolPart,
+        created_at: chrono::DateTime<chrono::Utc>,
+        message_id: &str,
+        expected_kind: PartKind,
+    ) -> Option<crate::MessagePart> {
+        let mut converted =
+            unified_parts_to_session(vec![ModelPart::Tool(tool_part)], created_at, message_id);
+        let idx = converted
+            .iter()
+            .position(|part| part.kind() == expected_kind)?;
+        let mut part = converted.swap_remove(idx);
+        part.message_id = Some(message_id.to_string());
+        Some(part)
     }
 
     pub(super) fn push_tool_result_part(
@@ -118,19 +227,74 @@ impl SessionPrompt {
         metadata: Option<HashMap<String, serde_json::Value>>,
         attachments: Option<Vec<serde_json::Value>>,
     ) {
-        message.parts.push(crate::MessagePart {
-            id: rocode_core::id::create(rocode_core::id::Prefix::Part, true, None),
-            part_type: PartType::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-                title,
-                metadata,
-                attachments,
-            },
-            created_at: chrono::Utc::now(),
-            message_id: None,
+        let created_at = chrono::Utc::now();
+        let created_ms = created_at.timestamp_millis();
+        let resolved_title = title.clone().unwrap_or_else(|| {
+            if is_error {
+                "Tool Error".to_string()
+            } else {
+                "Tool Result".to_string()
+            }
         });
+        let parsed_attachments = attachments
+            .as_ref()
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| {
+                        serde_json::from_value::<crate::message_model::FilePart>(value.clone()).ok()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty());
+
+        let state = if is_error {
+            ModelToolState::Error {
+                input: serde_json::json!({}),
+                error: content.clone(),
+                metadata: metadata.clone(),
+                time: ModelErrorTime {
+                    start: created_ms,
+                    end: created_ms,
+                },
+            }
+        } else {
+            ModelToolState::Completed {
+                input: serde_json::json!({}),
+                output: content.clone(),
+                title: resolved_title.clone(),
+                metadata: metadata.clone().unwrap_or_default(),
+                time: ModelCompletedTime {
+                    start: created_ms,
+                    end: created_ms,
+                    compacted: None,
+                },
+                attachments: parsed_attachments,
+            }
+        };
+
+        let model_tool_part = ModelToolPart {
+            id: rocode_core::id::create(rocode_core::id::Prefix::Part, true, None),
+            session_id: message.session_id.clone(),
+            message_id: message.id.clone(),
+            call_id: tool_call_id.clone(),
+            tool: resolved_title,
+            state,
+            metadata: None,
+        };
+        if let Some(part) = Self::tool_part_to_session_part(
+            model_tool_part,
+            created_at,
+            &message.id,
+            PartKind::ToolResult,
+        ) {
+            message.parts.push(part);
+        } else {
+            tracing::warn!(
+                tool_call_id = tool_call_id,
+                "failed to append converted tool result part"
+            );
+        }
     }
 
     pub(super) fn take_attachment_values(
@@ -165,7 +329,7 @@ impl SessionPrompt {
         message_id: &str,
     ) -> (
         Option<Vec<serde_json::Value>>,
-        Option<Vec<crate::message_v2::FilePart>>,
+        Option<Vec<crate::message_model::FilePart>>,
     ) {
         #[derive(Debug, Deserialize)]
         struct AttachmentWire {
@@ -246,7 +410,7 @@ impl SessionPrompt {
             }
 
             normalized_json.push(serde_json::Value::Object(normalized));
-            normalized_files.push(crate::message_v2::FilePart {
+            normalized_files.push(crate::message_model::FilePart {
                 id,
                 session_id: normalized_session_id,
                 message_id: normalized_message_id,
@@ -269,33 +433,27 @@ impl SessionPrompt {
         message_id: &str,
     ) -> (
         Option<Vec<serde_json::Value>>,
-        Option<Vec<crate::message_v2::FilePart>>,
+        Option<Vec<crate::message_model::FilePart>>,
     ) {
         let raw_attachments = Self::take_attachment_values(metadata);
         Self::normalize_tool_attachments(raw_attachments, session_id, message_id)
     }
 
     pub(super) fn has_unresolved_tool_calls(message: &SessionMessage) -> bool {
-        message.parts.iter().any(|part| {
-            let PartType::ToolCall {
-                name,
-                input,
-                status,
-                raw,
-                state,
-                ..
-            } = &part.part_type
-            else {
-                return false;
-            };
+        session_message_to_unified_message(message)
+            .parts
+            .into_iter()
+            .any(|part| {
+                let ModelPart::Tool(tool) = part else {
+                    return false;
+                };
 
-            if name.trim().is_empty() {
-                return false;
-            }
+                if tool.tool.trim().is_empty() {
+                    return false;
+                }
 
-            Self::tool_call_input_for_execution(status, input, raw.as_deref(), state.as_ref())
-                .is_some()
-        })
+                tool.state.status() == crate::ToolCallStatus::Running
+            })
     }
 
     pub(super) fn parse_json_or_string(raw: &str) -> serde_json::Value {
@@ -453,35 +611,42 @@ impl SessionPrompt {
         status: &crate::ToolCallStatus,
         input: &serde_json::Value,
         raw: Option<&str>,
-        state: Option<&MessageToolState>,
+        state: Option<&ModelToolState>,
     ) -> Option<serde_json::Value> {
+        let (effective_status, state_input, state_raw) = match state {
+            Some(state) => {
+                let (state_input, state_raw, state_status) = Self::state_projection(state);
+                (state_status, Some(state_input), state_raw)
+            }
+            None => (*status, None, None),
+        };
+
         tracing::info!(
             status = %format!("{:?}", status),
+            effective_status = %format!("{:?}", effective_status),
             input_type = %if input.is_object() { format!("object(keys={})", input.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default()) } else if input.is_string() { format!("string(len={})", input.as_str().map(|s| s.len()).unwrap_or(0)) } else { format!("{:?}", input) },
             raw_len = %raw.map(|r| r.len()).unwrap_or(0),
             raw_preview = %raw.unwrap_or("None").chars().take(200).collect::<String>(),
             state_variant = %match state {
-                Some(MessageToolState::Pending { .. }) => "Pending",
-                Some(MessageToolState::Running { .. }) => "Running",
-                Some(MessageToolState::Completed { .. }) => "Completed",
-                Some(MessageToolState::Error { .. }) => "Error",
+                Some(ModelToolState::Pending { .. }) => "Pending",
+                Some(ModelToolState::Running { .. }) => "Running",
+                Some(ModelToolState::Completed { .. }) => "Completed",
+                Some(ModelToolState::Error { .. }) => "Error",
                 None => "None",
             },
             "[DIAG] tool_call_input_for_execution entry"
         );
-        let (state_input, state_raw) = match state {
-            Some(MessageToolState::Pending { input, raw }) => {
-                (Some(input.clone()), Some(raw.as_str()))
-            }
-            Some(MessageToolState::Running { input, .. })
-            | Some(MessageToolState::Completed { input, .. })
-            | Some(MessageToolState::Error { input, .. }) => (Some(input.clone()), None),
-            None => (None, None),
-        };
 
-        let raw_input = state_raw.or(raw).map(str::trim).filter(|s| !s.is_empty());
+        let legacy_fallback_allowed = state.is_none();
+        let raw_input = if legacy_fallback_allowed {
+            state_raw.as_deref().or(raw)
+        } else {
+            state_raw.as_deref()
+        }
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-        match status {
+        match effective_status {
             // TS parity: tool execution begins on "tool-call" (running state),
             // not on partial/pending input fragments.
             crate::ToolCallStatus::Pending => None,
@@ -506,23 +671,28 @@ impl SessionPrompt {
                 // If the fallback is an empty object but the PartType input is
                 // a string (e.g. Value::String wrapping JSON), try to parse it.
                 if fallback.is_object() && fallback.as_object().is_some_and(|o| o.is_empty()) {
-                    // Try the PartType's input directly — it might be a
-                    // Value::String containing valid JSON.
-                    if let Some(s) = input.as_str() {
-                        if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(s) {
-                            tracing::debug!(
-                                "tool_call_input_for_execution: recovered args from input string"
-                            );
-                            return Some(parsed);
+                    if legacy_fallback_allowed {
+                        // Try the PartType's input directly — it might be a
+                        // Value::String containing valid JSON.
+                        if let Some(s) = input.as_str() {
+                            if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(s)
+                            {
+                                tracing::debug!(
+                                    "tool_call_input_for_execution: recovered args from input string"
+                                );
+                                return Some(parsed);
+                            }
                         }
-                    }
-                    // Also try raw from PartType even if state_raw was empty.
-                    if let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) {
-                        if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(raw) {
-                            tracing::debug!(
-                                "tool_call_input_for_execution: recovered args from raw field"
-                            );
-                            return Some(parsed);
+                        // Also try raw from PartType even if state_raw was empty.
+                        if let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) {
+                            if let Some(parsed) =
+                                rocode_util::json::try_parse_json_object_robust(raw)
+                            {
+                                tracing::debug!(
+                                    "tool_call_input_for_execution: recovered args from raw field"
+                                );
+                                return Some(parsed);
+                            }
                         }
                     }
                 }
@@ -538,60 +708,58 @@ impl SessionPrompt {
             return;
         }
 
-        for part in message.parts.iter_mut().rev() {
-            match (&mut part.part_type, reasoning) {
-                (PartType::Reasoning { text }, true) => {
+        for idx in (0..message.parts.len()).rev() {
+            match (&mut message.parts[idx].part_type, reasoning) {
+                (PartType::Reasoning { text }, true)
+                | (
+                    PartType::Text {
+                        text,
+                        synthetic: _,
+                        ignored: _,
+                    },
+                    false,
+                ) => {
                     text.push_str(delta);
                     return;
                 }
-                (PartType::Text { text, .. }, false) => {
-                    text.push_str(delta);
-                    return;
-                }
-                _ => {}
+                _ => continue,
             }
         }
 
-        message.parts.push(crate::MessagePart {
-            id: rocode_core::id::create(rocode_core::id::Prefix::Part, true, None),
-            part_type: if reasoning {
-                PartType::Reasoning {
-                    text: delta.to_string(),
-                }
-            } else {
-                PartType::Text {
-                    text: delta.to_string(),
-                    synthetic: None,
-                    ignored: None,
-                }
-            },
-            created_at: chrono::Utc::now(),
-            message_id: None,
-        });
+        if reasoning {
+            message.add_reasoning(delta.to_string());
+        } else {
+            message.add_text(delta.to_string());
+        }
     }
 
     /// Mark any tool calls that lack a corresponding tool result as aborted.
     pub(super) fn abort_pending_tool_calls(session: &mut Session) {
         let mut resolved_call_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        for msg in &session.messages {
-            for part in &msg.parts {
-                if let PartType::ToolResult { tool_call_id, .. } = &part.part_type {
-                    resolved_call_ids.insert(tool_call_id.clone());
-                }
-            }
-        }
+        let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        let mut pending_calls: Vec<String> = Vec::new();
         for msg in &session.messages {
-            for part in &msg.parts {
-                if let PartType::ToolCall { id, .. } = &part.part_type {
-                    if !resolved_call_ids.contains(id) {
-                        pending_calls.push(id.clone());
+            for part in session_message_to_unified_message(msg).parts {
+                let ModelPart::Tool(tool) = part else {
+                    continue;
+                };
+                match tool.state.status() {
+                    crate::ToolCallStatus::Completed | crate::ToolCallStatus::Error => {
+                        resolved_call_ids.insert(tool.call_id);
+                    }
+                    crate::ToolCallStatus::Pending | crate::ToolCallStatus::Running => {
+                        pending_calls.insert(tool.call_id);
                     }
                 }
             }
         }
+
+        let mut pending_calls: Vec<String> = pending_calls
+            .into_iter()
+            .filter(|id| !resolved_call_ids.contains(id))
+            .collect();
+        pending_calls.sort();
 
         if pending_calls.is_empty() {
             return;
@@ -606,35 +774,44 @@ impl SessionPrompt {
         let now = chrono::Utc::now().timestamp_millis();
         for msg in &mut session.messages {
             for part in &mut msg.parts {
-                if let PartType::ToolCall {
+                let PartType::ToolCall {
                     id,
                     name,
                     input,
                     status,
+                    raw,
                     state,
-                    ..
                 } = &mut part.part_type
-                {
-                    if !pending_set.contains(id) {
-                        continue;
-                    }
-                    let sanitized_input = Self::sanitize_tool_call_input_for_history(
-                        name,
-                        input,
-                        Some("Tool execution aborted"),
-                    );
-                    *input = sanitized_input.clone();
-                    *status = crate::ToolCallStatus::Error;
-                    *state = Some(MessageToolState::Error {
-                        input: sanitized_input,
-                        error: "Tool execution aborted".to_string(),
-                        metadata: None,
-                        time: MessageErrorTime {
-                            start: now,
-                            end: now,
-                        },
-                    });
+                else {
+                    continue;
+                };
+                if !pending_set.contains(id) {
+                    continue;
                 }
+
+                let input_for_history = state.as_ref().map(|value| value.input()).unwrap_or(input);
+                let sanitized_input = Self::sanitize_tool_call_input_for_history(
+                    name,
+                    input_for_history,
+                    Some("Tool execution aborted"),
+                );
+
+                let error_state = ModelToolState::Error {
+                    input: sanitized_input,
+                    error: "Tool execution aborted".to_string(),
+                    metadata: None,
+                    time: ModelErrorTime {
+                        start: now,
+                        end: now,
+                    },
+                };
+                *status = crate::ToolCallStatus::Error;
+                *raw = None;
+                *input = match &error_state {
+                    ModelToolState::Error { input, .. } => input.clone(),
+                    _ => serde_json::json!({}),
+                };
+                *state = Some(tool_state_to_canonical(&error_state));
             }
         }
 
@@ -650,6 +827,7 @@ impl SessionPrompt {
 mod tests {
     use super::*;
     use crate::{PartType, Role, Session, SessionMessage};
+    use rocode_message::part::ToolState as CanonToolState;
     use std::collections::HashMap;
 
     #[test]
@@ -804,6 +982,151 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_input_for_execution_prefers_state_over_status_and_input() {
+        let status = crate::ToolCallStatus::Pending;
+        let input = serde_json::Value::String("{}".to_string());
+        let state = crate::ToolState::Running {
+            input: serde_json::json!({"command": "echo hi"}),
+            title: None,
+            metadata: None,
+            time: crate::RunningTime { start: 1 },
+        };
+
+        let resolved =
+            SessionPrompt::tool_call_input_for_execution(&status, &input, None, Some(&state));
+
+        assert_eq!(resolved, Some(serde_json::json!({"command": "echo hi"})));
+    }
+
+    #[test]
+    fn tool_call_input_for_execution_ignores_legacy_raw_when_state_present() {
+        let status = crate::ToolCallStatus::Running;
+        let input = serde_json::json!({});
+        let legacy_raw = Some("{\"legacy\":true}");
+        let state = crate::ToolState::Running {
+            input: serde_json::json!({"from_state": true}),
+            title: None,
+            metadata: None,
+            time: crate::RunningTime { start: 1 },
+        };
+
+        let resolved =
+            SessionPrompt::tool_call_input_for_execution(&status, &input, legacy_raw, Some(&state));
+
+        assert_eq!(resolved, Some(serde_json::json!({"from_state": true})));
+    }
+
+    #[test]
+    fn upsert_tool_call_prefers_existing_state_projection_when_no_tool_state_provided() {
+        let mut message = SessionMessage::assistant("ses_1");
+        message.parts.push(crate::MessagePart {
+            id: "prt_existing".to_string(),
+            part_type: PartType::ToolCall {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"stale": true}),
+                status: crate::ToolCallStatus::Pending,
+                raw: Some("{\"stale\":true}".to_string()),
+                state: Some(CanonToolState::Running {
+                    input: serde_json::json!({"from_state": true}),
+                    title: None,
+                    metadata: None,
+                    time: rocode_message::part::RunningTime { start: 1 },
+                }),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: Some(message.id.clone()),
+        });
+
+        SessionPrompt::upsert_tool_call_part(
+            &mut message,
+            "call_1",
+            None,
+            None,
+            None,
+            Some(crate::ToolCallStatus::Running),
+            None,
+        );
+
+        let updated = message
+            .parts
+            .iter()
+            .find_map(|part| match &part.part_type {
+                PartType::ToolCall {
+                    id,
+                    input,
+                    status,
+                    state,
+                    ..
+                } if id == "call_1" => Some((input, status, state)),
+                _ => None,
+            })
+            .expect("updated tool call part missing");
+
+        assert_eq!(updated.0, &serde_json::json!({"from_state": true}));
+        assert!(matches!(updated.1, crate::ToolCallStatus::Running));
+        assert!(matches!(
+            updated.2,
+            Some(CanonToolState::Running { input, .. }) if input == &serde_json::json!({"from_state": true})
+        ));
+    }
+
+    #[test]
+    fn upsert_tool_call_ignores_legacy_field_override_when_state_present() {
+        let mut message = SessionMessage::assistant("ses_1");
+        message.parts.push(crate::MessagePart {
+            id: "prt_existing".to_string(),
+            part_type: PartType::ToolCall {
+                id: "call_2".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"stale": true}),
+                status: crate::ToolCallStatus::Pending,
+                raw: Some("{\"stale\":true}".to_string()),
+                state: Some(CanonToolState::Running {
+                    input: serde_json::json!({"from_state": true}),
+                    title: None,
+                    metadata: None,
+                    time: rocode_message::part::RunningTime { start: 1 },
+                }),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: Some(message.id.clone()),
+        });
+
+        SessionPrompt::upsert_tool_call_part(
+            &mut message,
+            "call_2",
+            None,
+            Some(serde_json::json!({"legacy": true})),
+            Some("{\"legacy\":true}".to_string()),
+            Some(crate::ToolCallStatus::Error),
+            None,
+        );
+
+        let updated = message
+            .parts
+            .iter()
+            .find_map(|part| match &part.part_type {
+                PartType::ToolCall {
+                    id,
+                    input,
+                    status,
+                    state,
+                    ..
+                } if id == "call_2" => Some((input, status, state)),
+                _ => None,
+            })
+            .expect("updated tool call part missing");
+
+        assert_eq!(updated.0, &serde_json::json!({"from_state": true}));
+        assert!(matches!(updated.1, crate::ToolCallStatus::Running));
+        assert!(matches!(
+            updated.2,
+            Some(CanonToolState::Running { input, .. }) if input == &serde_json::json!({"from_state": true})
+        ));
+    }
+
+    #[test]
     fn invalid_tool_payload_is_ts_shape() {
         let payload = SessionPrompt::invalid_tool_payload("read", "missing filePath");
         assert_eq!(payload.get("tool").and_then(|v| v.as_str()), Some("read"));
@@ -845,10 +1168,7 @@ mod tests {
                 input: serde_json::Value::String("not-json".to_string()),
                 status: crate::ToolCallStatus::Pending,
                 raw: Some("not-json".to_string()),
-                state: Some(rocode_message::ToolState::Pending {
-                    input: serde_json::json!({}),
-                    raw: "not-json".to_string(),
-                }),
+                state: None,
             },
             created_at: chrono::Utc::now(),
             message_id: None,

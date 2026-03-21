@@ -6,10 +6,13 @@ use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::message_title_request;
 use rocode_provider::{Content, Message, Provider, Role as ProviderRole};
 
-use crate::message_v2::{MessageInfo, MessageWithParts, Part, StepFinishPart, StepStartPart};
+use crate::message_model::{
+    session_message_to_unified_message, MessageInfo, MessageWithParts, Part, StepFinishPart,
+    StepStartPart,
+};
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionSummary as SessionSummaryInfo};
 use crate::snapshot::Snapshot;
-use crate::{PartType, Role};
+use crate::Role;
 
 // ============================================================================
 // Data types
@@ -292,10 +295,13 @@ fn first_user_text_for_message(session: &Session, message_id: &str) -> Option<St
         return None;
     }
 
-    message.parts.iter().find_map(|part| match &part.part_type {
-        PartType::Text { text, .. } if !text.trim().is_empty() => Some(text.trim().to_string()),
-        _ => None,
-    })
+    session_message_to_unified_message(message)
+        .parts
+        .into_iter()
+        .find_map(|part| match part {
+            Part::Text { text, .. } if !text.trim().is_empty() => Some(text.trim().to_string()),
+            _ => None,
+        })
 }
 
 fn fallback_message_title(text: &str) -> String {
@@ -466,10 +472,7 @@ pub fn summarize_message(
     let filtered: Vec<&MessageWithParts> = messages
         .iter()
         .filter(|m| {
-            let id = match &m.info {
-                MessageInfo::User { id, .. } => id,
-                MessageInfo::Assistant { id, .. } => id,
-            };
+            let id = m.info.id();
             let parent_id = match &m.info {
                 MessageInfo::Assistant { parent_id, .. } => Some(parent_id.as_str()),
                 _ => None,

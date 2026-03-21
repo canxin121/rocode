@@ -3,11 +3,21 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use rocode_session::{MessagePart, Session, SessionMessage};
+use rocode_session::message_model::{
+    session_message_to_unified_message, unified_message_to_session_message,
+    MessageWithParts as UnifiedMessageWithParts,
+};
+use rocode_session::{Session, SessionMessage};
 use rocode_storage::{Database, MessageRepository, SessionRepository};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SessionExportEntry {
+    info: Session,
+    messages: Vec<UnifiedMessageWithParts>,
+}
+
+#[derive(Debug)]
+struct NormalizedImportEntry {
     info: Session,
     messages: Vec<SessionMessage>,
 }
@@ -24,17 +34,6 @@ struct SessionExportFile {
 enum SessionImportPayload {
     Wrapped(SessionExportFile),
     Single(SessionExportEntry),
-    Legacy {
-        info: Session,
-        messages: Vec<LegacyMessageExport>,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LegacyMessageExport {
-    info: SessionMessage,
-    #[serde(default)]
-    parts: Vec<MessagePart>,
 }
 
 pub(crate) async fn export_session_data(
@@ -59,9 +58,14 @@ pub(crate) async fn export_session_data(
             .ok_or_else(|| anyhow::anyhow!("No sessions found to export"))?
     };
 
-    let messages = message_repo.list_for_session(&session.id).await?;
+    let messages = message_repo
+        .list_for_session(&session.id)
+        .await?
+        .iter()
+        .map(session_message_to_unified_message)
+        .collect();
     let export = SessionExportFile {
-        version: "rocode-rust/v1".to_string(),
+        version: "rocode-rust/v2".to_string(),
         exported_at: chrono::Utc::now().timestamp_millis(),
         sessions: vec![SessionExportEntry {
             info: session,
@@ -83,27 +87,23 @@ pub(crate) async fn export_session_data(
     Ok(())
 }
 
-fn normalize_import_payload(payload: SessionImportPayload) -> Vec<SessionExportEntry> {
-    match payload {
+fn normalize_import_payload(payload: SessionImportPayload) -> Vec<NormalizedImportEntry> {
+    let entries = match payload {
         SessionImportPayload::Wrapped(file) => file.sessions,
         SessionImportPayload::Single(entry) => vec![entry],
-        SessionImportPayload::Legacy { info, messages } => {
-            let normalized_messages = messages
+    };
+
+    entries
+        .into_iter()
+        .map(|entry| NormalizedImportEntry {
+            info: entry.info,
+            messages: entry
+                .messages
                 .into_iter()
-                .map(|legacy| {
-                    let mut msg = legacy.info;
-                    if msg.parts.is_empty() {
-                        msg.parts = legacy.parts;
-                    }
-                    msg
-                })
-                .collect();
-            vec![SessionExportEntry {
-                info,
-                messages: normalized_messages,
-            }]
-        }
-    }
+                .map(unified_message_to_session_message)
+                .collect(),
+        })
+        .collect()
 }
 
 fn parse_share_slug(url: &str) -> Option<String> {

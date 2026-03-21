@@ -14,10 +14,42 @@ use crate::session_runtime::events::{
     broadcast_server_event, broadcast_session_updated, ServerEvent,
 };
 use crate::{ApiError, Result, ServerState};
+use rocode_session::message_model::{
+    session_message_to_unified_message, unified_parts_to_session, Part as ModelPart,
+};
 use rocode_session::run_status::SessionStatusInfo;
 
-fn map_storage_err(err: rocode_storage::DatabaseError) -> ApiError {
-    ApiError::InternalError(format!("storage error: {}", err))
+fn parse_update_part_payload(
+    payload: ModelPart,
+    msg_id: &str,
+    part_id: &str,
+    expected_kind: rocode_session::PartKind,
+    fallback_created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<rocode_session::MessagePart> {
+    let payload_id = payload
+        .id()
+        .ok_or_else(|| ApiError::BadRequest("Unified part payload missing id".to_string()))?;
+    if payload_id != part_id {
+        return Err(ApiError::BadRequest(format!(
+            "Part id mismatch: body has {}, path has {}",
+            payload_id, part_id
+        )));
+    }
+
+    let mut session_parts = unified_parts_to_session(vec![payload], fallback_created_at, msg_id);
+    let Some(idx) = session_parts
+        .iter()
+        .position(|part| part.kind() == expected_kind)
+    else {
+        return Err(ApiError::BadRequest(
+            "Unified part payload does not match target part kind".to_string(),
+        ));
+    };
+
+    let mut part = session_parts.swap_remove(idx);
+    part.id = part_id.to_string();
+    part.message_id = Some(msg_id.to_string());
+    Ok(part)
 }
 
 // ─── Request / Response structs ───────────────────────────────────────
@@ -84,13 +116,13 @@ pub(super) struct MessageInfoResponse {
 #[derive(Debug, Serialize)]
 pub(super) struct MessageDetailResponse {
     info: MessageInfoResponse,
-    parts: Vec<rocode_session::MessagePart>,
+    parts: Vec<ModelPart>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct UpdatePartResponse {
     updated: bool,
-    part: rocode_session::MessagePart,
+    part: ModelPart,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,7 +240,7 @@ pub struct RevertRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdatePartRequest {
-    pub part: serde_json::Value,
+    pub part: ModelPart,
 }
 
 #[derive(Debug, Deserialize)]
@@ -844,32 +876,13 @@ pub(super) async fn get_message(
     Path((session_id, msg_id)): Path<(String, String)>,
 ) -> Result<Json<MessageDetailResponse>> {
     let session_exists = state
-        .ensure_session_loaded(&session_id)
+        .ensure_session_hydrated(&session_id)
         .await
         .map_err(|err| {
-            ApiError::InternalError(format!("failed to load session metadata: {}", err))
+            ApiError::InternalError(format!("failed to hydrate session: {}", err))
         })?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
-    }
-
-    if let Some(message_repo) = state.message_repo.as_ref() {
-        if let Some(message) = message_repo.get(&msg_id).await.map_err(map_storage_err)? {
-            if message.session_id != session_id {
-                return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
-            }
-            let info = MessageInfoResponse {
-                id: message.id.clone(),
-                session_id,
-                role: message.role,
-                created_at: message.created_at.timestamp_millis(),
-            };
-            return Ok(Json(MessageDetailResponse {
-                info,
-                parts: message.parts,
-            }));
-        }
-        return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
     }
 
     let sessions = state.sessions.lock().await;
@@ -887,7 +900,7 @@ pub(super) async fn get_message(
     };
     Ok(Json(MessageDetailResponse {
         info,
-        parts: message.parts.clone(),
+        parts: session_message_to_unified_message(message).parts,
     }))
 }
 
@@ -904,40 +917,53 @@ pub(super) async fn update_part(
         return Err(ApiError::SessionNotFound(session_id));
     }
 
-    let mut part: rocode_session::MessagePart = serde_json::from_value(req.part)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid part payload: {}", e)))?;
-    if part.id != part_id {
-        return Err(ApiError::BadRequest(format!(
-            "Part id mismatch: body has {}, path has {}",
-            part.id, part_id
-        )));
-    }
-    part.message_id = Some(msg_id.clone());
-
     let mut sessions = state.sessions.lock().await;
-    let updated_part = sessions
-        .mutate_session(&session_id, |session| {
-            let message = session
-                .get_message_mut(&msg_id)
-                .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
-            let target = message
-                .parts
-                .iter_mut()
-                .find(|existing| existing.id == part_id)
-                .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
-            *target = part.clone();
-            let updated_part = target.clone();
-            session.touch();
-            Ok::<rocode_session::MessagePart, ApiError>(updated_part)
-        })
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))??;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+    let message = session
+        .get_message(&msg_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+    let existing_part = message
+        .parts
+        .iter()
+        .find(|existing| existing.id == part_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
+
+    let part = parse_update_part_payload(
+        req.part,
+        &msg_id,
+        &part_id,
+        existing_part.kind(),
+        existing_part.created_at,
+    )?;
+
+    sessions
+        .update_part(&session_id, &msg_id, part.clone())
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+
+    let updated_part = part;
+    let updated_unified = session_message_to_unified_message(&rocode_session::SessionMessage {
+        id: msg_id.clone(),
+        session_id: session_id.clone(),
+        role: rocode_session::Role::Assistant,
+        parts: vec![updated_part.clone()],
+        created_at: updated_part.created_at,
+        metadata: HashMap::new(),
+        usage: None,
+        finish: None,
+    })
+    .parts
+    .into_iter()
+    .next()
+    .ok_or_else(|| ApiError::InternalError("failed to convert updated part".to_string()))?;
     drop(sessions);
     state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(UpdatePartResponse {
         updated: true,
-        part: updated_part,
+        part: updated_unified,
     }))
 }
 
@@ -1078,12 +1104,12 @@ pub(super) async fn cancel_tool_call(
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
 
         let found = session.messages.iter().any(|msg| {
-            msg.parts.iter().any(|part| {
-                matches!(
-                    &part.part_type,
-                    rocode_session::PartType::ToolCall { id, .. } if id == &tool_call_id
-                )
-            })
+            session_message_to_unified_message(msg)
+                .parts
+                .into_iter()
+                .any(|part| {
+                    matches!(part, ModelPart::Tool(tool) if tool.call_id == tool_call_id)
+                })
         });
 
         if !found {

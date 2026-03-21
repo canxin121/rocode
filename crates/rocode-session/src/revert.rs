@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionManager};
 use crate::snapshot::Snapshot;
 
@@ -299,18 +300,21 @@ impl RevertManager {
         let mut file_stats: HashMap<String, (u64, u64)> = HashMap::new();
 
         for msg in messages {
-            for part in &msg.parts {
-                if let crate::PartType::Patch {
-                    ref old_string,
-                    ref new_string,
-                    ref filepath,
-                } = part.part_type
-                {
-                    let (additions, deletions) = count_line_changes(old_string, new_string);
-                    let entry = file_stats.entry(filepath.clone()).or_insert((0, 0));
-                    entry.0 += additions;
-                    entry.1 += deletions;
-                }
+            for part in session_message_to_unified_message(msg).parts {
+                let ModelPart::Patch {
+                    old, hash, files, ..
+                } = part
+                else {
+                    continue;
+                };
+
+                let old_string = old.unwrap_or_default();
+                let new_string = hash;
+                let filepath = files.into_iter().next().unwrap_or_default();
+                let (additions, deletions) = count_line_changes(&old_string, &new_string);
+                let entry = file_stats.entry(filepath).or_insert((0, 0));
+                entry.0 += additions;
+                entry.1 += deletions;
             }
         }
 

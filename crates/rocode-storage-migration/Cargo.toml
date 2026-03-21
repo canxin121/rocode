@@ -15,5 +15,6 @@ sea-orm = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
 rocode-session = { path = "../rocode-session" }
 rocode-util = { path = "../rocode-util" }

@@ -5,17 +5,75 @@ use sea_orm::{
     QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use rocode_session::{
-    MessagePart, MessageUsage, PartType, Role, Session, SessionMessage, SessionSummary,
-    SessionTime, SessionUsage, ToolCallStatus,
+use rocode_session::message_model::{
+    session_message_to_unified_message, try_parse_unified_parts,
 };
+#[cfg(test)]
+use rocode_session::message_model::parse_unified_parts as parse_storage_message_parts;
+use rocode_session::{
+    MessagePart, MessageUsage, Role, Session, SessionMessage, SessionSummary,
+    SessionTime, SessionUsage,
+};
+#[cfg(test)]
+use rocode_session::PartType;
+#[cfg(test)]
+use rocode_session::ToolCallStatus;
 
 use crate::database::DatabaseError;
 use crate::entities::{messages, parts, session_shares, sessions, todos};
 use crate::StorageConnection;
+
+const STORAGE_UNPARSED_DATA_KEY: &str = "__rocode_storage_unparsed_data";
+const STORAGE_SESSION_ID_KEY: &str = "__rocode_storage_session_id";
+const STORAGE_SESSION_PARENT_ID_KEY: &str = "__rocode_storage_session_parent_id";
+const STORAGE_MESSAGE_ID_KEY: &str = "__rocode_storage_message_id";
+const STORAGE_MESSAGE_SESSION_ID_KEY: &str = "__rocode_storage_message_session_id";
+
+fn metadata_take_string(
+    metadata: &mut HashMap<String, serde_json::Value>,
+    key: &str,
+) -> Option<String> {
+    metadata
+        .remove(key)
+        .and_then(|value| value.as_str().map(ToString::to_string))
+}
+
+fn metadata_put_string(
+    metadata: &mut HashMap<String, serde_json::Value>,
+    key: &'static str,
+    value: &str,
+) {
+    metadata.insert(
+        key.to_string(),
+        serde_json::Value::String(value.to_string()),
+    );
+}
+
+fn decode_part_ids_from_data(data: Option<&str>) -> Option<(String, Option<String>)> {
+    let value = serde_json::from_str::<serde_json::Value>(data?).ok()?;
+    let object = value.as_object()?;
+    let id = object.get("id")?.as_str()?.to_string();
+    let message_id = object
+        .get("message_id")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+    Some((id, message_id))
+}
+
+fn message_has_unparsed_data(message: &SessionMessage) -> bool {
+    message
+        .metadata
+        .get(STORAGE_UNPARSED_DATA_KEY)
+        .and_then(|value| value.as_str())
+        .is_some_and(|raw| !raw.trim().is_empty())
+}
+
+fn should_skip_parts_sync(message: &SessionMessage) -> bool {
+    message.parts.is_empty() && message_has_unparsed_data(message)
+}
 
 fn map_query_err(err: sea_orm::DbErr) -> DatabaseError {
     DatabaseError::QueryError(err.to_string())
@@ -96,7 +154,18 @@ fn session_insert_model(session: &Session) -> Result<sessions::ActiveModel, Data
         .permission
         .as_ref()
         .and_then(|p| serde_json::to_string(p).ok());
-    let metadata_json = serde_json::to_string(&session.metadata).ok();
+    let mut metadata_to_store = session.metadata.clone();
+    metadata_put_string(&mut metadata_to_store, STORAGE_SESSION_ID_KEY, &session.id);
+    if let Some(parent_id) = session.parent_id.as_deref() {
+        metadata_put_string(
+            &mut metadata_to_store,
+            STORAGE_SESSION_PARENT_ID_KEY,
+            parent_id,
+        );
+    } else {
+        metadata_to_store.remove(STORAGE_SESSION_PARENT_ID_KEY);
+    }
+    let metadata_json = serde_json::to_string(&metadata_to_store).ok();
 
     let usage = session.usage.as_ref();
 
@@ -151,7 +220,18 @@ fn session_update_model(session: &Session) -> Result<sessions::ActiveModel, Data
         .permission
         .as_ref()
         .and_then(|p| serde_json::to_string(p).ok());
-    let metadata_json = serde_json::to_string(&session.metadata).ok();
+    let mut metadata_to_store = session.metadata.clone();
+    metadata_put_string(&mut metadata_to_store, STORAGE_SESSION_ID_KEY, &session.id);
+    if let Some(parent_id) = session.parent_id.as_deref() {
+        metadata_put_string(
+            &mut metadata_to_store,
+            STORAGE_SESSION_PARENT_ID_KEY,
+            parent_id,
+        );
+    } else {
+        metadata_to_store.remove(STORAGE_SESSION_PARENT_ID_KEY);
+    }
+    let metadata_json = serde_json::to_string(&metadata_to_store).ok();
 
     let usage = session.usage.as_ref();
 
@@ -221,10 +301,19 @@ fn session_from_model(model: sessions::Model) -> Session {
         total_cost: model.usage_total_cost,
     });
 
+    let mut metadata = model
+        .metadata
+        .and_then(|m| serde_json::from_str::<HashMap<String, serde_json::Value>>(&m).ok())
+        .unwrap_or_default();
+    let session_id =
+        metadata_take_string(&mut metadata, STORAGE_SESSION_ID_KEY).unwrap_or(model.id.to_string());
+    let parent_id = metadata_take_string(&mut metadata, STORAGE_SESSION_PARENT_ID_KEY)
+        .or_else(|| model.parent_id.map(|id| id.to_string()));
+
     Session {
-        id: model.id.to_string(),
+        id: session_id,
         directory: model.directory,
-        parent_id: model.parent_id.map(|id| id.to_string()),
+        parent_id,
         title: model.title,
         version: model.version,
         time: SessionTime {
@@ -236,10 +325,7 @@ fn session_from_model(model: sessions::Model) -> Session {
         share: model.share_url,
         revert: model.revert.and_then(|r| serde_json::from_str(&r).ok()),
         permission: model.permission.and_then(|p| serde_json::from_str(&p).ok()),
-        metadata: model
-            .metadata
-            .and_then(|m| serde_json::from_str(&m).ok())
-            .unwrap_or_default(),
+        metadata,
         usage,
         active: model.status,
         cached_at: Utc::now(),
@@ -247,9 +333,29 @@ fn session_from_model(model: sessions::Model) -> Session {
 }
 
 fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveModel, DatabaseError> {
-    let data_json = serde_json::to_string(&message.parts)
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-    let metadata_json = serde_json::to_string(&message.metadata)
+    let mut metadata_to_store = message.metadata.clone();
+    let preserved_raw_data = metadata_to_store
+        .remove(STORAGE_UNPARSED_DATA_KEY)
+        .and_then(|value| value.as_str().map(ToString::to_string));
+    metadata_put_string(&mut metadata_to_store, STORAGE_MESSAGE_ID_KEY, &message.id);
+    metadata_put_string(
+        &mut metadata_to_store,
+        STORAGE_MESSAGE_SESSION_ID_KEY,
+        &message.session_id,
+    );
+
+    let unified_parts = session_message_to_unified_message(message).parts;
+    let data_json = if message.parts.is_empty() {
+        if let Some(raw) = preserved_raw_data {
+            raw
+        } else {
+            serde_json::to_string(&unified_parts)
+                .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        }
+    } else {
+        serde_json::to_string(&unified_parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?
+    };
+    let metadata_json = serde_json::to_string(&metadata_to_store)
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
     let usage = message.usage.as_ref();
@@ -274,13 +380,35 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
 
 fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
     let msg_role = role_from_model(model.role);
-
-    let parts: Vec<MessagePart> = model
-        .data
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_default();
-
     let created = DateTime::from_timestamp_millis(model.created_at).unwrap_or_else(Utc::now);
+    let mut metadata = model
+        .metadata
+        .as_ref()
+        .and_then(|m| serde_json::from_str::<HashMap<String, serde_json::Value>>(m).ok())
+        .unwrap_or_default();
+    let message_id =
+        metadata_take_string(&mut metadata, STORAGE_MESSAGE_ID_KEY).unwrap_or(model.id.to_string());
+    let session_id = metadata_take_string(&mut metadata, STORAGE_MESSAGE_SESSION_ID_KEY)
+        .unwrap_or(model.session_id.to_string());
+    let parts = match model.data.as_deref() {
+        Some(raw) if raw.trim().is_empty() => Vec::new(),
+        Some(raw) => match try_parse_unified_parts(raw, created, &message_id) {
+            Some(parts) => parts,
+            None => {
+                metadata.insert(
+                    STORAGE_UNPARSED_DATA_KEY.to_string(),
+                    serde_json::Value::String(raw.to_string()),
+                );
+                tracing::warn!(
+                    message_id = %message_id,
+                    session_id = %session_id,
+                    "failed to parse unified messages.data payload; falling back to empty parts"
+                );
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
 
     let usage_present = model.tokens_input != 0
         || model.tokens_output != 0
@@ -298,45 +426,15 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
     });
 
     Some(SessionMessage {
-        id: model.id.to_string(),
-        session_id: model.session_id.to_string(),
+        id: message_id,
+        session_id,
         role: msg_role,
         parts,
         created_at: created,
-        metadata: model
-            .metadata
-            .and_then(|m| serde_json::from_str(&m).ok())
-            .unwrap_or_default(),
+        metadata,
         usage,
         finish: model.finish,
     })
-}
-
-fn part_type_to_str(part_type: &PartType) -> &'static str {
-    match part_type {
-        PartType::Text { .. } => "text",
-        PartType::ToolCall { .. } => "tool_call",
-        PartType::ToolResult { .. } => "tool_result",
-        PartType::Reasoning { .. } => "reasoning",
-        PartType::File { .. } => "file",
-        PartType::StepStart { .. } => "step_start",
-        PartType::StepFinish { .. } => "step_finish",
-        PartType::Snapshot { .. } => "snapshot",
-        PartType::Patch { .. } => "patch",
-        PartType::Agent { .. } => "agent",
-        PartType::Subtask { .. } => "subtask",
-        PartType::Retry { .. } => "retry",
-        PartType::Compaction { .. } => "compaction",
-    }
-}
-
-fn tool_status_to_str(status: &ToolCallStatus) -> &'static str {
-    match status {
-        ToolCallStatus::Pending => "pending",
-        ToolCallStatus::Running => "running",
-        ToolCallStatus::Completed => "completed",
-        ToolCallStatus::Error => "error",
-    }
 }
 
 fn part_insert_model(
@@ -355,43 +453,20 @@ fn part_insert_model(
         message_id: Set(parse_int_id(message_id, "part.message_id")?),
         session_id: Set(parse_int_id(session_id, "part.session_id")?),
         created_at: Set(created_at),
-        part_type: Set(part_type_to_str(&part.part_type).to_string()),
+        part_type: Set(part.kind().as_str().to_string()),
         sort_order: Set(sort_order),
         data: Set(data_json),
         ..Default::default()
     };
 
     match &part.part_type {
-        PartType::Text { text, .. } => {
+        rocode_session::PartType::Text { text, .. } => {
             active.text = Set(Some(text.clone()));
         }
-        PartType::ToolCall {
-            id,
-            name,
-            input,
-            status,
-            ..
-        } => {
-            active.tool_name = Set(Some(name.clone()));
-            active.tool_call_id = Set(Some(id.clone()));
-            active.tool_arguments = Set(serde_json::to_string(input).ok());
-            active.tool_status = Set(Some(tool_status_to_str(status).to_string()));
-        }
-        PartType::ToolResult {
-            tool_call_id,
-            content,
-            is_error,
-            ..
-        } => {
-            active.tool_call_id = Set(Some(tool_call_id.clone()));
-            active.tool_result = Set(Some(content.clone()));
-            active.tool_error = Set(is_error.then(|| content.clone()));
-            active.tool_status = Set(Some(if *is_error { "error" } else { "completed" }.into()));
-        }
-        PartType::Reasoning { text } => {
+        rocode_session::PartType::Reasoning { text } => {
             active.reasoning = Set(Some(text.clone()));
         }
-        PartType::File {
+        rocode_session::PartType::File {
             url,
             filename,
             mime,
@@ -399,6 +474,41 @@ fn part_insert_model(
             active.file_url = Set(Some(url.clone()));
             active.file_filename = Set(Some(filename.clone()));
             active.file_mime = Set(Some(mime.clone()));
+        }
+        rocode_session::PartType::ToolCall {
+            id,
+            name,
+            input,
+            status,
+            state,
+            ..
+        } => {
+            active.tool_name = Set(Some(name.clone()));
+            active.tool_call_id = Set(Some(id.clone()));
+
+            let (effective_input, effective_status) = match state {
+                Some(state) => (state.input(), state.status()),
+                None => (input, *status),
+            };
+
+            active.tool_arguments = Set(serde_json::to_string(effective_input).ok());
+            active.tool_status = Set(Some(effective_status.as_str().to_string()));
+        }
+        rocode_session::PartType::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+            ..
+        } => {
+            active.tool_call_id = Set(Some(tool_call_id.clone()));
+            active.tool_result = Set(Some(content.clone()));
+            if *is_error {
+                active.tool_error = Set(Some(content.clone()));
+                active.tool_status = Set(Some("error".to_string()));
+            } else {
+                active.tool_error = Set(None);
+                active.tool_status = Set(Some("completed".to_string()));
+            }
         }
         _ => {}
     }
@@ -641,6 +751,9 @@ impl SessionRepository {
         messages_to_upsert: &[SessionMessage],
     ) -> Result<(), DatabaseError> {
         for msg in messages_to_upsert {
+            if should_skip_parts_sync(msg) {
+                continue;
+            }
             for (idx, part) in msg.parts.iter().enumerate() {
                 parts::Entity::insert(part_insert_model(
                     msg.session_id.as_str(),
@@ -779,6 +892,9 @@ impl SessionRepository {
             self.delete_stale_messages_in_tx(&tx, &session.id, &keep_ids)
                 .await?;
             for msg in messages_to_flush {
+                if should_skip_parts_sync(msg) {
+                    continue;
+                }
                 let keep_parts: HashSet<String> = msg.parts.iter().map(|p| p.id.clone()).collect();
                 self.delete_stale_parts_for_message_in_tx(&tx, &msg.id, &keep_parts)
                     .await?;
@@ -881,7 +997,14 @@ impl MessageRepository {
         offset: i64,
     ) -> Result<Vec<MessageHeaderRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
-        let rows: Vec<(i64, i64, messages::MessageRoleModel, i64, Option<String>)> =
+        let rows: Vec<(
+            i64,
+            i64,
+            messages::MessageRoleModel,
+            i64,
+            Option<String>,
+            Option<String>,
+        )> =
             messages::Entity::find()
                 .filter(
                     messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?),
@@ -892,6 +1015,7 @@ impl MessageRepository {
                 .column(messages::Column::Role)
                 .column(messages::Column::CreatedAt)
                 .column(messages::Column::Finish)
+                .column(messages::Column::Metadata)
                 .order_by_asc(messages::Column::CreatedAt)
                 .order_by_asc(messages::Column::Id)
                 .limit(limit)
@@ -902,10 +1026,21 @@ impl MessageRepository {
                 .map_err(map_query_err)?;
 
         rows.into_iter()
-            .map(|(id, session_id, role, created_at, finish)| {
+            .map(|(id, session_id, role, created_at, finish, metadata_json)| {
+                let mut metadata = metadata_json
+                    .as_deref()
+                    .and_then(|m| serde_json::from_str::<HashMap<String, serde_json::Value>>(m).ok())
+                    .unwrap_or_default();
+                let message_id =
+                    metadata_take_string(&mut metadata, STORAGE_MESSAGE_ID_KEY).unwrap_or(id.to_string());
+                let message_session_id = metadata_take_string(
+                    &mut metadata,
+                    STORAGE_MESSAGE_SESSION_ID_KEY,
+                )
+                .unwrap_or(session_id.to_string());
                 Ok(MessageHeaderRow {
-                    id: id.to_string(),
-                    session_id: session_id.to_string(),
+                    id: message_id,
+                    session_id: message_session_id,
                     role: role_from_model(role),
                     created_at,
                     finish,
@@ -1195,10 +1330,8 @@ pub struct PartSummaryRow {
     pub session_id: String,
     pub created_at: i64,
     pub part_type: String,
-    pub tool_name: Option<String>,
-    pub tool_call_id: Option<String>,
-    pub tool_status: Option<String>,
     pub sort_order: i64,
+    pub data: Option<String>,
 }
 
 impl PartRepository {
@@ -1213,9 +1346,17 @@ impl PartRepository {
             .await
             .map_err(map_query_err)?;
 
-        Ok(row.map(|r| PartRow {
-            id: r.id.to_string(),
-            message_id: r.message_id.to_string(),
+        Ok(row.map(|r| {
+            let ids = decode_part_ids_from_data(r.data.as_deref());
+            PartRow {
+            id: ids
+                .as_ref()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| r.id.to_string()),
+            message_id: ids
+                .as_ref()
+                .and_then(|(_, message_id)| message_id.clone())
+                .unwrap_or_else(|| r.message_id.to_string()),
             session_id: r.session_id.to_string(),
             created_at: r.created_at,
             part_type: r.part_type,
@@ -1232,6 +1373,7 @@ impl PartRepository {
             reasoning: r.reasoning,
             sort_order: r.sort_order,
             data: r.data,
+        }
         }))
     }
 
@@ -1247,9 +1389,17 @@ impl PartRepository {
 
         Ok(rows
             .into_iter()
-            .map(|r| PartRow {
-                id: r.id.to_string(),
-                message_id: r.message_id.to_string(),
+            .map(|r| {
+                let ids = decode_part_ids_from_data(r.data.as_deref());
+                PartRow {
+                id: ids
+                    .as_ref()
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| r.id.to_string()),
+                message_id: ids
+                    .as_ref()
+                    .and_then(|(_, message_id)| message_id.clone())
+                    .unwrap_or_else(|| r.message_id.to_string()),
                 session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
@@ -1266,6 +1416,7 @@ impl PartRepository {
                 reasoning: r.reasoning,
                 sort_order: r.sort_order,
                 data: r.data,
+            }
             })
             .collect())
     }
@@ -1291,10 +1442,8 @@ impl PartRepository {
             i64,
             i64,
             String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
             i64,
+            Option<String>,
         )> = parts::Entity::find()
             .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .select_only()
@@ -1303,10 +1452,8 @@ impl PartRepository {
             .column(parts::Column::SessionId)
             .column(parts::Column::CreatedAt)
             .column(parts::Column::PartType)
-            .column(parts::Column::ToolName)
-            .column(parts::Column::ToolCallId)
-            .column(parts::Column::ToolStatus)
             .column(parts::Column::SortOrder)
+            .column(parts::Column::Data)
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
             .order_by_asc(parts::Column::Id)
@@ -1326,20 +1473,20 @@ impl PartRepository {
                     session_id,
                     created_at,
                     part_type,
-                    tool_name,
-                    tool_call_id,
-                    tool_status,
                     sort_order,
+                    data,
                 )| PartSummaryRow {
-                    id: id.to_string(),
-                    message_id: message_id.to_string(),
+                    id: decode_part_ids_from_data(data.as_deref())
+                        .map(|ids| ids.0)
+                        .unwrap_or_else(|| id.to_string()),
+                    message_id: decode_part_ids_from_data(data.as_deref())
+                        .and_then(|ids| ids.1)
+                        .unwrap_or_else(|| message_id.to_string()),
                     session_id: session_id.to_string(),
                     created_at,
                     part_type,
-                    tool_name,
-                    tool_call_id,
-                    tool_status,
                     sort_order,
+                    data,
                 },
             )
             .collect())
@@ -1365,9 +1512,17 @@ impl PartRepository {
 
         Ok(rows
             .into_iter()
-            .map(|r| PartRow {
-                id: r.id.to_string(),
-                message_id: r.message_id.to_string(),
+            .map(|r| {
+                let ids = decode_part_ids_from_data(r.data.as_deref());
+                PartRow {
+                id: ids
+                    .as_ref()
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| r.id.to_string()),
+                message_id: ids
+                    .as_ref()
+                    .and_then(|(_, message_id)| message_id.clone())
+                    .unwrap_or_else(|| r.message_id.to_string()),
                 session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
@@ -1384,6 +1539,7 @@ impl PartRepository {
                 reasoning: r.reasoning,
                 sort_order: r.sort_order,
                 data: r.data,
+            }
             })
             .collect())
     }
@@ -1400,9 +1556,17 @@ impl PartRepository {
 
         Ok(rows
             .into_iter()
-            .map(|r| PartRow {
-                id: r.id.to_string(),
-                message_id: r.message_id.to_string(),
+            .map(|r| {
+                let ids = decode_part_ids_from_data(r.data.as_deref());
+                PartRow {
+                id: ids
+                    .as_ref()
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| r.id.to_string()),
+                message_id: ids
+                    .as_ref()
+                    .and_then(|(_, message_id)| message_id.clone())
+                    .unwrap_or_else(|| r.message_id.to_string()),
                 session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
@@ -1419,6 +1583,7 @@ impl PartRepository {
                 reasoning: r.reasoning,
                 sort_order: r.sort_order,
                 data: r.data,
+            }
             })
             .collect())
     }
@@ -1568,9 +1733,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_session(id: &str) -> Session {
-        let id = parse_int_id(id, "test.session.id").unwrap().to_string();
         Session {
-            id: id.clone(),
+            id: id.to_string(),
             directory: "/tmp/test".to_string(),
             parent_id: None,
             title: format!("Session {}", id),
@@ -1589,13 +1753,9 @@ mod tests {
     }
 
     fn make_message(id: &str, session_id: &str, role: Role) -> SessionMessage {
-        let id = parse_int_id(id, "test.message.id").unwrap().to_string();
-        let session_id = parse_int_id(session_id, "test.message.session_id")
-            .unwrap()
-            .to_string();
         SessionMessage {
-            id,
-            session_id,
+            id: id.to_string(),
+            session_id: session_id.to_string(),
             role,
             parts: vec![],
             created_at: Utc::now(),
@@ -1603,6 +1763,84 @@ mod tests {
             usage: None,
             finish: None,
         }
+    }
+
+    #[test]
+    fn parse_message_parts_compat_accepts_unified_tool_part() {
+        let raw = serde_json::json!([
+            {
+                "type": "tool",
+                "id": "prt_tool_1",
+                "session_id": "1",
+                "message_id": "42",
+                "call_id": "call_1",
+                "tool": "bash",
+                "state": {
+                    "status": "completed",
+                    "input": { "command": "ls" },
+                    "output": "ok",
+                    "title": "bash",
+                    "metadata": {},
+                    "time": { "start": 1000, "end": 2000 }
+                }
+            }
+        ])
+        .to_string();
+
+        let parts = parse_storage_message_parts(Some(&raw), Utc::now(), "42");
+        assert!(parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::ToolCall {
+                id,
+                status: ToolCallStatus::Completed,
+                ..
+            } if id == "call_1"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::ToolResult {
+                tool_call_id,
+                content,
+                is_error,
+                ..
+            } if tool_call_id == "call_1" && content == "ok" && !is_error
+        )));
+    }
+
+    #[test]
+    fn parse_message_parts_compat_accepts_unified_parts_envelope() {
+        let raw = serde_json::json!({
+            "parts": [
+                {
+                    "type": "text",
+                    "id": "prt_text_1",
+                    "session_id": "1",
+                    "message_id": "42",
+                    "text": "hello"
+                }
+            ]
+        })
+        .to_string();
+
+        let parts = parse_storage_message_parts(Some(&raw), Utc::now(), "42");
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            &parts[0].part_type,
+            PartType::Text { text, .. } if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn parse_message_parts_compat_rejects_canonical_parts_array() {
+        let raw = serde_json::to_string(&vec![MessagePart::new(PartType::Text {
+            text: "legacy".to_string(),
+            synthetic: None,
+            ignored: None,
+        })])
+        .expect("serialize canonical parts");
+
+        let parts = parse_storage_message_parts(Some(&raw), Utc::now(), "42");
+        assert!(parts.is_empty());
     }
 
     #[tokio::test]
@@ -1690,12 +1928,12 @@ mod tests {
 
         let loaded = session_repo.get("s1").await.unwrap();
         assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap().title, "Session 1");
+        assert_eq!(loaded.unwrap().title, "Session s1");
 
         let loaded_msgs = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(loaded_msgs.len(), 2);
-        assert_eq!(loaded_msgs[0].id, "1");
-        assert_eq!(loaded_msgs[1].id, "2");
+        assert_eq!(loaded_msgs[0].id, "m1");
+        assert_eq!(loaded_msgs[1].id, "m2");
     }
 
     #[tokio::test]
@@ -1726,10 +1964,10 @@ mod tests {
 
         let remaining = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, "1");
+        assert_eq!(remaining[0].id, "m1");
 
-        assert!(message_repo.get("2").await.unwrap().is_none());
-        assert!(message_repo.get("3").await.unwrap().is_none());
+        assert!(message_repo.get("m2").await.unwrap().is_none());
+        assert!(message_repo.get("m3").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1762,8 +2000,8 @@ mod tests {
 
         let remaining = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(remaining.len(), 1000);
-        assert!(message_repo.get("1099").await.unwrap().is_none());
-        assert!(message_repo.get("0").await.unwrap().is_some());
+        assert!(message_repo.get("m1099").await.unwrap().is_none());
+        assert!(message_repo.get("m0").await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -1831,13 +2069,13 @@ mod tests {
         let first_two = session_repo.list_page(None, 2, 0).await.unwrap();
         assert_eq!(
             first_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
-            vec!["5", "4"]
+            vec!["s5", "s4"]
         );
 
         let middle_two = session_repo.list_page(None, 2, 2).await.unwrap();
         assert_eq!(
             middle_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
-            vec!["3", "2"]
+            vec!["s3", "s2"]
         );
 
         let dir_sessions = session_repo
@@ -1849,7 +2087,7 @@ mod tests {
                 .iter()
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["4", "3", "2", "1"]
+            vec!["s4", "s3", "s2", "s1"]
         );
     }
 
@@ -1876,7 +2114,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            vec!["3", "4"]
+            vec!["m3", "m4"]
         );
     }
 
@@ -1940,7 +2178,7 @@ mod tests {
             2,
             "original messages should survive the failed tx"
         );
-        assert_eq!(loaded_msgs[0].id, "1");
-        assert_eq!(loaded_msgs[1].id, "2");
+        assert_eq!(loaded_msgs[0].id, "m1");
+        assert_eq!(loaded_msgs[1].id, "m2");
     }
 }

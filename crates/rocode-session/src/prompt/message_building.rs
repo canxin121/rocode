@@ -10,18 +10,18 @@ use crate::compaction::{
     CompactionConfig, CompactionEngine, MessageForPrune, ModelLimits, PruneToolPart, TokenUsage,
     ToolPartStatus,
 };
-use crate::message_v2::{
-    canonical_tool_state_to_v2, AssistantTime, AssistantTokens, CacheTokens,
-    CompactionPart as V2CompactionPart, MessageInfo, MessagePath, MessageWithParts,
-    ModelRef as V2ModelRef, Part as V2Part, StepFinishPart, StepStartPart, StepTokens, UserTime,
+use crate::message_model::{
+    session_message_to_unified_message, AssistantTime, AssistantTokens, CacheTokens, MessageInfo,
+    MessagePath, MessageWithParts, ModelRef as V2ModelRef, Part as V2Part, StepFinishPart,
+    StepStartPart, StepTokens, UserTime,
 };
 use crate::summary::{summarize_into_session, SummarizeInput};
-use crate::{PartType, Role, Session, SessionMessage};
+use crate::{PartKind, PartType, Role, Session, SessionMessage};
 
 use super::tools_and_output::{compose_session_title_source, generate_session_title_for_session};
 use super::SessionPrompt;
 
-type LegacyToolResult = (
+type HistoricalToolResult = (
     String,
     bool,
     Option<String>,
@@ -29,7 +29,7 @@ type LegacyToolResult = (
     Option<Vec<serde_json::Value>>,
 );
 
-type LegacyToolResultMap = HashMap<String, LegacyToolResult>;
+type HistoricalToolResultMap = HashMap<String, HistoricalToolResult>;
 
 fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -67,7 +67,7 @@ where
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-struct LegacyUsageWire {
+struct HistoricalUsageWire {
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     prompt_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
@@ -78,9 +78,9 @@ struct LegacyUsageWire {
     cache_write_tokens: Option<u64>,
 }
 
-fn deserialize_opt_legacy_usage_lossy<'de, D>(
+fn deserialize_opt_historical_usage_lossy<'de, D>(
     deserializer: D,
-) -> Result<Option<LegacyUsageWire>, D::Error>
+) -> Result<Option<HistoricalUsageWire>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -88,7 +88,7 @@ where
     let Some(value) = value else {
         return Ok(None);
     };
-    Ok(serde_json::from_value::<LegacyUsageWire>(value).ok())
+    Ok(serde_json::from_value::<HistoricalUsageWire>(value).ok())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -108,8 +108,8 @@ struct MessageMetadataWire {
     tokens_cache_read: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     tokens_cache_write: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_legacy_usage_lossy")]
-    usage: Option<LegacyUsageWire>,
+    #[serde(default, deserialize_with = "deserialize_opt_historical_usage_lossy")]
+    usage: Option<HistoricalUsageWire>,
 
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     finish_reason: Option<String>,
@@ -144,13 +144,13 @@ fn clamp_u64_to_i32(value: Option<u64>) -> i32 {
         .clamp(0, i32::MAX as u64) as i32
 }
 
-struct LegacyToolStateInput<'a> {
+struct ToolStateHydrationInput<'a> {
     tool_call_id: &'a str,
     tool_name: &'a str,
     input: &'a serde_json::Value,
     status: &'a crate::ToolCallStatus,
     raw: &'a str,
-    tool_result: Option<&'a LegacyToolResult>,
+    tool_result: Option<&'a HistoricalToolResult>,
     session_id: &'a str,
     message_id: &'a str,
 }
@@ -171,74 +171,48 @@ impl SessionPrompt {
             .first()
             .and_then(|c| c.finish_reason.clone());
 
-        let parts = match content {
-            Content::Text(text) => vec![crate::MessagePart {
-                id: format!("prt_{}", uuid::Uuid::new_v4()),
-                part_type: PartType::Text {
-                    text,
-                    synthetic: None,
-                    ignored: None,
-                },
-                created_at: now,
-                message_id: None,
-            }],
-            Content::Parts(content_parts) => content_parts
-                .into_iter()
-                .filter_map(|p| match p.content_type.as_str() {
-                    "text" => p.text.map(|text| crate::MessagePart {
-                        id: format!("prt_{}", uuid::Uuid::new_v4()),
-                        part_type: PartType::Text {
-                            text,
-                            synthetic: None,
-                            ignored: None,
-                        },
-                        created_at: now,
-                        message_id: None,
-                    }),
-                    "tool_use" => p.tool_use.map(|tu| crate::MessagePart {
-                        id: format!("prt_{}", uuid::Uuid::new_v4()),
-                        part_type: PartType::ToolCall {
-                            id: tu.id,
-                            name: tu.name,
-                            input: tu.input,
-                            status: crate::ToolCallStatus::Running,
-                            raw: None,
-                            state: None,
-                        },
-                        created_at: now,
-                        message_id: None,
-                    }),
-                    _ => None,
-                })
-                .collect(),
-        };
+        let mut message = SessionMessage::assistant(String::new());
+        message.id = format!("msg_{}", uuid::Uuid::new_v4());
+        message.created_at = now;
 
-        SessionMessage {
-            id: format!("msg_{}", uuid::Uuid::new_v4()),
-            session_id: String::new(),
-            role: Role::Assistant,
-            parts,
-            created_at: now,
-            metadata: {
-                let mut m = HashMap::new();
-                if let Some(usage) = &response.usage {
-                    m.insert(
-                        "tokens_input".to_string(),
-                        serde_json::json!(usage.prompt_tokens),
-                    );
-                    m.insert(
-                        "tokens_output".to_string(),
-                        serde_json::json!(usage.completion_tokens),
-                    );
+        match content {
+            Content::Text(text) => message.add_text(text),
+            Content::Parts(content_parts) => {
+                for part in content_parts {
+                    match part.content_type.as_str() {
+                        "text" => {
+                            if let Some(text) = part.text {
+                                message.add_text(text);
+                            }
+                        }
+                        "tool_use" => {
+                            if let Some(tool_use) = part.tool_use {
+                                message.add_tool_call(tool_use.id, tool_use.name, tool_use.input);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                if let Some(ref reason) = finish_reason {
-                    m.insert("finish_reason".to_string(), serde_json::json!(reason));
-                }
-                m
-            },
-            usage: None,
-            finish: finish_reason,
+            }
         }
+
+        if let Some(usage) = &response.usage {
+            message.metadata.insert(
+                "tokens_input".to_string(),
+                serde_json::json!(usage.prompt_tokens),
+            );
+            message.metadata.insert(
+                "tokens_output".to_string(),
+                serde_json::json!(usage.completion_tokens),
+            );
+        }
+        if let Some(ref reason) = finish_reason {
+            message
+                .metadata
+                .insert("finish_reason".to_string(), serde_json::json!(reason));
+        }
+        message.finish = finish_reason;
+        message
     }
 
     pub(super) fn token_usage_from_messages(messages: &[SessionMessage]) -> TokenUsage {
@@ -260,25 +234,25 @@ impl SessionPrompt {
                 continue;
             }
 
-            // Fallback to metadata for backward compatibility with legacy snapshots.
+            // Fallback to metadata for backward compatibility with historical snapshots.
             let meta = parse_message_metadata(&msg.metadata);
-            let legacy_usage = meta.usage.unwrap_or_default();
+            let historical_usage = meta.usage.unwrap_or_default();
 
             usage.input += meta
                 .tokens_input
-                .or(legacy_usage.prompt_tokens)
+                .or(historical_usage.prompt_tokens)
                 .unwrap_or(0);
             usage.output += meta
                 .tokens_output
-                .or(legacy_usage.completion_tokens)
+                .or(historical_usage.completion_tokens)
                 .unwrap_or(0);
             usage.cache_read += meta
                 .tokens_cache_read
-                .or(legacy_usage.cache_read_tokens)
+                .or(historical_usage.cache_read_tokens)
                 .unwrap_or(0);
             usage.cache_write += meta
                 .tokens_cache_write
-                .or(legacy_usage.cache_write_tokens)
+                .or(historical_usage.cache_write_tokens)
                 .unwrap_or(0);
         }
         usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
@@ -312,17 +286,23 @@ impl SessionPrompt {
         // token-based check misses (it relies on cached API response counts).
         let total_chars: usize = messages
             .iter()
-            .flat_map(|m| m.parts.iter())
-            .map(|p| match &p.part_type {
-                PartType::Text { text, .. } => text.len(),
-                PartType::ToolResult { content, title, .. } => {
-                    content.len() + title.as_ref().map_or(0, |t| t.len())
-                }
-                PartType::ToolCall { input, raw, .. } => {
-                    let input_len = serde_json::to_string(input).map_or(0, |s| s.len());
-                    input_len + raw.as_ref().map_or(0, |r| r.len())
-                }
-                PartType::Reasoning { text } => text.len(),
+            .flat_map(|m| session_message_to_unified_message(m).parts.into_iter())
+            .map(|part| match part {
+                V2Part::Text { text, .. } => text.len(),
+                V2Part::Tool(tool_part) => match tool_part.state {
+                    crate::message_model::ToolState::Pending { input, raw } => {
+                        let input_len = serde_json::to_string(&input).map_or(0, |s| s.len());
+                        input_len + raw.len()
+                    }
+                    crate::message_model::ToolState::Running { input, .. } => {
+                        serde_json::to_string(&input).map_or(0, |s| s.len())
+                    }
+                    crate::message_model::ToolState::Completed { output, title, .. } => {
+                        output.len() + title.len()
+                    }
+                    crate::message_model::ToolState::Error { error, .. } => error.len(),
+                },
+                V2Part::Reasoning { text, .. } => text.len(),
                 _ => 0,
             })
             .sum();
@@ -364,28 +344,47 @@ impl SessionPrompt {
         model_id: &str,
         session_directory: &str,
     ) -> Vec<MessageWithParts> {
-        let legacy_tool_results: LegacyToolResultMap = messages
+        let historical_tool_results: HistoricalToolResultMap = messages
             .iter()
-            .flat_map(|m| m.parts.iter())
-            .filter_map(|part| match &part.part_type {
-                PartType::ToolResult {
-                    tool_call_id,
-                    content,
-                    is_error,
-                    title,
-                    metadata,
-                    attachments,
-                } => Some((
-                    tool_call_id.clone(),
-                    (
-                        content.clone(),
-                        *is_error,
-                        title.clone(),
-                        metadata.clone(),
-                        attachments.clone(),
-                    ),
-                )),
-                _ => None,
+            .flat_map(|message| {
+                message
+                    .parts
+                    .iter()
+                    .filter(|part| part.kind() == PartKind::ToolResult)
+                    .filter_map(|part| {
+                        let PartType::ToolResult {
+                            tool_call_id,
+                            content,
+                            is_error,
+                            title,
+                            metadata,
+                            attachments,
+                        } = &part.part_type
+                        else {
+                            return None;
+                        };
+
+                        let tool_name = title
+                            .clone()
+                            .unwrap_or_else(|| "Legacy Tool Result".to_string());
+                        if *is_error {
+                            Some((
+                                tool_call_id.clone(),
+                                (content.clone(), true, Some(tool_name), metadata.clone(), None),
+                            ))
+                        } else {
+                            Some((
+                                tool_call_id.clone(),
+                                (
+                                    content.clone(),
+                                    false,
+                                    Some(tool_name),
+                                    metadata.clone(),
+                                    attachments.clone(),
+                                ),
+                            ))
+                        }
+                    })
             })
             .collect();
 
@@ -400,117 +399,66 @@ impl SessionPrompt {
             let tool_call_ids_in_message: HashSet<String> = msg
                 .parts
                 .iter()
+                .filter(|part| part.kind() == PartKind::ToolCall)
                 .filter_map(|part| match &part.part_type {
                     PartType::ToolCall { id, .. } => Some(id.clone()),
                     _ => None,
                 })
                 .collect();
-            let mut parts: Vec<V2Part> = msg
+            let tool_call_part_ids: HashSet<String> = msg
                 .parts
                 .iter()
-                .filter_map(|part| match &part.part_type {
-                    PartType::Text { text, .. } => Some(V2Part::Text {
-                        id: part.id.clone(),
-                        session_id: msg.session_id.clone(),
-                        message_id: msg.id.clone(),
-                        text: text.clone(),
-                        synthetic: None,
-                        ignored: None,
-                        time: None,
-                        metadata: None,
-                    }),
-                    PartType::File {
-                        url,
-                        filename,
-                        mime,
-                    } => Some(V2Part::File(crate::message_v2::FilePart {
-                        id: part.id.clone(),
-                        session_id: msg.session_id.clone(),
-                        message_id: msg.id.clone(),
-                        mime: mime.clone(),
-                        url: url.clone(),
-                        filename: Some(filename.clone()),
-                        source: None,
-                    })),
-                    PartType::Compaction { .. } => Some(V2Part::Compaction(V2CompactionPart {
-                        id: part.id.clone(),
-                        session_id: msg.session_id.clone(),
-                        message_id: msg.id.clone(),
-                        auto: true,
-                    })),
-                    PartType::ToolCall {
-                        id,
-                        name,
-                        input,
-                        status,
-                        raw,
-                        state,
-                    } => {
-                        let state = state
-                            .as_ref()
-                            .map(canonical_tool_state_to_v2)
-                            .unwrap_or_else(|| {
-                                Self::legacy_tool_state_to_v2(LegacyToolStateInput {
-                                    tool_call_id: id,
-                                    tool_name: name,
-                                    input,
-                                    status,
-                                    raw: raw.as_deref().unwrap_or_default(),
-                                    tool_result: legacy_tool_results.get(id),
-                                    session_id: &msg.session_id,
-                                    message_id: &msg.id,
-                                })
-                            });
-                        Some(V2Part::Tool(crate::message_v2::ToolPart {
-                            id: part.id.clone(),
-                            session_id: msg.session_id.clone(),
-                            message_id: msg.id.clone(),
-                            call_id: id.clone(),
-                            tool: name.clone(),
-                            state,
-                            metadata: None,
-                        }))
+                .filter(|part| part.kind() == PartKind::ToolCall)
+                .map(|part| part.id.clone())
+                .collect();
+            let tool_result_part_ids: HashSet<String> = msg
+                .parts
+                .iter()
+                .filter(|part| part.kind() == PartKind::ToolResult)
+                .map(|part| part.id.clone())
+                .collect();
+            let mut parts: Vec<V2Part> = session_message_to_unified_message(msg)
+                .parts
+                .into_iter()
+                .filter(|part| {
+                    matches!(
+                        part,
+                        V2Part::Text { .. }
+                            | V2Part::File(_)
+                            | V2Part::Compaction(_)
+                            | V2Part::Tool(_)
+                    )
+                })
+                .filter(|part| match part {
+                    V2Part::Tool(tool) => {
+                        !(tool_call_ids_in_message.contains(&tool.call_id)
+                            && tool_result_part_ids.contains(&tool.id))
                     }
-                    PartType::ToolResult {
-                        tool_call_id,
-                        content,
-                        title,
-                        metadata,
-                        ..
-                    } => {
-                        if tool_call_ids_in_message.contains(tool_call_id) {
-                            None
-                        } else {
-                            let now = chrono::Utc::now().timestamp_millis();
-                            Some(V2Part::Tool(crate::message_v2::ToolPart {
-                                id: part.id.clone(),
-                                session_id: msg.session_id.clone(),
-                                message_id: msg.id.clone(),
-                                call_id: tool_call_id.clone(),
-                                tool: title
-                                    .clone()
-                                    .unwrap_or_else(|| "legacy_tool_result".to_string()),
-                                state: crate::ToolState::Completed {
-                                    input: serde_json::json!({}),
-                                    output: content.clone(),
-                                    title: title
-                                        .clone()
-                                        .unwrap_or_else(|| "Legacy Tool Result".to_string()),
-                                    metadata: metadata.clone().unwrap_or_default(),
-                                    time: crate::CompletedTime {
-                                        start: now,
-                                        end: now,
-                                        compacted: None,
-                                    },
-                                    attachments: None,
-                                },
-                                metadata: None,
-                            }))
-                        }
-                    }
-                    _ => None,
+                    _ => true,
                 })
                 .collect();
+
+            for part in &mut parts {
+                let V2Part::Tool(tool) = part else {
+                    continue;
+                };
+                if !tool_call_part_ids.contains(&tool.id) {
+                    continue;
+                }
+
+                let (state_input, state_raw, status) = Self::state_projection(&tool.state);
+
+                    tool.state = Self::hydrate_tool_state_for_unified(ToolStateHydrationInput {
+                        tool_call_id: &tool.call_id,
+                        tool_name: &tool.tool,
+                        input: &state_input,
+                        status: &status,
+                        raw: state_raw.as_deref().unwrap_or_default(),
+                        tool_result: historical_tool_results.get(&tool.call_id),
+                        session_id: &msg.session_id,
+                        message_id: &msg.id,
+                    });
+            }
 
             if let Some(snapshot) = meta
                 .step_start_snapshot
@@ -570,7 +518,7 @@ impl SessionPrompt {
                         variant: meta.variant.clone(),
                     }
                 }
-                _ => MessageInfo::Assistant {
+                Role::Assistant => MessageInfo::Assistant {
                     id: msg.id.clone(),
                     session_id: msg.session_id.clone(),
                     time: AssistantTime {
@@ -608,15 +556,33 @@ impl SessionPrompt {
                     variant: meta.variant.clone(),
                     finish: msg.finish.clone().or_else(|| meta.finish_reason.clone()),
                 },
+                Role::System => MessageInfo::System {
+                    id: msg.id.clone(),
+                    session_id: msg.session_id.clone(),
+                    time: UserTime { created },
+                },
+                Role::Tool => MessageInfo::Tool {
+                    id: msg.id.clone(),
+                    session_id: msg.session_id.clone(),
+                    time: UserTime { created },
+                },
             };
 
-            out.push(MessageWithParts { info, parts });
+            out.push(MessageWithParts {
+                info,
+                parts,
+                metadata: msg.metadata.clone(),
+                usage: msg.usage.clone(),
+                finish: msg.finish.clone().or_else(|| meta.finish_reason.clone()),
+            });
         }
 
         out
     }
 
-    fn legacy_tool_state_to_v2(input_data: LegacyToolStateInput<'_>) -> crate::ToolState {
+    fn hydrate_tool_state_for_unified(
+        input_data: ToolStateHydrationInput<'_>,
+    ) -> crate::ToolState {
         let now = chrono::Utc::now().timestamp_millis();
         match input_data.status {
             crate::ToolCallStatus::Pending => crate::ToolState::Pending {
@@ -735,9 +701,11 @@ impl SessionPrompt {
     pub(super) fn prune_after_loop(session: &mut Session) {
         let mut tool_name_by_call: HashMap<String, String> = HashMap::new();
         for msg in &session.messages {
-            for part in &msg.parts {
-                if let PartType::ToolCall { id, name, .. } = &part.part_type {
-                    tool_name_by_call.insert(id.clone(), name.clone());
+            for part in session_message_to_unified_message(msg).parts {
+                if let V2Part::Tool(tool) = part {
+                    if !tool.call_id.trim().is_empty() {
+                        tool_name_by_call.insert(tool.call_id, tool.tool);
+                    }
                 }
             }
         }
@@ -746,30 +714,52 @@ impl SessionPrompt {
             .messages
             .iter()
             .map(|m| {
+                let tool_result_ids: HashSet<String> = m
+                    .parts
+                    .iter()
+                    .filter(|part| part.kind() == PartKind::ToolResult)
+                    .map(|part| part.id.clone())
+                    .collect();
                 let parts: Vec<PruneToolPart> = m
                     .parts
                     .iter()
-                    .filter_map(|p| match &p.part_type {
-                        PartType::ToolResult {
+                    .filter_map(|part| {
+                        if !tool_result_ids.contains(&part.id) {
+                            return None;
+                        }
+
+                        let PartType::ToolResult {
                             tool_call_id,
                             content,
                             is_error,
+                            title,
                             ..
-                        } => Some(PruneToolPart {
-                            id: p.id.clone(),
-                            tool: tool_name_by_call
-                                .get(tool_call_id)
-                                .cloned()
-                                .unwrap_or_default(),
-                            output: content.clone(),
-                            status: if *is_error {
-                                ToolPartStatus::Error
+                        } = &part.part_type
+                        else {
+                            return None;
+                        };
+
+                        let (output, status, compacted) = if *is_error {
+                            (content.clone(), ToolPartStatus::Error, None)
+                        } else {
+                            (content.clone(), ToolPartStatus::Completed, None)
+                        };
+                        let part_tool_name = title.clone().unwrap_or_default();
+
+                        Some(PruneToolPart {
+                            id: part.id.clone(),
+                            tool: if part_tool_name.trim().is_empty() {
+                                tool_name_by_call
+                                    .get(tool_call_id)
+                                    .cloned()
+                                    .unwrap_or_default()
                             } else {
-                                ToolPartStatus::Completed
+                                part_tool_name
                             },
-                            compacted: None,
-                        }),
-                        _ => None,
+                            output,
+                            status,
+                            compacted,
+                        })
                     })
                     .collect();
                 MessageForPrune {
@@ -790,14 +780,17 @@ impl SessionPrompt {
         }
         let pruned: HashSet<String> = pruned_ids.into_iter().collect();
         for msg in &mut session.messages {
-            for part in &mut msg.parts {
-                if !pruned.contains(&part.id) {
+            for idx in 0..msg.parts.len() {
+                let part_id = msg.parts[idx].id.clone();
+                if !pruned.contains(&part_id) {
                     continue;
                 }
-                if let PartType::ToolResult { content, .. } = &mut part.part_type {
-                    let compacted = content.chars().take(200).collect::<String>();
-                    *content = format!("[tool result compacted]\n{}", compacted);
-                }
+
+                let PartType::ToolResult { content, .. } = &mut msg.parts[idx].part_type else {
+                    continue;
+                };
+                let compacted = content.chars().take(200).collect::<String>();
+                *content = format!("[tool result compacted]\n{}", compacted);
             }
         }
 
@@ -818,9 +811,9 @@ impl SessionPrompt {
         let summary_parts: Vec<String> = messages
             .iter()
             .take(keep_count)
-            .flat_map(|m| m.parts.iter())
-            .filter_map(|p| match &p.part_type {
-                PartType::Text { text, .. } => Some(text.clone()),
+            .flat_map(|m| session_message_to_unified_message(m).parts.into_iter())
+            .filter_map(|part| match part {
+                V2Part::Text { text, .. } => Some(text),
                 _ => None,
             })
             .collect();
@@ -839,14 +832,7 @@ impl SessionPrompt {
         // This mirrors the TS behavior where compaction creates an assistant message with
         // summary=true and a compaction part, so that filter_compacted_messages can find it.
         let mut compaction_msg = SessionMessage::assistant(session.id.clone());
-        compaction_msg.parts.push(crate::MessagePart {
-            id: format!("prt_{}", uuid::Uuid::new_v4()),
-            part_type: PartType::Compaction {
-                summary: summary.clone(),
-            },
-            created_at: chrono::Utc::now(),
-            message_id: None,
-        });
+        compaction_msg.add_compaction(summary.clone());
         session.messages.push(compaction_msg);
 
         // Mark session as updated so compaction summary is persisted.
@@ -931,7 +917,9 @@ mod tests {
         });
         let after = SessionMessage::user(session_id, "after");
 
-        let filtered = rocode_message::filter_compacted_messages(&[before, compact, after]);
+        let filtered = rocode_message::message::session_message::filter_compacted_messages(&[
+            before, compact, after,
+        ]);
         assert_eq!(filtered.len(), 2);
         assert!(filtered[0]
             .parts
@@ -955,8 +943,11 @@ mod tests {
         });
 
         let assistant_after = SessionMessage::assistant(session_id);
-        let filtered =
-            rocode_message::filter_compacted_messages(&[user.clone(), compact, assistant_after]);
+        let filtered = rocode_message::message::session_message::filter_compacted_messages(&[
+            user.clone(),
+            compact,
+            assistant_after,
+        ]);
 
         assert_eq!(filtered.len(), 3);
         assert!(matches!(filtered[0].role, Role::User));
@@ -1086,7 +1077,7 @@ mod tests {
             .insert("tokens_cache_read".to_string(), serde_json::json!(3_u64));
         msg.metadata
             .insert("tokens_cache_write".to_string(), serde_json::json!(4_u64));
-        msg.usage = Some(crate::message::MessageUsage {
+        msg.usage = Some(crate::MessageUsage {
             input_tokens: 100,
             output_tokens: 200,
             reasoning_tokens: 50,
@@ -1127,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn to_model_messages_splits_legacy_assistant_tool_results() {
+    fn to_model_messages_splits_assistant_tool_results_from_historical_payload() {
         let sid = "sid".to_string();
         let mut assistant = SessionMessage::assistant(sid);
         assistant.add_text("working");
@@ -1135,15 +1126,31 @@ mod tests {
 
         let message_with_parts =
             SessionPrompt::to_message_with_parts(&[assistant], "openai", "gpt-4o", ".");
-        let model = rocode_message::message_v2::model_context_from_ids("openai", "gpt-4o");
-        let messages = rocode_message::message_v2::to_model_messages(&message_with_parts, &model);
+        let model = rocode_message::message::model_context_from_ids("openai", "gpt-4o");
+        let messages = rocode_message::message::to_model_messages(&message_with_parts, &model);
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0].role, Role::Assistant));
         assert!(matches!(messages[1].role, Role::Tool));
     }
 
     #[test]
-    fn legacy_tool_state_to_v2_recovers_attachments_from_tool_result_metadata() {
+    fn to_message_with_parts_preserves_system_and_tool_roles() {
+        let mut system = SessionMessage::system("ses_1", "You are a strict formatter.");
+        system.id = "msg_system".to_string();
+
+        let mut tool = SessionMessage::tool("ses_1");
+        tool.id = "msg_tool".to_string();
+        tool.add_text("tool payload");
+
+        let converted =
+            SessionPrompt::to_message_with_parts(&[system, tool], "openai", "gpt-4o", ".");
+        assert_eq!(converted.len(), 2);
+        assert!(matches!(converted[0].info, MessageInfo::System { .. }));
+        assert!(matches!(converted[1].info, MessageInfo::Tool { .. }));
+    }
+
+    #[test]
+    fn hydrate_tool_state_for_unified_recovers_attachments_from_tool_result_metadata() {
         let mut metadata = HashMap::new();
         metadata.insert(
             "attachment".to_string(),
@@ -1163,7 +1170,7 @@ mod tests {
         );
 
         let input = serde_json::json!({ "file_path": "report.pdf" });
-        let state = SessionPrompt::legacy_tool_state_to_v2(LegacyToolStateInput {
+        let state = SessionPrompt::hydrate_tool_state_for_unified(ToolStateHydrationInput {
             tool_call_id: "tool-call-1",
             tool_name: "read",
             input: &input,

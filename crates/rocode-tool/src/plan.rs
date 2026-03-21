@@ -4,8 +4,7 @@ use rocode_core::contracts::{
     tools::{arg_keys as tool_arg_keys, BuiltinToolName},
     wire::aliases as wire_aliases,
 };
-use rocode_message::PartKind;
-use rocode_types::Role;
+use rocode_message::message::{MessageInfo, ModelRef, Part as ModelPart, UserTime};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -23,34 +22,25 @@ pub struct PlanExitTool;
 
 const PLAN_FILE: &str = "PLAN.md";
 
-#[derive(Debug, Serialize)]
-struct MessageTime {
-    created: i64,
-}
+fn parse_model_ref(model: &Option<String>) -> ModelRef {
+    let Some(raw) = model.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+        return ModelRef {
+            provider_id: "unknown".to_string(),
+            model_id: "unknown".to_string(),
+        };
+    };
 
-#[derive(Debug, Serialize)]
-struct UserMessageWire {
-    id: String,
-    role: &'static str,
-    time: MessageTime,
-    agent: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-}
+    if let Some((provider_id, model_id)) = raw.split_once('/').or_else(|| raw.split_once(':')) {
+        return ModelRef {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+        };
+    }
 
-#[derive(Debug, Serialize)]
-struct TextPartWire {
-    id: String,
-    #[serde(rename = "type")]
-    part_type: &'static str,
-    text: String,
-    synthetic: bool,
-    #[serde(rename = "messageID")]
-    message_id: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
+    ModelRef {
+        provider_id: "unknown".to_string(),
+        model_id: raw.to_string(),
+    }
 }
 
 /// Create a user message and a synthetic text part via the ToolContext callbacks,
@@ -64,29 +54,34 @@ async fn create_user_message_with_part(
     let now = chrono::Utc::now().timestamp_millis();
     let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
     let part_id = format!("prt_{}", uuid::Uuid::new_v4().simple());
+    let model_ref = parse_model_ref(model);
 
-    // Build the MessageV2.User info matching the TS MessageInfo::User shape
-    let user_msg = serde_json::to_value(UserMessageWire {
+    let user_msg = serde_json::to_value(MessageInfo::User {
         id: message_id.clone(),
-        role: Role::User.as_str(),
-        time: MessageTime { created: now },
-        agent: agent.to_string(),
         session_id: ctx.session_id.clone(),
-        model: model.clone(),
+        time: UserTime { created: now },
+        agent: agent.to_string(),
+        model: model_ref,
+        format: None,
+        summary: None,
+        system: None,
+        tools: None,
+        variant: None,
     })
     .unwrap_or(serde_json::Value::Null);
 
-    // Persist the message (mirrors TS Session.updateMessage)
+    // Persist the message (mirrors TS Session.updateMessage).
     ctx.do_update_message(user_msg).await?;
 
-    // Build the synthetic text part matching the TS MessageV2.TextPart shape
-    let text_part = serde_json::to_value(TextPartWire {
+    let text_part = serde_json::to_value(ModelPart::Text {
         id: part_id,
-        part_type: PartKind::Text.as_str(),
-        text: text.to_string(),
-        synthetic: true,
-        message_id,
         session_id: ctx.session_id.clone(),
+        message_id,
+        text: text.to_string(),
+        synthetic: Some(true),
+        ignored: None,
+        time: None,
+        metadata: None,
     })
     .unwrap_or(serde_json::Value::Null);
 

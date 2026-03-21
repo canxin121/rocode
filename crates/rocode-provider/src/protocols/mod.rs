@@ -23,7 +23,9 @@ use crate::{Protocol, ProtocolImpl};
 pub(super) fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
     config
         .option_bool(&["runtime_pipeline"])
-        .unwrap_or_else(|| parse_runtime_pipeline_env(std::env::var("ROCODE_RUNTIME_PIPELINE").ok().as_deref()))
+        .unwrap_or_else(|| {
+            parse_runtime_pipeline_env(std::env::var("ROCODE_RUNTIME_PIPELINE").ok().as_deref())
+        })
 }
 
 fn parse_runtime_pipeline_env(value: Option<&str>) -> bool {
@@ -60,7 +62,8 @@ mod tests {
 
     #[test]
     fn runtime_pipeline_prefers_config_option() {
-        let config = ProviderConfig::new("openai", "", "").with_option("runtime_pipeline", json!(false));
+        let config =
+            ProviderConfig::new("openai", "", "").with_option("runtime_pipeline", json!(false));
         assert!(!runtime_pipeline_enabled(&config));
     }
 

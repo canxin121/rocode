@@ -135,58 +135,6 @@ pub type QuestionInfo = rocode_session::question::QuestionInfo;
 pub type PermissionRequestInfo = rocode_permission::PermissionRequestInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessagePart {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub part_type: String,
-    pub text: Option<String>,
-    pub file: Option<FileInfo>,
-    #[serde(alias = "toolCall")]
-    pub tool_call: Option<ToolCall>,
-    #[serde(alias = "toolResult")]
-    pub tool_result: Option<ToolResult>,
-    #[serde(default)]
-    pub synthetic: Option<bool>,
-    #[serde(default)]
-    pub ignored: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileInfo {
-    pub url: String,
-    pub filename: String,
-    pub mime: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub input: serde_json::Value,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub raw: Option<String>,
-    #[serde(default)]
-    pub state: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    #[serde(alias = "toolCallId")]
-    pub tool_call_id: String,
-    pub content: String,
-    #[serde(alias = "isError")]
-    pub is_error: bool,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-    #[serde(default)]
-    pub attachments: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageInfo {
     pub id: String,
     #[serde(alias = "sessionId")]
@@ -210,7 +158,7 @@ pub struct MessageInfo {
     #[serde(default)]
     pub tokens: MessageTokensInfo,
     #[serde(default)]
-    pub parts: Vec<MessagePart>,
+    pub parts: Vec<rocode_message::message::Part>,
     #[serde(default)]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }

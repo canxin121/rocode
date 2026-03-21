@@ -1751,15 +1751,15 @@ mod tests {
             error: None,
             cost: 0.0,
             tokens: MessageTokensInfo::default(),
-            parts: vec![crate::api::MessagePart {
+            parts: vec![rocode_message::message::Part::Text {
                 id: "p1".to_string(),
-                part_type: "text".to_string(),
-                text: Some("world".to_string()),
-                file: None,
-                tool_call: None,
-                tool_result: None,
+                session_id: session_id.to_string(),
+                message_id: "m2".to_string(),
+                text: "world".to_string(),
                 synthetic: None,
                 ignored: None,
+                time: None,
+                metadata: None,
             }],
             metadata: None,
         })];

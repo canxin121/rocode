@@ -93,54 +93,115 @@ pub(super) fn map_api_revert(revert: &SessionRevertInfo) -> RevertInfo {
 }
 
 fn map_api_message_part(
-    part: &crate::api::MessagePart,
+    part: &rocode_message::message::Part,
     keep_synthetic_text: bool,
 ) -> Option<ContextMessagePart> {
-    if let Some(text) = &part.text {
-        if part.ignored == Some(true) {
-            return None;
+    map_unified_message_part(part, keep_synthetic_text)
+}
+
+fn map_unified_message_part(
+    part: &rocode_message::message::Part,
+    keep_synthetic_text: bool,
+) -> Option<ContextMessagePart> {
+    match part {
+        rocode_message::message::Part::Text {
+            text,
+            synthetic,
+            ignored,
+            ..
+        } => {
+            if ignored.unwrap_or(false) {
+                return None;
+            }
+            if synthetic.unwrap_or(false) && !keep_synthetic_text {
+                return None;
+            }
+            Some(ContextMessagePart::Text {
+                text: rocode_session::sanitize_display_text(text),
+            })
         }
-        if part.part_type == "reasoning" {
-            return Some(ContextMessagePart::Reasoning { text: text.clone() });
+        rocode_message::message::Part::Reasoning { text, .. } => {
+            Some(ContextMessagePart::Reasoning { text: text.clone() })
         }
-        // Skip synthetic text parts (auto-continue prompts, etc.)
-        if part.synthetic == Some(true) && !keep_synthetic_text {
-            return None;
+        rocode_message::message::Part::File(file) => {
+            if file.mime.starts_with("image/") {
+                Some(ContextMessagePart::Image {
+                    url: file.url.clone(),
+                })
+            } else {
+                Some(ContextMessagePart::File {
+                    path: file.filename.clone().unwrap_or_else(|| file.url.clone()),
+                    mime: file.mime.clone(),
+                })
+            }
         }
-        return Some(ContextMessagePart::Text { text: text.clone() });
-    }
+        rocode_message::message::Part::Tool(tool) => {
+            let render_arguments = |value: &serde_json::Value| {
+                value
+                    .as_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            };
 
-    if let Some(file) = &part.file {
-        return Some(ContextMessagePart::File {
-            path: file.filename.clone(),
-            mime: file.mime.clone(),
-        });
-    }
+            match &tool.state {
+                rocode_message::message::ToolState::Pending { input, .. }
+                | rocode_message::message::ToolState::Running { input, .. } => {
+                    Some(ContextMessagePart::ToolCall {
+                        id: tool.call_id.clone(),
+                        name: tool.tool.clone(),
+                        arguments: render_arguments(input),
+                    })
+                }
+                rocode_message::message::ToolState::Completed {
+                    input,
+                    output,
+                    title,
+                    metadata,
+                    attachments,
+                    ..
+                } => {
+                    if output.trim().is_empty()
+                        && attachments
+                            .as_ref()
+                            .map(|items| items.is_empty())
+                            .unwrap_or(true)
+                        && metadata.is_empty()
+                    {
+                        return Some(ContextMessagePart::ToolCall {
+                            id: tool.call_id.clone(),
+                            name: tool.tool.clone(),
+                            arguments: render_arguments(input),
+                        });
+                    }
 
-    if let Some(tool_call) = &part.tool_call {
-        let arguments = if let Some(value) = tool_call.input.as_str() {
-            value.to_string()
-        } else {
-            tool_call.input.to_string()
-        };
-        return Some(ContextMessagePart::ToolCall {
-            id: tool_call.id.clone(),
-            name: tool_call.name.clone(),
-            arguments,
-        });
+                    Some(ContextMessagePart::ToolResult {
+                        id: tool.call_id.clone(),
+                        result: output.clone(),
+                        is_error: false,
+                        title: Some(title.clone()),
+                        metadata: (!metadata.is_empty()).then_some(metadata.clone()),
+                    })
+                }
+                rocode_message::message::ToolState::Error {
+                    error, metadata, ..
+                } => Some(ContextMessagePart::ToolResult {
+                    id: tool.call_id.clone(),
+                    result: error.clone(),
+                    is_error: true,
+                    title: Some(tool.tool.clone()),
+                    metadata: metadata.clone(),
+                }),
+            }
+        }
+        rocode_message::message::Part::Compaction(compaction) => Some(ContextMessagePart::Text {
+            text: if compaction.auto {
+                "[auto compaction]".to_string()
+            } else {
+                "[compaction]".to_string()
+            },
+        }),
+        _ => None,
     }
-
-    if let Some(tool_result) = &part.tool_result {
-        return Some(ContextMessagePart::ToolResult {
-            id: tool_result.tool_call_id.clone(),
-            result: tool_result.content.clone(),
-            is_error: tool_result.is_error,
-            title: tool_result.title.clone(),
-            metadata: tool_result.metadata.clone(),
-        });
-    }
-
-    None
 }
 
 fn message_part_text(part: &ContextMessagePart) -> String {
@@ -161,9 +222,7 @@ fn message_part_text(part: &ContextMessagePart) -> String {
         ContextMessagePart::File { path, mime } => {
             summarize_block_items_inline(&build_file_items(path, mime))
         }
-        ContextMessagePart::Image { url } => {
-            summarize_block_items_inline(&build_image_items(url))
-        }
+        ContextMessagePart::Image { url } => summarize_block_items_inline(&build_image_items(url)),
     }
 }
 

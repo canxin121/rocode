@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
+use rocode_session::message_model::{session_message_to_unified_message, Part as ModelPart};
 use rocode_storage::{Database, MessageRepository, SessionRepository};
 use serde::Deserialize;
 
@@ -152,9 +153,9 @@ pub(crate) async fn handle_stats_command(
                     .entry(format!("{}/{}", provider, model))
                     .or_insert(0) += 1;
             }
-            for part in message.parts {
-                if let rocode_session::PartType::ToolCall { name, .. } = part.part_type {
-                    *tool_usage.entry(name).or_insert(0) += 1;
+            for part in session_message_to_unified_message(&message).parts {
+                if let ModelPart::Tool(tool_part) = part {
+                    *tool_usage.entry(tool_part.tool).or_insert(0) += 1;
                 }
             }
         }

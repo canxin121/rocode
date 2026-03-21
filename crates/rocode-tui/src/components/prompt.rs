@@ -890,7 +890,7 @@ impl Prompt {
             }
         } else {
             for item in self.history.iter().rev().cloned() {
-                let history_score = legacy_subsequence_score(token.as_str(), item.as_str());
+                let history_score = fuzzy_subsequence_score(token.as_str(), item.as_str());
                 Self::push_candidate(
                     &mut scored,
                     &mut dedup,
@@ -1307,7 +1307,7 @@ fn render_prompt_continuation_row(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn legacy_subsequence_score(query: &str, target: &str) -> Option<i32> {
+fn fuzzy_subsequence_score(query: &str, target: &str) -> Option<i32> {
     let query_lower = query.trim().to_lowercase();
     if query_lower.is_empty() {
         return Some(0);

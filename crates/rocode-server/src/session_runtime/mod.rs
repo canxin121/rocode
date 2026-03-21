@@ -13,9 +13,9 @@ use self::events::{
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
-    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
-    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
-    SchedulerDecisionSection, SchedulerStageBlock,
+    MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, SchedulerDecisionBlock,
+    SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
+    SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -24,9 +24,10 @@ use rocode_orchestrator::{
     ToolOutput as OrchestratorToolOutput,
 };
 use rocode_provider::Provider;
+use rocode_session::message_model::{session_message_to_unified_message, Part as ModelPart};
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
-use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
+use rocode_session::{MessageUsage, Role as MessageRole, Session, SessionMessage};
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -2571,13 +2572,14 @@ pub(crate) struct SchedulerStageMessageInput<'a> {
 
 pub fn assistant_visible_text(message: &SessionMessage) -> String {
     let mut out = String::new();
-    for part in &message.parts {
-        if let PartType::Text { text, ignored, .. } = &part.part_type {
-            if ignored.unwrap_or(false) {
-                continue;
-            }
-            out.push_str(text);
+    for part in session_message_to_unified_message(message).parts {
+        let ModelPart::Text { text, ignored, .. } = part else {
+            continue;
+        };
+        if ignored.unwrap_or(false) {
+            continue;
         }
+        out.push_str(&text);
     }
     rocode_session::sanitize_display_text(&out)
 }
@@ -2941,7 +2943,7 @@ mod tests {
 
     #[test]
     fn first_user_message_text_uses_first_real_user_message() {
-        let mut session = Session::new("project", ".");
+        let mut session = Session::new("project");
         session.add_assistant_message().add_text("hello");
         session.add_user_message("  First prompt  ");
         session.add_user_message("Second prompt");
@@ -2957,7 +2959,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3011,7 +3013,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3055,7 +3057,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3160,7 +3162,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3237,7 +3239,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3293,7 +3295,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3368,7 +3370,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3468,7 +3470,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3587,7 +3589,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3675,7 +3677,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3750,7 +3752,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3789,7 +3791,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3829,7 +3831,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3881,7 +3883,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project").id
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3935,7 +3937,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_default_session_title_updates_default_title_only() {
-        let mut session = Session::new("project", ".");
+        let mut session = Session::new("project");
         session.add_user_message("Fix the scheduler event flow");
         ensure_default_session_title(
             &mut session,
@@ -3947,7 +3949,7 @@ mod tests {
         .await;
         assert_eq!(session.title, "Scheduler Event Flow");
 
-        let mut auto_named = Session::new("project", ".");
+        let mut auto_named = Session::new("project");
         auto_named.add_user_message("Fix the scheduler event flow");
         auto_named.set_auto_title("Fix the scheduler event flow");
         ensure_default_session_title(
@@ -3960,7 +3962,7 @@ mod tests {
         .await;
         assert_eq!(auto_named.title, "Refined Scheduler Title");
 
-        let mut named = Session::new("project", ".");
+        let mut named = Session::new("project");
         named.set_title("Pinned Title");
         named.add_user_message("Ignored input");
         ensure_default_session_title(
@@ -3973,7 +3975,7 @@ mod tests {
         .await;
         assert_eq!(named.title, "Pinned Title");
 
-        let mut legacy_buggy = Session::new("project", ".");
+        let mut legacy_buggy = Session::new("project");
         legacy_buggy.add_user_message("Fix the scheduler event flow");
         legacy_buggy.set_title("Fix the scheduler event flow");
         legacy_buggy

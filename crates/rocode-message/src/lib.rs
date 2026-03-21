@@ -1,23 +1,14 @@
 #![forbid(unsafe_code)]
 
-//! Canonical message + part model shared across rocode crates.
+//! Message models shared across rocode crates.
 //!
-//! This crate intentionally focuses on:
-//! - clear conversation message semantics (`SessionMessage` + `MessagePart`)
-//! - activity/tool part variants in one place (`PartType`)
-//! - stable wire-facing tags (`snake_case`) with legacy aliases for reads
+//! - `message`: unified (former v2) protocol + provider mapping model.
 
 mod finish;
 mod id;
-mod message;
-pub mod message_v2;
-mod part;
-mod status;
-mod usage;
+pub mod message;
+pub mod part;
+pub mod status;
+pub mod usage;
 
-pub use finish::{normalize_finish_reason, FinishReason};
-pub use message::{filter_compacted_messages, Message, SessionMessage};
-pub use part::{CompletedTime, ErrorTime, MessagePart, PartKind, PartType, RunningTime, ToolState};
 pub use rocode_types::Role;
-pub use status::ToolCallStatus;
-pub use usage::MessageUsage;

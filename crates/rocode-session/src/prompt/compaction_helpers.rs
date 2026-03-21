@@ -1,13 +1,15 @@
-use crate::{PartType, Session, SessionMessage};
+use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
+use crate::{Session, SessionMessage};
 
 pub fn should_compact(messages: &[SessionMessage], max_tokens: u64) -> bool {
     let total_chars: usize = messages
         .iter()
         .map(|m| {
-            m.parts
-                .iter()
-                .filter_map(|p| match &p.part_type {
-                    PartType::Text { text, .. } => Some(text.len()),
+            session_message_to_unified_message(m)
+                .parts
+                .into_iter()
+                .filter_map(|part| match part {
+                    ModelPart::Text { text, .. } => Some(text.len()),
                     _ => None,
                 })
                 .sum::<usize>()
@@ -28,10 +30,13 @@ pub fn trigger_compaction(session: &mut Session, messages: &[SessionMessage]) ->
         .rev()
         .take(10)
         .flat_map(|m| {
-            m.parts.iter().filter_map(|p| match &p.part_type {
-                PartType::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            })
+            session_message_to_unified_message(m)
+                .parts
+                .into_iter()
+                .filter_map(|part| match part {
+                    ModelPart::Text { text, .. } => Some(text),
+                    _ => None,
+                })
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -43,14 +48,7 @@ pub fn trigger_compaction(session: &mut Session, messages: &[SessionMessage]) ->
 
     // Persist the compaction summary as a Compaction part on a new assistant message.
     let mut compaction_msg = SessionMessage::assistant(session.id.clone());
-    compaction_msg.parts.push(crate::MessagePart {
-        id: format!("prt_{}", uuid::Uuid::new_v4()),
-        part_type: PartType::Compaction {
-            summary: summary.clone(),
-        },
-        created_at: chrono::Utc::now(),
-        message_id: None,
-    });
+    compaction_msg.add_compaction(summary.clone());
     session.messages.push(compaction_msg);
 
     // Mark session as updated so compaction summary is persisted.

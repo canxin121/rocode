@@ -4,9 +4,9 @@ use std::path::Path;
 use base64::Engine;
 use serde::Deserialize;
 
+use crate::SessionMessage;
 use rocode_config::resolve_agents_for_file;
 use rocode_orchestrator::SystemPrompt;
-use crate::SessionMessage;
 
 use super::SessionPrompt;
 

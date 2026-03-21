@@ -1344,11 +1344,7 @@ pub(crate) async fn generate_agent_response(
         };
         let cwd = std::env::current_dir().unwrap_or_default();
         let model_prompt = SystemPrompt::for_model(&model_api_id);
-        let env_ctx = EnvironmentContext::from_project_dir(
-            &model_api_id,
-            &provider_id,
-            &cwd,
-        );
+        let env_ctx = EnvironmentContext::from_project_dir(&model_api_id, &provider_id, &cwd);
         let env_prompt = SystemPrompt::environment(&env_ctx);
         let full_prompt = format!("{}\n\n{}", model_prompt, env_prompt);
         executor = executor.with_system_prompt(full_prompt);

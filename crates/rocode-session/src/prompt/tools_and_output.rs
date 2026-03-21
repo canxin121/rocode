@@ -44,11 +44,24 @@ pub fn structured_output_system_prompt() -> String {
 
 pub fn extract_structured_output(parts: &[crate::MessagePart]) -> Option<serde_json::Value> {
     for part in parts {
-        if let PartType::ToolCall { name, input, .. } = &part.part_type {
-            if name == "StructuredOutput" {
-                return Some(input.clone());
-            }
+        let PartType::ToolCall {
+            name,
+            input,
+            state,
+            ..
+        } = &part.part_type
+        else {
+            continue;
+        };
+        if name != "StructuredOutput" {
+            continue;
         }
+
+        if let Some(state) = state {
+            return Some(state.input().clone());
+        }
+
+        return Some(input.clone());
     }
     None
 }
@@ -94,30 +107,12 @@ pub fn insert_reminders(
 
         if agent_name == "plan" {
             let reminder_text = PROMPT_PLAN.to_string();
-            messages[idx].parts.push(crate::MessagePart {
-                id: format!("prt_{}", uuid::Uuid::new_v4()),
-                part_type: PartType::Text {
-                    text: reminder_text,
-                    synthetic: None,
-                    ignored: None,
-                },
-                created_at: chrono::Utc::now(),
-                message_id: None,
-            });
+            messages[idx].add_text(reminder_text);
         }
 
         if was_plan && agent_name == "build" {
             let reminder_text = BUILD_SWITCH.to_string();
-            messages[idx].parts.push(crate::MessagePart {
-                id: format!("prt_{}", uuid::Uuid::new_v4()),
-                part_type: PartType::Text {
-                    text: reminder_text,
-                    synthetic: None,
-                    ignored: None,
-                },
-                created_at: chrono::Utc::now(),
-                message_id: None,
-            });
+            messages[idx].add_text(reminder_text);
         }
 
         messages

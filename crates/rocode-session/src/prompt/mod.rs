@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use rocode_content::output_blocks::{
     MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, ToolBlock,
 };
-use rocode_message::message_v2::{model_context_from_ids, to_model_messages};
+use rocode_message::message::{model_context_from_ids, to_model_messages};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -54,8 +54,12 @@ use rocode_provider::{Provider, ToolDefinition};
 use serde::{Deserialize, Serialize};
 
 use crate::compaction::{run_compaction, CompactionResult};
-use crate::message_v2::ModelRef as V2ModelRef;
-use crate::{PartType, Role, Session, SessionMessage, SessionStateManager};
+use crate::message_model::{
+    session_message_to_unified_message, ModelRef as V2ModelRef, Part as ModelPart,
+};
+use crate::{Role, Session, SessionMessage, SessionStateManager};
+#[cfg(test)]
+use crate::PartType;
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
@@ -179,7 +183,6 @@ struct StreamToolState {
     name: String,
     raw_input: String,
     input: serde_json::Value,
-    status: crate::ToolCallStatus,
     state: crate::ToolState,
     emitted_output_start: bool,
     emitted_output_detail: Option<String>,
@@ -750,7 +753,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         broadcast(event);
                     }
 
-                    let (tool_input, tool_raw, tool_state, should_emit_start) = {
+                    let (tool_state, should_emit_start) = {
                         let entry =
                             self.tool_calls
                                 .entry(id.clone())
@@ -758,7 +761,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                                     name: String::new(),
                                     raw_input: String::new(),
                                     input: serde_json::json!({}),
-                                    status: crate::ToolCallStatus::Pending,
                                     state: crate::ToolState::Pending {
                                         input: serde_json::json!({}),
                                         raw: String::new(),
@@ -773,17 +775,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         if should_emit_start {
                             entry.emitted_output_start = true;
                         }
-                        entry.status = crate::ToolCallStatus::Pending;
                         entry.state = crate::ToolState::Pending {
                             input: entry.input.clone(),
                             raw: entry.raw_input.clone(),
                         };
-                        (
-                            entry.input.clone(),
-                            entry.raw_input.clone(),
-                            entry.state.clone(),
-                            should_emit_start,
-                        )
+                        (entry.state.clone(), should_emit_start)
                     };
                     if should_emit_start {
                         self.ensure_assistant_output_started().await;
@@ -798,15 +794,15 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             assistant,
                             id,
                             Some(next_name),
-                            Some(tool_input),
-                            Some(tool_raw),
-                            Some(crate::ToolCallStatus::Pending),
+                            None,
+                            None,
+                            None,
                             Some(tool_state),
                         );
                     }
                 }
                 if !partial_input.is_empty() {
-                    let (tool_input, tool_raw, tool_state, tool_name, detail) = {
+                    let (tool_state, tool_name, detail) = {
                         let entry =
                             self.tool_calls
                                 .entry(id.clone())
@@ -814,7 +810,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                                     name: String::new(),
                                     raw_input: String::new(),
                                     input: serde_json::json!({}),
-                                    status: crate::ToolCallStatus::Pending,
                                     state: crate::ToolState::Pending {
                                         input: serde_json::json!({}),
                                         raw: String::new(),
@@ -832,10 +827,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             input: entry.input.clone(),
                             raw: entry.raw_input.clone(),
                         };
+                        let (_, _, pending_status) = SessionPrompt::state_projection(&entry.state);
                         let detail = tool_progress_detail(
                             &entry.input,
                             Some(entry.raw_input.as_str()),
-                            &crate::ToolCallStatus::Pending,
+                            &pending_status,
                         );
                         let tool_name = if entry.name.trim().is_empty() {
                             id.clone()
@@ -849,8 +845,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             entry.emitted_output_detail = detail.clone();
                         }
                         (
-                            entry.input.clone(),
-                            entry.raw_input.clone(),
                             entry.state.clone(),
                             tool_name,
                             if should_emit_detail { detail } else { None },
@@ -869,9 +863,9 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             assistant,
                             id,
                             None,
-                            Some(tool_input),
-                            Some(tool_raw),
-                            Some(crate::ToolCallStatus::Pending),
+                            None,
+                            None,
+                            None,
                             Some(tool_state),
                         );
                     }
@@ -895,7 +889,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     broadcast(event);
                 }
 
-                let (tool_input, tool_raw, tool_state, should_emit_start, detail) = {
+                let (tool_state, should_emit_start, detail) = {
                     let entry =
                         self.tool_calls
                             .entry(call.id.clone())
@@ -903,7 +897,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                                 name: String::new(),
                                 raw_input: String::new(),
                                 input: serde_json::json!({}),
-                                status: crate::ToolCallStatus::Pending,
                                 state: crate::ToolState::Pending {
                                     input: serde_json::json!({}),
                                     raw: String::new(),
@@ -918,18 +911,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     if should_emit_start {
                         entry.emitted_output_start = true;
                     }
-                    let detail = tool_progress_detail(
-                        &entry.input,
-                        Some(entry.raw_input.as_str()),
-                        &crate::ToolCallStatus::Running,
-                    );
-                    let should_emit_detail = detail
-                        .as_ref()
-                        .is_some_and(|detail| entry.emitted_output_detail.as_ref() != Some(detail));
-                    if should_emit_detail {
-                        entry.emitted_output_detail = detail.clone();
-                    }
-                    entry.status = crate::ToolCallStatus::Running;
                     entry.state = crate::ToolState::Running {
                         input: entry.input.clone(),
                         title: None,
@@ -938,9 +919,19 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             start: chrono::Utc::now().timestamp_millis(),
                         },
                     };
+                    let (_, _, running_status) = SessionPrompt::state_projection(&entry.state);
+                    let detail = tool_progress_detail(
+                        &entry.input,
+                        Some(entry.raw_input.as_str()),
+                        &running_status,
+                    );
+                    let should_emit_detail = detail
+                        .as_ref()
+                        .is_some_and(|detail| entry.emitted_output_detail.as_ref() != Some(detail));
+                    if should_emit_detail {
+                        entry.emitted_output_detail = detail.clone();
+                    }
                     (
-                        entry.input.clone(),
-                        entry.raw_input.clone(),
                         entry.state.clone(),
                         should_emit_start,
                         if should_emit_detail { detail } else { None },
@@ -966,9 +957,9 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         assistant,
                         &call.id,
                         Some(&call.name),
-                        Some(tool_input),
-                        Some(tool_raw),
-                        Some(crate::ToolCallStatus::Running),
+                        None,
+                        None,
+                        None,
                         Some(tool_state),
                     );
                 }
@@ -1019,11 +1010,6 @@ impl<'a> LoopSink for SessionStepSink<'a> {
         if let Some(entry) = self.tool_calls.get_mut(&call.id) {
             entry.input = call.arguments.clone();
             entry.name = result.tool_name.clone();
-            entry.status = if result.is_error {
-                crate::ToolCallStatus::Error
-            } else {
-                crate::ToolCallStatus::Completed
-            };
             let now = chrono::Utc::now().timestamp_millis();
             entry.state = if result.is_error {
                 crate::ToolState::Error {
@@ -1075,7 +1061,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     Some(&result.tool_name),
                     Some(call.arguments.clone()),
                     Some(serde_json::to_string(&call.arguments).unwrap_or_default()),
-                    Some(entry.status.clone()),
+                    None,
                     Some(entry.state.clone()),
                 );
             }
@@ -1949,7 +1935,7 @@ impl SessionPrompt {
                 "tokens_cache_write".to_string(),
                 serde_json::json!(step_output.cache_write_tokens),
             );
-            assistant_msg.usage = Some(crate::message::MessageUsage {
+            assistant_msg.usage = Some(crate::MessageUsage {
                 input_tokens: step_output.prompt_tokens,
                 output_tokens: step_output.completion_tokens,
                 reasoning_tokens: step_output.reasoning_tokens,
@@ -2026,7 +2012,10 @@ impl SessionPrompt {
                 break;
             }
 
-            let filtered_messages = rocode_message::filter_compacted_messages(&session.messages);
+            let filtered_messages =
+                rocode_message::message::session_message::filter_compacted_messages(
+                    &session.messages,
+                );
 
             let last_user_idx = filtered_messages
                 .iter()
@@ -2132,16 +2121,10 @@ impl SessionPrompt {
                 assistant_metadata.insert("agent".to_string(), serde_json::json!(agent));
                 assistant_metadata.insert("mode".to_string(), serde_json::json!(agent));
             }
-            session.messages.push(SessionMessage {
-                id: assistant_message_id,
-                session_id: session_id.clone(),
-                role: Role::Assistant,
-                parts: Vec::new(),
-                created_at: chrono::Utc::now(),
-                metadata: assistant_metadata,
-                usage: None,
-                finish: None,
-            });
+            let mut assistant_message = SessionMessage::assistant(session_id.clone());
+            assistant_message.id = assistant_message_id;
+            assistant_message.metadata = assistant_metadata;
+            session.messages.push(assistant_message);
             session.touch();
             Self::emit_session_update(prompt_ctx.hooks.update_hook.as_ref(), session);
 
@@ -2330,39 +2313,46 @@ impl SessionPrompt {
             })
             .unwrap_or_default();
 
-        message
+        session_message_to_unified_message(message)
             .parts
-            .iter()
+            .into_iter()
             .enumerate()
-            .filter_map(|(part_index, part)| match &part.part_type {
-                PartType::Subtask {
-                    id,
-                    description,
-                    status,
-                } if status == "pending" => {
-                    let (agent, prompt, meta_description) = metadata_by_id
-                        .get(id)
-                        .cloned()
-                        .unwrap_or_else(|| (id.clone(), description.clone(), description.clone()));
-                    let description = if meta_description.is_empty() {
-                        description.clone()
-                    } else {
-                        meta_description
-                    };
-                    let prompt = if prompt.trim().is_empty() {
-                        description.clone()
-                    } else {
-                        prompt
-                    };
-                    Some(PendingSubtask {
-                        part_index,
-                        subtask_id: id.clone(),
-                        agent,
-                        prompt,
-                        description,
-                    })
+            .filter_map(|(part_index, part)| {
+                let ModelPart::Subtask(subtask) = part else {
+                    return None;
+                };
+                if subtask.status.as_deref().unwrap_or("pending") != "pending" {
+                    return None;
                 }
-                _ => None,
+
+                let (agent, prompt, meta_description) = metadata_by_id
+                    .get(&subtask.id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        (
+                            subtask.id.clone(),
+                            subtask.description.clone(),
+                            subtask.description.clone(),
+                        )
+                    });
+                let description = if meta_description.is_empty() {
+                    subtask.description.clone()
+                } else {
+                    meta_description
+                };
+                let prompt = if prompt.trim().is_empty() {
+                    description.clone()
+                } else {
+                    prompt
+                };
+
+                Some(PendingSubtask {
+                    part_index,
+                    subtask_id: subtask.id,
+                    agent,
+                    prompt,
+                    description,
+                })
             })
             .collect()
     }
@@ -2472,7 +2462,7 @@ impl SessionPrompt {
 
         for (part_index, subtask_id, is_error, description, output) in results {
             if let Some(part) = session.messages[last_user_idx].parts.get_mut(part_index) {
-                if let PartType::Subtask { status, .. } = &mut part.part_type {
+                if let crate::PartType::Subtask { status, .. } = &mut part.part_type {
                     *status = if is_error {
                         "error".to_string()
                     } else {
@@ -2608,7 +2598,7 @@ pub fn extract_file_references(template: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::MessagePart;
+    use crate::MessagePart;
     use async_trait::async_trait;
     use futures::stream;
     use rocode_provider::{
@@ -3617,10 +3607,7 @@ mod tests {
                 input: serde_json::json!({}),
                 status: crate::ToolCallStatus::Pending,
                 raw: Some("{".to_string()),
-                state: Some(rocode_message::ToolState::Pending {
-                    input: serde_json::json!({}),
-                    raw: "{".to_string(),
-                }),
+                state: None,
             },
             created_at: chrono::Utc::now(),
             message_id: None,

@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
+use rocode_command::output_blocks::SchedulerStageBlock;
 use rocode_command::terminal_tool_block_display::{
     build_file_items, build_image_items, summarize_block_items_inline,
 };
-use rocode_command::output_blocks::SchedulerStageBlock;
 pub use rocode_types::Role;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -502,44 +502,14 @@ impl SessionContext {
         // Find or create a Reasoning part
         match phase {
             "start" => {
-                // Initialize or reset reasoning content
-                // Check if there's already a Reasoning part
-                let has_reasoning = message
-                    .parts
-                    .iter()
-                    .any(|p| matches!(p, MessagePart::Reasoning { .. }));
-                if !has_reasoning {
-                    message.parts.push(MessagePart::Reasoning {
-                        text: String::new(),
-                    });
-                }
+                // Initialize or reset reasoning content.
+                Self::ensure_reasoning_part(message);
             }
             "delta" => {
-                // Append reasoning text
-                for part in &mut message.parts {
-                    if let MessagePart::Reasoning {
-                        text: ref mut existing,
-                    } = part
-                    {
-                        existing.push_str(text);
-                        break;
-                    }
-                }
+                Self::append_reasoning_part(message, text);
             }
             "full" => {
-                if let Some(MessagePart::Reasoning {
-                    text: ref mut existing,
-                }) = message
-                    .parts
-                    .iter_mut()
-                    .find(|part| matches!(part, MessagePart::Reasoning { .. }))
-                {
-                    *existing = text.to_string();
-                } else {
-                    message.parts.push(MessagePart::Reasoning {
-                        text: text.to_string(),
-                    });
-                }
+                Self::set_reasoning_part(message, text.to_string());
             }
             "end" => {
                 // Reasoning complete - nothing special to do, the text is already there
@@ -604,32 +574,14 @@ impl SessionContext {
             WireMessagePhase::Start => {
                 message.role = role;
                 message.content.clear();
-                message
-                    .parts
-                    .retain(|part| !matches!(part, MessagePart::Text { .. }));
+                Self::clear_text_parts(message);
             }
             WireMessagePhase::Delta => {
-                if let Some(MessagePart::Text { text: existing }) = message
-                    .parts
-                    .iter_mut()
-                    .rev()
-                    .find(|part| matches!(part, MessagePart::Text { .. }))
-                {
-                    existing.push_str(&payload.text);
-                } else {
-                    message.parts.push(MessagePart::Text {
-                        text: payload.text.clone(),
-                    });
-                }
+                Self::append_text_part(message, &payload.text);
             }
             WireMessagePhase::Full => {
                 message.role = role;
-                message
-                    .parts
-                    .retain(|part| !matches!(part, MessagePart::Text { .. }));
-                message.parts.push(MessagePart::Text {
-                    text: payload.text.clone(),
-                });
+                Self::set_text_part(message, payload.text.clone());
             }
             WireMessagePhase::End => {}
             _ => {}
@@ -689,55 +641,11 @@ impl SessionContext {
 
         match payload.phase {
             WireToolPhase::Start | WireToolPhase::Running => {
-                let arguments = detail;
-                if let Some(MessagePart::ToolCall {
-                    name,
-                    arguments: existing,
-                    ..
-                }) = message.parts.iter_mut().find(|part| {
-                    matches!(
-                        part,
-                        MessagePart::ToolCall { id, .. } if id == tool_call_id
-                    )
-                }) {
-                    *name = tool_name.to_string();
-                    *existing = arguments;
-                } else {
-                    message.parts.push(MessagePart::ToolCall {
-                        id: tool_call_id.to_string(),
-                        name: tool_name.to_string(),
-                        arguments,
-                    });
-                }
+                Self::upsert_tool_call_part(message, tool_call_id, tool_name, detail);
             }
             WireToolPhase::Done | WireToolPhase::Error | WireToolPhase::Result => {
                 let is_error = matches!(payload.phase, WireToolPhase::Error);
-                if let Some(part) = message.parts.iter_mut().find(|part| {
-                    matches!(
-                        part,
-                        MessagePart::ToolResult { id, .. } if id == tool_call_id
-                    )
-                }) {
-                    if let MessagePart::ToolResult {
-                        result,
-                        is_error: part_is_error,
-                        title,
-                        ..
-                    } = part
-                    {
-                        *result = detail.clone();
-                        *part_is_error = is_error;
-                        *title = Some(tool_name.to_string());
-                    }
-                } else {
-                    message.parts.push(MessagePart::ToolResult {
-                        id: tool_call_id.to_string(),
-                        result: detail.clone(),
-                        is_error,
-                        title: Some(tool_name.to_string()),
-                        metadata: None,
-                    });
-                }
+                Self::upsert_tool_result_part(message, tool_call_id, tool_name, detail, is_error);
             }
             _ => {}
         }
@@ -761,12 +669,7 @@ impl SessionContext {
         };
 
         message.role = Role::Assistant;
-        message
-            .parts
-            .retain(|part| !matches!(part, MessagePart::Text { .. }));
-        message.parts.push(MessagePart::Text {
-            text: block.text.clone(),
-        });
+        Self::set_text_part(message, block.text.clone());
         message.metadata = Some(Self::scheduler_stage_metadata_from_block(&block));
         Self::refresh_message_content(message);
 
@@ -873,6 +776,138 @@ impl SessionContext {
         }
     }
 
+    fn clear_text_parts(message: &mut Message) {
+        message
+            .parts
+            .retain(|part| !matches!(part, MessagePart::Text { .. }));
+    }
+
+    fn append_text_part(message: &mut Message, text: &str) {
+        if let Some(MessagePart::Text { text: existing }) = message
+            .parts
+            .iter_mut()
+            .rev()
+            .find(|part| matches!(part, MessagePart::Text { .. }))
+        {
+            existing.push_str(text);
+            return;
+        }
+
+        message.parts.push(MessagePart::Text {
+            text: text.to_string(),
+        });
+    }
+
+    fn set_text_part(message: &mut Message, text: String) {
+        Self::clear_text_parts(message);
+        message.parts.push(MessagePart::Text { text });
+    }
+
+    fn ensure_reasoning_part(message: &mut Message) {
+        if message
+            .parts
+            .iter()
+            .any(|part| matches!(part, MessagePart::Reasoning { .. }))
+        {
+            return;
+        }
+        message.parts.push(MessagePart::Reasoning {
+            text: String::new(),
+        });
+    }
+
+    fn append_reasoning_part(message: &mut Message, text: &str) {
+        if let Some(MessagePart::Reasoning {
+            text: ref mut existing,
+        }) = message
+            .parts
+            .iter_mut()
+            .rev()
+            .find(|part| matches!(part, MessagePart::Reasoning { .. }))
+        {
+            existing.push_str(text);
+            return;
+        }
+        message.parts.push(MessagePart::Reasoning {
+            text: text.to_string(),
+        });
+    }
+
+    fn set_reasoning_part(message: &mut Message, text: String) {
+        if let Some(MessagePart::Reasoning {
+            text: ref mut existing,
+        }) = message
+            .parts
+            .iter_mut()
+            .find(|part| matches!(part, MessagePart::Reasoning { .. }))
+        {
+            *existing = text;
+            return;
+        }
+        message.parts.push(MessagePart::Reasoning { text });
+    }
+
+    fn upsert_tool_call_part(
+        message: &mut Message,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: String,
+    ) {
+        if let Some(MessagePart::ToolCall {
+            name,
+            arguments: existing,
+            ..
+        }) = message.parts.iter_mut().find(|part| {
+            matches!(
+                part,
+                MessagePart::ToolCall { id, .. } if id == tool_call_id
+            )
+        }) {
+            *name = tool_name.to_string();
+            *existing = arguments;
+            return;
+        }
+
+        message.parts.push(MessagePart::ToolCall {
+            id: tool_call_id.to_string(),
+            name: tool_name.to_string(),
+            arguments,
+        });
+    }
+
+    fn upsert_tool_result_part(
+        message: &mut Message,
+        tool_call_id: &str,
+        tool_name: &str,
+        result: String,
+        is_error: bool,
+    ) {
+        if let Some(MessagePart::ToolResult {
+            result: existing_result,
+            is_error: existing_is_error,
+            title,
+            ..
+        }) = message.parts.iter_mut().find(|part| {
+            matches!(
+                part,
+                MessagePart::ToolResult { id, .. } if id == tool_call_id
+            )
+        }) {
+            *existing_result = result;
+            *existing_is_error = is_error;
+            *title = Some(tool_name.to_string());
+            return;
+        }
+
+        message.parts.push(MessagePart::ToolResult {
+            id: tool_call_id.to_string(),
+            result,
+            is_error,
+            title: Some(tool_name.to_string()),
+            metadata: None,
+        });
+    }
+
     fn refresh_message_content(message: &mut Message) {
         message.content = message
             .parts
@@ -901,9 +936,7 @@ impl SessionContext {
                 MessagePart::File { path, mime } => {
                     summarize_block_items_inline(&build_file_items(path, mime))
                 }
-                MessagePart::Image { url } => {
-                    summarize_block_items_inline(&build_image_items(url))
-                }
+                MessagePart::Image { url } => summarize_block_items_inline(&build_image_items(url)),
             })
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()

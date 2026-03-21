@@ -4,7 +4,10 @@ use axum::extract::{Path, State};
 use axum::Json;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
-use rocode_session::{PartType, Session, ToolCallStatus};
+use rocode_session::message_model::{
+    session_message_to_unified_message, Part as ModelPart, ToolState as ModelToolState,
+};
+use rocode_session::Session;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionExecutionTopology;
@@ -145,67 +148,60 @@ pub(super) fn collect_active_tool_execution_records(
     let mut records = Vec::new();
 
     for message in &session.messages {
-        for part in &message.parts {
-            let PartType::ToolCall {
-                id,
-                name,
-                input,
-                status,
-                ..
-            } = &part.part_type
-            else {
+        for part in session_message_to_unified_message(message).parts {
+            let ModelPart::Tool(tool_part) = part else {
                 continue;
             };
 
-            if !matches!(status, ToolCallStatus::Pending | ToolCallStatus::Running) {
-                continue;
-            }
+            let (input, status, execution_status, waiting_on, recent_event, started_at, updated_at) =
+                match &tool_part.state {
+                    ModelToolState::Pending { input, .. } => (
+                        input,
+                        "pending",
+                        crate::runtime_control::ExecutionStatus::Waiting,
+                        "dispatch".to_string(),
+                        format!("{} queued", tool_part.tool),
+                        message.created_at.timestamp_millis(),
+                        message.created_at.timestamp_millis(),
+                    ),
+                    ModelToolState::Running { input, time, .. } => (
+                        input,
+                        "running",
+                        crate::runtime_control::ExecutionStatus::Running,
+                        "tool".to_string(),
+                        format!("{} running", tool_part.tool),
+                        time.start,
+                        time.start,
+                    ),
+                    ModelToolState::Completed { .. } | ModelToolState::Error { .. } => continue,
+                };
 
             // Skip if this tool call is already registered via the lifecycle hook.
-            let candidate_id = format!("tool_call:{id}");
+            let candidate_id = format!("tool_call:{}", tool_part.call_id);
             if registered_ids.contains(candidate_id.as_str()) {
                 continue;
             }
 
-            let execution_status = match status {
-                ToolCallStatus::Pending => crate::runtime_control::ExecutionStatus::Waiting,
-                ToolCallStatus::Running => crate::runtime_control::ExecutionStatus::Running,
-                ToolCallStatus::Completed | ToolCallStatus::Error => continue,
-            };
-
             let metadata = ToolExecutionMetadata {
-                tool_call_id: id,
-                tool_name: name,
+                tool_call_id: &tool_part.call_id,
+                tool_name: &tool_part.tool,
                 input,
                 message_id: &message.id,
-                status: match status {
-                    ToolCallStatus::Pending => "pending",
-                    ToolCallStatus::Running => "running",
-                    ToolCallStatus::Completed => "completed",
-                    ToolCallStatus::Error => "error",
-                },
+                status,
             };
 
             records.push(crate::runtime_control::ExecutionRecord {
-                id: format!("tool_call:{id}"),
+                id: format!("tool_call:{}", tool_part.call_id),
                 session_id: session.id.clone(),
                 kind: crate::runtime_control::ExecutionKind::ToolCall,
                 status: execution_status,
-                label: Some(format!("Tool: {name}")),
+                label: Some(format!("Tool: {}", tool_part.tool)),
                 parent_id: parent_id.clone(),
                 stage_id: stage_id.clone(),
-                waiting_on: Some(match status {
-                    ToolCallStatus::Pending => "dispatch".to_string(),
-                    ToolCallStatus::Running => "tool".to_string(),
-                    ToolCallStatus::Completed | ToolCallStatus::Error => unreachable!(),
-                }),
-                recent_event: Some(match status {
-                    ToolCallStatus::Pending => format!("{name} queued"),
-                    ToolCallStatus::Running => format!("{name} running"),
-                    ToolCallStatus::Completed | ToolCallStatus::Error => unreachable!(),
-                }),
-                started_at: part.created_at.timestamp_millis(),
-                updated_at: part.created_at.timestamp_millis(),
+                waiting_on: Some(waiting_on),
+                recent_event: Some(recent_event),
+                started_at,
+                updated_at,
                 metadata: serde_json::to_value(metadata).ok(),
             });
         }

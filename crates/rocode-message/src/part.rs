@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::id::new_part_id;
-use crate::ToolCallStatus;
+use crate::status::ToolCallStatus;
 
 fn default_json_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
@@ -179,6 +179,22 @@ impl ToolState {
             Self::Running { .. } => ToolCallStatus::Running,
             Self::Completed { .. } => ToolCallStatus::Completed,
             Self::Error { .. } => ToolCallStatus::Error,
+        }
+    }
+
+    pub const fn input(&self) -> &serde_json::Value {
+        match self {
+            Self::Pending { input, .. }
+            | Self::Running { input, .. }
+            | Self::Completed { input, .. }
+            | Self::Error { input, .. } => input,
+        }
+    }
+
+    pub fn raw(&self) -> Option<&str> {
+        match self {
+            Self::Pending { raw, .. } => Some(raw.as_str()),
+            _ => None,
         }
     }
 }

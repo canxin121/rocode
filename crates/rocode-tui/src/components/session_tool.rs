@@ -1950,7 +1950,7 @@ fn is_ascii_todo_marker_line(line: &str) -> bool {
         || second.starts_with("TODO_")
 }
 
-fn is_legacy_todo_marker_line(line: &str) -> bool {
+fn is_emoji_todo_marker_line(line: &str) -> bool {
     line.starts_with("✅")
         || line.starts_with("🔄")
         || line.starts_with("⏳")
@@ -1960,7 +1960,7 @@ fn is_legacy_todo_marker_line(line: &str) -> bool {
 }
 
 fn is_todo_marker_line(line: &str) -> bool {
-    is_ascii_todo_marker_line(line) || is_legacy_todo_marker_line(line)
+    is_ascii_todo_marker_line(line) || is_emoji_todo_marker_line(line)
 }
 
 fn detect_todo_status(line: &str) -> String {

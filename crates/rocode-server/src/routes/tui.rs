@@ -204,6 +204,7 @@ async fn list_questions(State(state): State<Arc<ServerState>>) -> Json<Vec<Quest
     Json(state.runtime_control.list_questions().await)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn list_questions_for_session(
     state: &Arc<ServerState>,
     session_id: &str,
