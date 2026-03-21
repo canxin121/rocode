@@ -72,19 +72,26 @@ pub enum MessageDensity {
     Cozy,
 }
 
-impl MessageDensity {
-    pub fn from_str_lossy(s: &str) -> Self {
-        if s.eq_ignore_ascii_case("cozy") {
-            Self::Cozy
-        } else {
-            Self::Compact
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
+impl std::fmt::Display for MessageDensity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
             Self::Compact => "compact",
             Self::Cozy => "cozy",
+        };
+        f.write_str(value)
+    }
+}
+
+impl std::str::FromStr for MessageDensity {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("cozy") {
+            Ok(Self::Cozy)
+        } else if s.eq_ignore_ascii_case("compact") {
+            Ok(Self::Compact)
+        } else {
+            Err(())
         }
     }
 }
@@ -321,7 +328,7 @@ impl AppContext {
                 MessageDensity::Compact => MessageDensity::Cozy,
                 MessageDensity::Cozy => MessageDensity::Compact,
             };
-            density.as_str().to_string()
+            density.to_string()
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             message_density: Some(density_str),
@@ -427,10 +434,11 @@ impl AppContext {
         *self.show_thinking.write() = ui.and_then(|prefs| prefs.show_thinking).unwrap_or(true);
         *self.show_tool_details.write() =
             ui.and_then(|prefs| prefs.show_tool_details).unwrap_or(true);
-        *self.message_density.write() = MessageDensity::from_str_lossy(
-            ui.and_then(|prefs| prefs.message_density.as_deref())
-                .unwrap_or("compact"),
-        );
+        *self.message_density.write() = ui
+            .and_then(|prefs| prefs.message_density.as_deref())
+            .unwrap_or("compact")
+            .parse::<MessageDensity>()
+            .unwrap_or(MessageDensity::Compact);
         *self.semantic_highlight.write() = ui
             .and_then(|prefs| prefs.semantic_highlight)
             .unwrap_or(false);

@@ -337,16 +337,6 @@ pub(crate) enum AgentFileMode {
     Subagent,
 }
 
-impl AgentFileMode {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Primary => "primary",
-            Self::Subagent => "subagent",
-        }
-    }
-}
-
 #[derive(Subcommand)]
 pub(crate) enum DebugCommands {
     #[command(about = "Show important local paths")]

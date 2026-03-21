@@ -13,7 +13,7 @@ impl AgentRegistry {
         let mut agents = HashMap::new();
         for builtin in BuiltinAgent::all() {
             let agent = AgentInfo::from_builtin(builtin);
-            agents.insert(builtin.as_str().to_string(), agent);
+            agents.insert(builtin.as_ref().to_string(), agent);
         }
         agents.insert("summary".to_string(), AgentInfo::summary());
         Self { agents }
@@ -102,7 +102,7 @@ impl AgentRegistry {
     }
 
     pub fn default_agent(&self) -> &AgentInfo {
-        if let Some(general) = self.get(BuiltinAgent::General.as_str()) {
+        if let Some(general) = self.get(BuiltinAgent::General.as_ref()) {
             return general;
         }
 

@@ -1,11 +1,12 @@
 use std::io::{self, Write};
 use std::process::Command as ProcessCommand;
 
+use clap::ValueEnum;
 use serde::Deserialize;
 
 use crate::util::parse_http_json;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum InstallMethod {
     Curl,
     Npm,
@@ -17,31 +18,13 @@ pub(crate) enum InstallMethod {
     Unknown,
 }
 
-impl InstallMethod {
-    pub(crate) fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "curl" => Self::Curl,
-            "npm" => Self::Npm,
-            "pnpm" => Self::Pnpm,
-            "bun" => Self::Bun,
-            "brew" => Self::Brew,
-            "choco" => Self::Choco,
-            "scoop" => Self::Scoop,
-            _ => Self::Unknown,
-        }
-    }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Curl => "curl",
-            Self::Npm => "npm",
-            Self::Pnpm => "pnpm",
-            Self::Bun => "bun",
-            Self::Brew => "brew",
-            Self::Choco => "choco",
-            Self::Scoop => "scoop",
-            Self::Unknown => "unknown",
-        }
+impl std::fmt::Display for InstallMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self
+            .to_possible_value()
+            .map(|value| value.get_name())
+            .unwrap_or("unknown");
+        f.write_str(name)
     }
 }
 
@@ -250,10 +233,10 @@ pub(crate) async fn handle_upgrade_command(
     let detected = detect_install_method();
     let method = method
         .as_deref()
-        .map(InstallMethod::parse)
+        .map(|value| InstallMethod::from_str(value.trim(), true).unwrap_or(InstallMethod::Unknown))
         .unwrap_or(detected);
 
-    println!("Using method: {}", method.as_str());
+    println!("Using method: {}", method);
 
     if method == InstallMethod::Unknown
         && !prompt_yes_no("Installation method is unknown. Continue anyway?")?

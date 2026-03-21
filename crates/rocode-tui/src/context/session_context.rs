@@ -224,14 +224,16 @@ pub enum TodoStatus {
     Cancelled,
 }
 
-impl TodoStatus {
-    pub fn parse(value: &str) -> Option<Self> {
+impl std::str::FromStr for TodoStatus {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "pending" => Some(Self::Pending),
-            "in_progress" | "in-progress" | "inprogress" => Some(Self::InProgress),
-            "completed" | "done" => Some(Self::Completed),
-            "cancelled" | "canceled" => Some(Self::Cancelled),
-            _ => None,
+            "pending" => Ok(Self::Pending),
+            "in_progress" | "in-progress" | "inprogress" => Ok(Self::InProgress),
+            "completed" | "done" => Ok(Self::Completed),
+            "cancelled" | "canceled" => Ok(Self::Cancelled),
+            _ => Err(()),
         }
     }
 }

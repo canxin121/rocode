@@ -191,7 +191,7 @@ impl Tool for AstGrepReplaceTool {
         ctx.ask_permission(
             PermissionRequest::new(BuiltinToolName::AstGrepReplace.as_str())
                 .with_pattern(&input.pattern)
-                .with_metadata("language", serde_json::json!(input.language.as_str()))
+                .with_metadata("language", serde_json::json!(input.language.as_ref()))
                 .with_metadata(
                     "path",
                     serde_json::json!(target_path.to_string_lossy().to_string()),
@@ -268,7 +268,7 @@ impl Tool for AstGrepReplaceTool {
         );
         metadata.insert(
             "language".into(),
-            serde_json::json!(input.language.as_str()),
+            serde_json::json!(input.language.as_ref()),
         );
         metadata.insert(
             "path".into(),

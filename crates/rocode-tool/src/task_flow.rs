@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use strum_macros::AsRefStr;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
 use rocode_core::contracts::tools::BuiltinToolName;
@@ -23,26 +24,15 @@ Phase 1 status:
 - create/resume are implemented as thin adapters over the existing `task` tool
 "#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, AsRefStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 enum TaskFlowOperation {
     Create,
     Resume,
     Get,
     List,
     Cancel,
-}
-
-impl TaskFlowOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Create => "create",
-            Self::Resume => "resume",
-            Self::Get => "get",
-            Self::List => "list",
-            Self::Cancel => "cancel",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -349,7 +339,7 @@ impl Tool for TaskFlowTool {
         validate_input(&input)?;
 
         let mut permission = PermissionRequest::for_tool(BuiltinToolName::TaskFlow)
-            .with_metadata("operation", serde_json::json!(input.operation.as_str()))
+            .with_metadata("operation", serde_json::json!(input.operation.as_ref()))
             .always_allow();
         if let Some(task_id) = input.task_id.as_ref() {
             permission = permission.with_metadata("task_id", serde_json::json!(task_id));
@@ -440,7 +430,7 @@ async fn execute_delegate(
     };
 
     let metadata_wire = DelegatedTaskMetadata {
-        operation: operation.as_str(),
+        operation: operation.as_ref(),
         delegated: true,
         agent_task_id: &agent_task_id,
         session_id: &session_id,
@@ -459,7 +449,7 @@ async fn execute_delegate(
         "display.summary".to_string(),
         serde_json::json!(format!(
             "Delegated {} task {} via session {}",
-            operation.as_str(),
+            operation.as_ref(),
             metadata["agentTaskId"].as_str().unwrap_or_default(),
             metadata["sessionId"].as_str().unwrap_or_default()
         )),
@@ -468,11 +458,11 @@ async fn execute_delegate(
     Ok(ToolResult {
         title: format!(
             "{} Task {}",
-            title_case(operation.as_str()),
+            title_case(operation.as_ref()),
             metadata["agentTaskId"].as_str().unwrap_or_default()
         ),
         output: render_delegated_task_output(
-            operation.as_str(),
+            operation.as_ref(),
             metadata["agentTaskId"].as_str().unwrap_or_default(),
             metadata["sessionId"].as_str().unwrap_or_default(),
             &view.status,
