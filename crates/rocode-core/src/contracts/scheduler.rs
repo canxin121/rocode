@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 pub mod keys {
     pub const STAGE: &str = "scheduler_stage";
@@ -92,7 +92,9 @@ pub mod stage_names {
 /// Scheduler stage name.
 ///
 /// Wire format: kebab-case strings (e.g. `"execution-orchestration"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum SchedulerStageName {
@@ -114,35 +116,8 @@ pub enum SchedulerStageName {
     AutonomousRetry,
 }
 
-impl std::fmt::Display for SchedulerStageName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 impl SchedulerStageName {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RequestAnalysis => stage_names::REQUEST_ANALYSIS,
-            Self::Route => stage_names::ROUTE,
-            Self::Interview => stage_names::INTERVIEW,
-            Self::Plan => stage_names::PLAN,
-            Self::Delegation => stage_names::DELEGATION,
-            Self::Review => stage_names::REVIEW,
-            Self::ExecutionOrchestration => stage_names::EXECUTION_ORCHESTRATION,
-            Self::Synthesis => stage_names::SYNTHESIS,
-            Self::Handoff => stage_names::HANDOFF,
-            Self::SinglePassExecutor => stage_names::SINGLE_PASS_EXECUTOR,
-            Self::CoordinationVerification => stage_names::COORDINATION_VERIFICATION,
-            Self::CoordinationGate => stage_names::COORDINATION_GATE,
-            Self::CoordinationRetry => stage_names::COORDINATION_RETRY,
-            Self::AutonomousVerification => stage_names::AUTONOMOUS_VERIFICATION,
-            Self::AutonomousGate => stage_names::AUTONOMOUS_GATE,
-            Self::AutonomousRetry => stage_names::AUTONOMOUS_RETRY,
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
+    pub fn from_str_lossy(value: &str) -> Option<Self> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return None;
@@ -157,7 +132,9 @@ impl SchedulerStageName {
 /// Scheduler decision kind surfaced in message metadata.
 ///
 /// Wire format: lowercase strings (`"route"`, `"gate"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerDecisionKind {
@@ -165,29 +142,12 @@ pub enum SchedulerDecisionKind {
     Gate,
 }
 
-impl std::fmt::Display for SchedulerDecisionKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Route => "route",
-            Self::Gate => "gate",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler stage runtime status.
 ///
 /// Wire format: lowercase strings (e.g. `"running"`, `"waiting"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerStageStatus {
@@ -197,38 +157,16 @@ pub enum SchedulerStageStatus {
     Cancelled,
     Done,
     Blocked,
-    #[strum(serialize = "retry")]
+    #[strum(serialize = "retrying", serialize = "retry")]
     Retrying,
-}
-
-impl std::fmt::Display for SchedulerStageStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerStageStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Waiting => "waiting",
-            Self::Cancelling => "cancelling",
-            Self::Cancelled => "cancelled",
-            Self::Done => "done",
-            Self::Blocked => "blocked",
-            Self::Retrying => "retrying",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }
 
 /// What the scheduler stage is currently waiting on.
 ///
 /// Wire format: lowercase strings (`"user"`, `"tool"`, `"model"`, `"none"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerStageWaitingOn {
@@ -238,188 +176,55 @@ pub enum SchedulerStageWaitingOn {
     None,
 }
 
-impl std::fmt::Display for SchedulerStageWaitingOn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerStageWaitingOn {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Tool => "tool",
-            Self::Model => "model",
-            Self::None => "none",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec version identifiers.
 ///
 /// Wire format: opaque, stable strings (e.g. `"decision-card/v1"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum SchedulerDecisionRenderSpecVersion {
     #[strum(serialize = "decision-card/v1")]
     DecisionCardV1,
 }
 
-impl std::fmt::Display for SchedulerDecisionRenderSpecVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionRenderSpecVersion {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::DecisionCardV1 => "decision-card/v1",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec "field_order" values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum SchedulerDecisionFieldOrder {
     #[strum(serialize = "as-provided")]
     AsProvided,
 }
 
-impl std::fmt::Display for SchedulerDecisionFieldOrder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionFieldOrder {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AsProvided => "as-provided",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec "field_label_emphasis" values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerDecisionFieldLabelEmphasis {
     Bold,
     Normal,
 }
 
-impl std::fmt::Display for SchedulerDecisionFieldLabelEmphasis {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionFieldLabelEmphasis {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Bold => "bold",
-            Self::Normal => "normal",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec "status_palette" values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerDecisionStatusPalette {
     Semantic,
 }
 
-impl std::fmt::Display for SchedulerDecisionStatusPalette {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionStatusPalette {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Semantic => "semantic",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec "section_spacing" values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerDecisionSectionSpacing {
     Loose,
     Tight,
 }
 
-impl std::fmt::Display for SchedulerDecisionSectionSpacing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionSectionSpacing {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Loose => "loose",
-            Self::Tight => "tight",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Scheduler decision render spec "update_policy" values.
 ///
 /// These are intentionally verbose because they describe long-lived UI behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum SchedulerDecisionUpdatePolicy {
     #[strum(serialize = "stable-shell-live-runtime-append-decision")]
     StableShellLiveRuntimeAppendDecision,
-}
-
-impl std::fmt::Display for SchedulerDecisionUpdatePolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl SchedulerDecisionUpdatePolicy {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::StableShellLiveRuntimeAppendDecision => {
-                "stable-shell-live-runtime-append-decision"
-            }
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }
 
 #[cfg(test)]
@@ -475,13 +280,12 @@ mod tests {
         ];
 
         for (raw, parsed) in cases {
-            assert_eq!(SchedulerStageName::parse(raw), Some(*parsed));
-            assert_eq!(parsed.as_str(), *raw);
+            assert_eq!(raw.parse::<SchedulerStageName>().ok(), Some(*parsed));
             assert_eq!(parsed.to_string(), *raw);
         }
 
         assert_eq!(
-            SchedulerStageName::parse("execution_orchestration"),
+            SchedulerStageName::from_str_lossy("execution_orchestration"),
             Some(SchedulerStageName::ExecutionOrchestration)
         );
     }
@@ -499,14 +303,14 @@ mod tests {
     #[test]
     fn scheduler_decision_kind_parses_case_insensitively() {
         assert_eq!(
-            SchedulerDecisionKind::parse("route"),
+            "route".parse::<SchedulerDecisionKind>().ok(),
             Some(SchedulerDecisionKind::Route)
         );
         assert_eq!(
-            SchedulerDecisionKind::parse("GATE"),
+            "GATE".parse::<SchedulerDecisionKind>().ok(),
             Some(SchedulerDecisionKind::Gate)
         );
-        assert_eq!(SchedulerDecisionKind::Route.as_str(), "route");
-        assert_eq!(SchedulerDecisionKind::Gate.as_str(), "gate");
+        assert_eq!(SchedulerDecisionKind::Route.to_string(), "route");
+        assert_eq!(SchedulerDecisionKind::Gate.to_string(), "gate");
     }
 }

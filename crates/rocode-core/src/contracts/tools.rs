@@ -1,4 +1,4 @@
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Common argument keys used by built-in tool calls.
 pub mod arg_keys {
@@ -90,7 +90,7 @@ pub mod arg_keys {
 /// - UI presenters (cli/tui/web) for special-casing rich views
 ///
 /// Keep them stable — they are part of the wire contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum BuiltinToolName {
     #[strum(serialize = "question")]
@@ -276,54 +276,7 @@ pub enum BuiltinToolName {
     Invalid,
 }
 
-impl std::fmt::Display for BuiltinToolName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 impl BuiltinToolName {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Question => "question",
-            Self::TodoRead => "todoread",
-            Self::TodoWrite => "todowrite",
-            Self::Task => "task",
-            Self::TaskFlow => "task_flow",
-            Self::Edit => "edit",
-            Self::MultiEdit => "multiedit",
-            Self::Write => "write",
-            Self::Read => "read",
-            Self::Bash => "bash",
-            Self::Grep => "grep",
-            Self::Glob => "glob",
-            Self::ApplyPatch => "apply_patch",
-            Self::WebFetch => "webfetch",
-            Self::WebSearch => "websearch",
-            Self::CodeSearch => "codesearch",
-            Self::Lsp => "lsp",
-            Self::Skill => "skill",
-            Self::Ls => "ls",
-            Self::NotebookEdit => "notebook_edit",
-            Self::Batch => "batch",
-            Self::ContextDocs => "context_docs",
-            Self::GitHubResearch => "github_research",
-            Self::RepoHistory => "repo_history",
-            Self::MediaInspect => "media_inspect",
-            Self::BrowserSession => "browser_session",
-            Self::ShellSession => "shell_session",
-            Self::AstGrepSearch => "ast_grep_search",
-            Self::AstGrepReplace => "ast_grep_replace",
-            Self::PlanEnter => "plan_enter",
-            Self::PlanExit => "plan_exit",
-            Self::Invalid => "invalid",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Question => "Question",
@@ -365,7 +318,7 @@ impl BuiltinToolName {
 /// Tool call status labels used across session history and UI projections.
 ///
 /// Wire format: lowercase strings (`"pending"`, `"running"`, `"completed"`, `"error"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum ToolCallStatusWire {
     #[strum(serialize = "pending")]
@@ -388,31 +341,10 @@ pub enum ToolCallStatusWire {
     Error,
 }
 
-impl std::fmt::Display for ToolCallStatusWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl ToolCallStatusWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Error => "error",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// `interaction.status` values for the built-in `question` tool UI contract.
 ///
 /// Wire format: snake_case strings (`"pending"`, `"answered"`, ...).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum QuestionInteractionStatus {
     Pending,
@@ -420,26 +352,4 @@ pub enum QuestionInteractionStatus {
     Rejected,
     Cancelled,
     Error,
-}
-
-impl std::fmt::Display for QuestionInteractionStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl QuestionInteractionStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Answered => "answered",
-            Self::Rejected => "rejected",
-            Self::Cancelled => "cancelled",
-            Self::Error => "error",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }

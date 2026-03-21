@@ -1,4 +1,4 @@
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Shared attachment payload + metadata contracts.
 ///
@@ -38,26 +38,8 @@ pub mod keys {
 /// Canonical attachment type discriminator strings.
 ///
 /// Wire format: lowercase strings (`"file"`, ...).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum AttachmentTypeWire {
     File,
-}
-
-impl std::fmt::Display for AttachmentTypeWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl AttachmentTypeWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::File => "file",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }

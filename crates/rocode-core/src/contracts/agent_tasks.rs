@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
-use strum_macros::{EnumIter, EnumString};
+use strum_macros::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 
 /// Bus event payload keys for `agent_task.*` events.
 pub mod bus_keys {
@@ -17,7 +17,21 @@ pub mod bus_keys {
 /// - API/UI status strings for agent task registry projections
 ///
 /// Keep them stable — they are part of the cross-crate wire contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString, EnumIter)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    AsRefStr,
+    IntoStaticStr,
+    EnumString,
+    EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum AgentTaskStatusKind {
@@ -43,29 +57,9 @@ pub enum AgentTaskStatusKind {
     Failed,
 }
 
-impl std::fmt::Display for AgentTaskStatusKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 impl AgentTaskStatusKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Cancelled => "cancelled",
-            Self::Failed => "failed",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-
     pub fn allowed_values() -> Vec<&'static str> {
-        Self::iter().map(Self::as_str).collect()
+        Self::iter().map(|value| value.into()).collect()
     }
 }
 
@@ -76,19 +70,19 @@ mod tests {
     #[test]
     fn parses_aliases() {
         assert_eq!(
-            AgentTaskStatusKind::parse("in-progress"),
+            "in-progress".parse::<AgentTaskStatusKind>().ok(),
             Some(AgentTaskStatusKind::Running)
         );
         assert_eq!(
-            AgentTaskStatusKind::parse("done"),
+            "done".parse::<AgentTaskStatusKind>().ok(),
             Some(AgentTaskStatusKind::Completed)
         );
         assert_eq!(
-            AgentTaskStatusKind::parse("canceled"),
+            "canceled".parse::<AgentTaskStatusKind>().ok(),
             Some(AgentTaskStatusKind::Cancelled)
         );
         assert_eq!(
-            AgentTaskStatusKind::parse("error"),
+            "error".parse::<AgentTaskStatusKind>().ok(),
             Some(AgentTaskStatusKind::Failed)
         );
     }

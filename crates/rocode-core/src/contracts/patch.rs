@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Shared metadata keys produced by patch/edit/write-style tools.
 pub mod keys {
@@ -52,7 +52,9 @@ pub mod keys {
 /// File change type strings used in tool metadata payloads.
 ///
 /// Wire format: lowercase strings (`"add"`, `"update"`, `"delete"`, `"move"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum FileChangeType {
@@ -60,25 +62,4 @@ pub enum FileChangeType {
     Update,
     Delete,
     Move,
-}
-
-impl std::fmt::Display for FileChangeType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FileChangeType {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Add => "add",
-            Self::Update => "update",
-            Self::Delete => "delete",
-            Self::Move => "move",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }
