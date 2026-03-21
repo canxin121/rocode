@@ -1840,7 +1840,7 @@ impl SessionPrompt {
         mut filtered_messages: Vec<SessionMessage>,
         provider_type: ProviderType,
     ) -> anyhow::Result<Vec<rocode_provider::Message>> {
-        if rocode_plugin::should_trigger_script_hooks(HookEvent::ChatMessagesTransform, agent_name)
+        if rocode_plugin::should_trigger_agent_hooks(HookEvent::ChatMessagesTransform, agent_name)
             .await
         {
             let hook_messages = serde_json::Value::Array(
@@ -1945,7 +1945,7 @@ impl SessionPrompt {
         model_id: &str,
         has_tool_calls: bool,
     ) {
-        if !rocode_plugin::should_trigger_script_hooks(HookEvent::ChatMessage, agent_name).await {
+        if !rocode_plugin::should_trigger_agent_hooks(HookEvent::ChatMessage, agent_name).await {
             return;
         }
         let Some(assistant_msg) = session.messages.get(assistant_index).cloned() else {

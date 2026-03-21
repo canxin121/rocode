@@ -3825,6 +3825,8 @@ dependencies = [
  "rocode-core",
  "serde",
  "serde_json",
+ "strum 0.26.3",
+ "strum_macros",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

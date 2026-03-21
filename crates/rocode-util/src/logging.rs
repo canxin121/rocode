@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
+use strum_macros::{Display, EnumString};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "UPPERCASE", ascii_case_insensitive)]
 pub enum LogLevel {
     Debug,
     Info,
@@ -15,24 +17,7 @@ pub enum LogLevel {
 
 impl LogLevel {
     fn from_str(s: &str) -> Self {
-        match s.to_uppercase().as_str() {
-            "DEBUG" => LogLevel::Debug,
-            "INFO" => LogLevel::Info,
-            "WARN" => LogLevel::Warn,
-            "ERROR" => LogLevel::Error,
-            _ => LogLevel::Info,
-        }
-    }
-}
-
-impl std::fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LogLevel::Debug => write!(f, "DEBUG"),
-            LogLevel::Info => write!(f, "INFO"),
-            LogLevel::Warn => write!(f, "WARN"),
-            LogLevel::Error => write!(f, "ERROR"),
-        }
+        s.parse().unwrap_or(LogLevel::Info)
     }
 }
 
