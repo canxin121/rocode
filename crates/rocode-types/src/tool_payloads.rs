@@ -2,6 +2,57 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+macro_rules! impl_lossy_from_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<&Value> for $ty {
+                fn from(value: &Value) -> Self {
+                    serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
+                }
+            }
+
+            impl From<Value> for $ty {
+                fn from(value: Value) -> Self {
+                    serde_json::from_value::<Self>(value).unwrap_or_default()
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_lossy_from_map {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<&HashMap<String, Value>> for $ty {
+                fn from(metadata: &HashMap<String, Value>) -> Self {
+                    serde_json::to_value(metadata)
+                        .ok()
+                        .and_then(|value| serde_json::from_value::<Self>(value).ok())
+                        .unwrap_or_default()
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_lossy_from_json_str {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<&str> for $ty {
+                fn from(text: &str) -> Self {
+                    serde_json::from_str::<Self>(text).unwrap_or_default()
+                }
+            }
+
+            impl From<String> for $ty {
+                fn from(text: String) -> Self {
+                    serde_json::from_str::<Self>(&text).unwrap_or_default()
+                }
+            }
+        )+
+    };
+}
+
 /// Deserialize an optional string from a JSON value, accepting string/number/bool.
 ///
 /// - Trims whitespace for string values.
@@ -267,33 +318,10 @@ pub struct DisplayOverrideMetadata {
     pub fields: Vec<DisplayOverrideField>,
 }
 
-impl DisplayOverrideMetadata {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-
-    pub fn from_map(metadata: &HashMap<String, Value>) -> Self {
-        serde_json::to_value(metadata)
-            .ok()
-            .and_then(|value| serde_json::from_value::<Self>(value).ok())
-            .unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QuestionToolInput {
     #[serde(default, deserialize_with = "deserialize_questions_lossy")]
     pub questions: Vec<QuestionPrompt>,
-}
-
-impl QuestionToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-
-    pub fn from_json_str(text: &str) -> Self {
-        serde_json::from_str::<Self>(text).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -322,24 +350,12 @@ pub struct QuestionToolResult {
     pub answers: Vec<String>,
 }
 
-impl QuestionToolResult {
-    pub fn from_json_str(text: &str) -> Self {
-        serde_json::from_str::<Self>(text).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TodoWriteToolInput {
     #[serde(default)]
     pub todos: Vec<TodoWriteItem>,
-    #[serde(default, alias = "sessionId", alias = "session_id")]
+    #[serde(default)]
     pub session_id: Option<String>,
-}
-
-impl TodoWriteToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -362,19 +378,6 @@ pub struct TodoListMetadata {
     pub count: Option<u64>,
 }
 
-impl TodoListMetadata {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-
-    pub fn from_map(metadata: &HashMap<String, Value>) -> Self {
-        serde_json::to_value(metadata)
-            .ok()
-            .and_then(|value| serde_json::from_value::<Self>(value).ok())
-            .unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TodoListItem {
     #[serde(default)]
@@ -391,44 +394,21 @@ pub struct TaskToolInput {
     pub description: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub prompt: Option<String>,
-    #[serde(
-        default,
-        alias = "subagentType",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub subagent_type: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub category: Option<String>,
-    #[serde(
-        default,
-        alias = "taskId",
-        alias = "task_id",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub task_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub command: Option<String>,
-    #[serde(
-        default,
-        alias = "loadSkills",
-        alias = "load_skills",
-        deserialize_with = "deserialize_opt_vec_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_vec_string_lossy")]
     pub load_skills: Option<Vec<String>>,
-    #[serde(
-        default,
-        alias = "runInBackground",
-        alias = "run_in_background",
-        deserialize_with = "deserialize_opt_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub run_in_background: Option<bool>,
 }
 
 impl TaskToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-
     pub fn dispatch_label(&self) -> Option<&str> {
         self.subagent_type
             .as_deref()
@@ -442,12 +422,7 @@ impl TaskToolInput {
 pub struct TaskFlowToolInput {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub operation: Option<String>,
-    #[serde(
-        default,
-        alias = "taskId",
-        alias = "task_id",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub task_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub agent: Option<String>,
@@ -459,45 +434,18 @@ pub struct TaskFlowToolInput {
     pub prompt: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub command: Option<String>,
-    #[serde(
-        default,
-        alias = "loadSkills",
-        alias = "load_skills",
-        alias = "loadedSkills",
-        deserialize_with = "deserialize_opt_vec_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_vec_string_lossy")]
     pub load_skills: Option<Vec<String>>,
-    #[serde(
-        default,
-        alias = "runInBackground",
-        alias = "run_in_background",
-        deserialize_with = "deserialize_opt_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub run_in_background: Option<bool>,
-    #[serde(
-        default,
-        alias = "syncTodo",
-        alias = "sync_todo",
-        deserialize_with = "deserialize_opt_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub sync_todo: Option<bool>,
-    #[serde(default, alias = "todoItem", alias = "todo_item")]
+    #[serde(default)]
     pub todo_item: Option<TaskFlowTodoItemInput>,
-    #[serde(
-        default,
-        alias = "statusFilter",
-        alias = "status_filter",
-        deserialize_with = "deserialize_opt_vec_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_vec_string_lossy")]
     pub status_filter: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     pub limit: Option<u64>,
-}
-
-impl TaskFlowToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -512,64 +460,20 @@ pub struct TaskFlowTodoItemInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FilePathToolInput {
-    #[serde(
-        default,
-        alias = "filePath",
-        alias = "file_path",
-        alias = "path",
-        alias = "file",
-        alias = "filename",
-        alias = "filepath",
-        alias = "absolute_path",
-        alias = "absolutePath",
-        alias = "target",
-        alias = "destination",
-        alias = "to",
-        alias = "from",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub file_path: Option<String>,
-}
-
-impl FilePathToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PatternToolInput {
-    #[serde(
-        default,
-        alias = "query",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub pattern: Option<String>,
-}
-
-impl PatternToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CommandToolInput {
-    #[serde(
-        default,
-        alias = "cmd",
-        alias = "script",
-        alias = "input",
-        alias = "text",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub command: Option<String>,
-}
-
-impl CommandToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -578,22 +482,10 @@ pub struct UrlToolInput {
     pub url: Option<String>,
 }
 
-impl UrlToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryToolInput {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub query: Option<String>,
-}
-
-impl QueryToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -602,121 +494,47 @@ pub struct SkillToolInput {
     pub name: Option<String>,
 }
 
-impl SkillToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LspToolInput {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub operation: Option<String>,
-    #[serde(
-        default,
-        alias = "filePath",
-        alias = "file_path",
-        alias = "path",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub file_path: Option<String>,
-}
-
-impl LspToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NotebookEditToolInput {
-    #[serde(
-        default,
-        alias = "notebookPath",
-        alias = "path",
-        alias = "file_path",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub notebook_path: Option<String>,
-    #[serde(
-        default,
-        alias = "editMode",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub edit_mode: Option<String>,
-}
-
-impl NotebookEditToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobToolInput {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub pattern: Option<String>,
-    #[serde(
-        default,
-        alias = "path",
-        alias = "file_path",
-        alias = "filePath",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub path: Option<String>,
-}
-
-impl GlobToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GrepToolInput {
-    #[serde(
-        default,
-        alias = "query",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub pattern: Option<String>,
-    #[serde(
-        default,
-        alias = "path",
-        alias = "file_path",
-        alias = "filePath",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub glob: Option<String>,
-    #[serde(
-        default,
-        alias = "ignoreCase",
-        alias = "ignore_case",
-        deserialize_with = "deserialize_opt_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub ignore_case: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub hidden: Option<bool>,
 }
 
-impl GrepToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReadToolInput {
-    #[serde(
-        default,
-        alias = "filePath",
-        alias = "file_path",
-        alias = "filepath",
-        alias = "path",
-        deserialize_with = "deserialize_opt_string_preserve"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
     pub file_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     pub offset: Option<u64>,
@@ -724,71 +542,24 @@ pub struct ReadToolInput {
     pub limit: Option<u64>,
 }
 
-impl ReadToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WriteToolInput {
-    #[serde(
-        default,
-        alias = "filePath",
-        alias = "file_path",
-        alias = "filepath",
-        alias = "path",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub file_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
     pub content: Option<String>,
 }
 
-impl WriteToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EditToolInput {
-    #[serde(
-        default,
-        alias = "filePath",
-        alias = "file_path",
-        alias = "filepath",
-        alias = "path",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub file_path: Option<String>,
-    #[serde(
-        default,
-        alias = "oldString",
-        alias = "old_string",
-        deserialize_with = "deserialize_opt_string_preserve"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
     pub old_string: Option<String>,
-    #[serde(
-        default,
-        alias = "newString",
-        alias = "new_string",
-        deserialize_with = "deserialize_opt_string_preserve"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
     pub new_string: Option<String>,
-    #[serde(
-        default,
-        alias = "replaceAll",
-        alias = "replace_all",
-        deserialize_with = "deserialize_opt_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
     pub replace_all: Option<bool>,
-}
-
-impl EditToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -797,46 +568,50 @@ pub struct BashToolInput {
     pub command: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     pub timeout: Option<u64>,
-    #[serde(
-        default,
-        alias = "cwd",
-        alias = "dir",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub workdir: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_string_preserve")]
     pub description: Option<String>,
 }
 
-impl BashToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BatchToolInput {
-    #[serde(default, alias = "toolCalls", alias = "tool_calls")]
+    #[serde(default)]
     pub tool_calls: Vec<BatchToolCall>,
-}
-
-impl BatchToolInput {
-    pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value::<Self>(value.clone()).unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BatchToolCall {
-    #[serde(
-        default,
-        alias = "tool",
-        alias = "name",
-        alias = "tool_name",
-        alias = "toolName",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     pub tool_name: Option<String>,
-    #[serde(default, alias = "parameters", alias = "args", alias = "input")]
+    #[serde(default)]
     pub parameters: Option<Value>,
 }
+
+impl_lossy_from_value!(
+    DisplayOverrideMetadata,
+    QuestionToolInput,
+    TodoWriteToolInput,
+    TodoListMetadata,
+    TaskToolInput,
+    TaskFlowToolInput,
+    FilePathToolInput,
+    PatternToolInput,
+    CommandToolInput,
+    UrlToolInput,
+    QueryToolInput,
+    SkillToolInput,
+    LspToolInput,
+    NotebookEditToolInput,
+    GlobToolInput,
+    GrepToolInput,
+    ReadToolInput,
+    WriteToolInput,
+    EditToolInput,
+    BashToolInput,
+    BatchToolInput,
+);
+
+impl_lossy_from_map!(DisplayOverrideMetadata, TodoListMetadata,);
+
+impl_lossy_from_json_str!(QuestionToolInput, QuestionToolResult,);

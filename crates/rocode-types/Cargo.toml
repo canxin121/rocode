@@ -12,4 +12,6 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 rocode-permission = { path = "../rocode-permission" }
