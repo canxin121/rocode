@@ -273,7 +273,7 @@ mod tests {
                 seen_clone
                     .lock()
                     .expect("lock")
-                    .push(req.permission.as_str().to_string());
+                    .push(req.permission.to_string());
                 Ok(())
             }
         });
@@ -287,7 +287,7 @@ mod tests {
             .expect("ls should succeed");
 
         let permissions = seen.lock().expect("lock").clone();
-        assert!(permissions.contains(&PermissionKind::ExternalDirectory.as_str().to_string()));
-        assert!(permissions.contains(&PermissionKind::List.as_str().to_string()));
+        assert!(permissions.contains(&PermissionKind::ExternalDirectory.to_string()));
+        assert!(permissions.contains(&PermissionKind::List.to_string()));
     }
 }

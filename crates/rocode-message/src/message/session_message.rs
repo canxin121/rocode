@@ -256,19 +256,19 @@ impl SessionMessage {
 
     pub fn finish_reason(&self) -> Option<FinishReason> {
         if let Some(reason) = self.finish.as_deref() {
-            return Some(FinishReason::parse(reason));
+            return Some(FinishReason::from(reason));
         }
         self.metadata
             .get(keys::FINISH_REASON)
             .and_then(serde_json::Value::as_str)
-            .map(FinishReason::parse)
+            .map(FinishReason::from)
     }
 
     pub fn set_finish_reason(&mut self, reason: FinishReason) {
-        self.finish = Some(reason.as_str().to_string());
+        self.finish = Some(reason.to_string());
         self.metadata.insert(
             keys::FINISH_REASON.to_string(),
-            serde_json::Value::String(reason.as_str().to_string()),
+            serde_json::Value::String(reason.to_string()),
         );
     }
 

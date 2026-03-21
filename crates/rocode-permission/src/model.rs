@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use strum_macros::Display;
 
 use rocode_core::contracts::tools::BuiltinToolName;
 
@@ -24,8 +25,9 @@ where
 // ============================================================================
 
 /// Result of a permission prompt reply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum PermissionReply {
     #[serde(alias = "approve", alias = "allow")]
     Once,
@@ -33,26 +35,22 @@ pub enum PermissionReply {
     Reject,
 }
 
-impl std::fmt::Display for PermissionReply {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Once => "once",
-            Self::Always => "always",
-            Self::Reject => "reject",
-        })
-    }
-}
-
 /// Canonical permission kind.
 ///
 /// This wraps both stable built-in tool permissions and a few synthetic
 /// permission channels (e.g. `external_directory`, `doom_loop`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum PermissionKind {
+    #[strum(serialize = "external_directory")]
     ExternalDirectory,
+    #[strum(serialize = "list")]
     List,
+    #[strum(serialize = "doom_loop")]
     DoomLoop,
+    #[strum(to_string = "{0}")]
     Tool(BuiltinToolName),
+    #[strum(to_string = "{0}")]
     Custom(String),
 }
 
@@ -72,21 +70,11 @@ impl PermissionKind {
             _ => {}
         }
 
-        if let Some(tool) = BuiltinToolName::parse(raw) {
+        if let Ok(tool) = raw.trim().parse::<BuiltinToolName>() {
             return Self::Tool(tool);
         }
 
         Self::Custom(raw.to_string())
-    }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::ExternalDirectory => "external_directory",
-            Self::List => "list",
-            Self::DoomLoop => "doom_loop",
-            Self::Tool(tool) => tool.as_str(),
-            Self::Custom(raw) => raw.as_str(),
-        }
     }
 
     /// Canonical permission kind for a tool invocation name.
@@ -96,7 +84,7 @@ impl PermissionKind {
     /// - all other built-ins map to their canonical built-in id
     /// - unknown names fall back to `from_name`
     pub fn from_tool_name(value: impl AsRef<str>) -> Self {
-        match BuiltinToolName::parse(value.as_ref()) {
+        match value.as_ref().trim().parse::<BuiltinToolName>().ok() {
             Some(
                 BuiltinToolName::Write
                 | BuiltinToolName::Edit
@@ -110,7 +98,7 @@ impl PermissionKind {
     }
 
     pub fn from_tool(tool: BuiltinToolName) -> Self {
-        Self::from_tool_name(tool.as_str())
+        Self::from_tool_name(tool.to_string())
     }
 
     pub fn label(&self) -> Cow<'static, str> {
@@ -190,28 +178,9 @@ impl PermissionKind {
     }
 }
 
-impl std::fmt::Display for PermissionKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for PermissionKind {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for PermissionKind {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        Ok(Self::from_name(raw))
+impl From<PermissionKind> for String {
+    fn from(value: PermissionKind) -> Self {
+        value.to_string()
     }
 }
 
@@ -235,13 +204,13 @@ impl From<BuiltinToolName> for PermissionKind {
 
 impl PartialEq<&str> for PermissionKind {
     fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
+        self.to_string() == *other
     }
 }
 
 impl PartialEq<PermissionKind> for &str {
     fn eq(&self, other: &PermissionKind) -> bool {
-        *self == other.as_str()
+        *self == other.to_string()
     }
 }
 
@@ -263,12 +232,14 @@ impl PermissionMatcher {
         Self(kind.into().to_string())
     }
 
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-
     pub fn matches_name(&self, permission_name: &str) -> bool {
-        wildcard_match(permission_name, self.as_str())
+        wildcard_match(permission_name, self.as_ref())
+    }
+}
+
+impl AsRef<str> for PermissionMatcher {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -278,8 +249,8 @@ pub fn canonicalize_tool_name(value: impl AsRef<str>) -> String {
     if raw.is_empty() {
         return String::new();
     }
-    if let Some(tool) = BuiltinToolName::parse(raw) {
-        return tool.as_str().to_string();
+    if let Ok(tool) = raw.parse::<BuiltinToolName>() {
+        return tool.to_string();
     }
     raw.to_ascii_lowercase().replace('-', "_")
 }
@@ -300,7 +271,7 @@ pub fn allowlist_allows_tool(tool_name: &str, allowlist: &[String]) -> bool {
 
 impl std::fmt::Display for PermissionMatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.as_ref())
     }
 }
 
@@ -332,16 +303,21 @@ impl From<BuiltinToolName> for PermissionMatcher {
 // Session-level permission memory (allow/deny/mode)
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum SessionPermissionMode {
+    #[strum(serialize = "ask")]
     Ask,
+    #[strum(serialize = "allow")]
     Allow,
+    #[strum(serialize = "deny")]
     Deny,
+    #[strum(to_string = "{0}")]
     Custom(String),
 }
 
-impl SessionPermissionMode {
-    pub fn parse(value: &str) -> Self {
+impl From<String> for SessionPermissionMode {
+    fn from(value: String) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
             "ask" => Self::Ask,
             "allow" => Self::Allow,
@@ -349,39 +325,11 @@ impl SessionPermissionMode {
             other => Self::Custom(other.to_string()),
         }
     }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Ask => "ask",
-            Self::Allow => "allow",
-            Self::Deny => "deny",
-            Self::Custom(raw) => raw.as_str(),
-        }
-    }
 }
 
-impl std::fmt::Display for SessionPermissionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for SessionPermissionMode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for SessionPermissionMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        Ok(Self::parse(&raw))
+impl From<SessionPermissionMode> for String {
+    fn from(value: SessionPermissionMode) -> Self {
+        value.to_string()
     }
 }
 
@@ -413,7 +361,8 @@ impl PermissionMemoryEntry {
     }
 
     fn matches(&self, permission: &PermissionKind, pattern: &str) -> bool {
-        self.permission.matches_name(permission.as_str()) && wildcard_match(pattern, &self.pattern)
+        self.permission.matches_name(&permission.to_string())
+            && wildcard_match(pattern, &self.pattern)
     }
 }
 

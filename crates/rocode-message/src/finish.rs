@@ -1,15 +1,24 @@
 use serde::{Deserialize, Serialize};
+use strum_macros::Display;
 
 /// Normalized finish reason for assistant messages.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum FinishReason {
+    #[strum(serialize = "stop")]
     Stop,
+    #[strum(serialize = "tool-calls")]
     ToolCalls,
+    #[strum(serialize = "length")]
     Length,
+    #[strum(serialize = "content_filter")]
     ContentFilter,
+    #[strum(serialize = "error")]
     Error,
+    #[strum(serialize = "unknown")]
     Unknown,
     /// Non-standard provider reason.
+    #[strum(to_string = "{0}")]
     Custom(String),
 }
 
@@ -30,9 +39,14 @@ impl FinishReason {
         out
     }
 
-    /// Parse and normalize known aliases.
-    pub fn parse(value: impl AsRef<str>) -> Self {
-        let raw = value.as_ref().trim();
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Self::Custom(_))
+    }
+}
+
+impl From<&str> for FinishReason {
+    fn from(value: &str) -> Self {
+        let raw = value.trim();
         if raw.is_empty() {
             return Self::Unknown;
         }
@@ -52,53 +66,31 @@ impl FinishReason {
             _ => Self::Custom(raw.to_string()),
         }
     }
+}
 
-    /// Canonical string representation.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Stop => "stop",
-            Self::ToolCalls => "tool-calls",
-            Self::Length => "length",
-            Self::ContentFilter => "content_filter",
-            Self::Error => "error",
-            Self::Unknown => "unknown",
-            Self::Custom(value) => value.as_str(),
-        }
-    }
-
-    pub fn is_known(&self) -> bool {
-        !matches!(self, Self::Custom(_))
+impl From<String> for FinishReason {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
     }
 }
 
-impl std::fmt::Display for FinishReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+impl From<FinishReason> for String {
+    fn from(value: FinishReason) -> Self {
+        value.to_string()
     }
 }
 
-impl Serialize for FinishReason {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
+impl std::str::FromStr for FinishReason {
+    type Err = std::convert::Infallible;
 
-impl<'de> Deserialize<'de> for FinishReason {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        Ok(Self::parse(raw))
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::from(s))
     }
 }
 
 /// Normalize a free-form finish reason into canonical wire text.
 pub fn normalize_finish_reason(value: impl AsRef<str>) -> String {
-    FinishReason::parse(value).as_str().to_string()
+    FinishReason::from(value.as_ref()).to_string()
 }
 
 #[cfg(test)]
@@ -107,10 +99,10 @@ mod tests {
 
     #[test]
     fn normalizes_style_variants() {
-        assert_eq!(FinishReason::parse("tool-calls"), FinishReason::ToolCalls);
-        assert_eq!(FinishReason::parse("toolCalls"), FinishReason::ToolCalls);
+        assert_eq!(FinishReason::from("tool-calls"), FinishReason::ToolCalls);
+        assert_eq!(FinishReason::from("toolCalls"), FinishReason::ToolCalls);
         assert_eq!(
-            FinishReason::parse("contentFilter"),
+            FinishReason::from("contentFilter"),
             FinishReason::ContentFilter
         );
         assert_eq!(normalize_finish_reason("toolCalls"), "tool-calls");
@@ -119,9 +111,9 @@ mod tests {
     #[test]
     fn keeps_custom_reason() {
         assert_eq!(
-            FinishReason::parse("provider_specific").as_str(),
+            FinishReason::from("provider_specific").to_string(),
             "provider_specific"
         );
-        assert_eq!(FinishReason::parse("end_turn").as_str(), "end_turn");
+        assert_eq!(FinishReason::from("end_turn").to_string(), "end_turn");
     }
 }

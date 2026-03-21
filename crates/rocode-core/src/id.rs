@@ -1,35 +1,29 @@
 use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use strum_macros::{AsRefStr, Display};
 
 const BASE62_CHARS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const LENGTH: usize = 26;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, AsRefStr)]
 pub enum Prefix {
+    #[strum(serialize = "ses")]
     Session,
+    #[strum(serialize = "msg")]
     Message,
+    #[strum(serialize = "per")]
     Permission,
+    #[strum(serialize = "que")]
     Question,
+    #[strum(serialize = "usr")]
     User,
+    #[strum(serialize = "prt")]
     Part,
+    #[strum(serialize = "pty")]
     Pty,
+    #[strum(serialize = "tool")]
     Tool,
-}
-
-impl Prefix {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Prefix::Session => "ses",
-            Prefix::Message => "msg",
-            Prefix::Permission => "per",
-            Prefix::Question => "que",
-            Prefix::User => "usr",
-            Prefix::Part => "prt",
-            Prefix::Pty => "pty",
-            Prefix::Tool => "tool",
-        }
-    }
 }
 
 static LAST_TIMESTAMP: AtomicU64 = AtomicU64::new(0);
@@ -81,7 +75,7 @@ pub fn create(prefix: Prefix, descending: bool, timestamp: Option<u64>) -> Strin
     let hex_time = hex::encode(time_bytes);
     let random_part = random_base62(LENGTH - 12);
 
-    format!("{}_{}{}", prefix.as_str(), hex_time, random_part)
+    format!("{}_{}{}", prefix.as_ref(), hex_time, random_part)
 }
 
 pub fn timestamp(id: &str) -> Option<u64> {
@@ -96,7 +90,7 @@ pub fn timestamp(id: &str) -> Option<u64> {
 }
 
 pub fn validate_prefix(id: &str, expected: Prefix) -> bool {
-    id.starts_with(expected.as_str())
+    id.starts_with(expected.as_ref())
 }
 
 #[cfg(test)]
