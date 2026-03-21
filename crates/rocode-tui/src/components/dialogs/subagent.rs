@@ -97,7 +97,7 @@ impl SubagentDialog {
                 Role::System => Style::default().fg(theme.text_muted),
             };
             lines.push(Line::from(vec![
-                Span::styled(msg.role.as_str(), role_style.bold()),
+                Span::styled(msg.role.as_ref(), role_style.bold()),
                 Span::raw(":"),
             ]));
             lines.push(Line::from(Span::styled(

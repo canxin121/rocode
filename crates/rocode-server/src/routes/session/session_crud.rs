@@ -415,7 +415,7 @@ pub(crate) async fn set_session_run_status(
         SessionRunStatus::Pending { reason, .. } => {
             state
                 .runtime_state
-                .mark_pending(session_id, reason.as_str().to_string())
+                .mark_pending(session_id, reason.as_ref().to_string())
                 .await;
         }
         SessionRunStatus::Idle => {
@@ -443,7 +443,7 @@ pub(crate) async fn set_session_run_status(
                 SessionRunStatus::Busy => rocode_types::SessionRunStatus::Busy,
                 SessionRunStatus::Pending { reason, message } => {
                     rocode_types::SessionRunStatus::Pending {
-                        reason: reason.as_str().to_string(),
+                        reason: reason.as_ref().to_string(),
                         message,
                     }
                 }

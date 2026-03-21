@@ -81,7 +81,7 @@ struct RetryMetadata {
 #[derive(Debug, Serialize)]
 struct PendingMetadata {
     status_kind: &'static str,
-    pending_reason: &'static str,
+    pending_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
@@ -288,17 +288,17 @@ impl RuntimeControlRegistry {
                     label: Some("Prompt run".to_string()),
                     parent_id: None,
                     stage_id: None,
-                    waiting_on: Some(reason.as_str().to_string()),
+                    waiting_on: Some(reason.as_ref().to_string()),
                     recent_event: Some(
                         message
                             .clone()
-                            .unwrap_or_else(|| format!("Waiting for {}", reason.as_str())),
+                            .unwrap_or_else(|| format!("Waiting for {}", reason.as_ref())),
                     ),
                     started_at: now_millis(),
                     updated_at: now_millis(),
                     metadata: Some(value_or_null(PendingMetadata {
                         status_kind: "pending",
-                        pending_reason: reason.as_str(),
+                        pending_reason: reason.as_ref().to_string(),
                         message,
                     })),
                 })
@@ -369,7 +369,7 @@ impl RuntimeControlRegistry {
                             let reason = metadata
                                 .pending_reason
                                 .as_deref()
-                                .and_then(PendingStatusReason::from_str)
+                                .and_then(|value| value.parse::<PendingStatusReason>().ok())
                                 .unwrap_or(PendingStatusReason::Question);
                             SessionRunStatus::Pending {
                                 reason,

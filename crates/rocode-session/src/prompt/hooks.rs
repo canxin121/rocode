@@ -13,7 +13,7 @@ struct HookMessageInfo {
     id: String,
     #[serde(rename = "sessionID")]
     session_id: String,
-    role: &'static str,
+    role: String,
     time: HookMessageInfoTime,
 }
 
@@ -57,8 +57,8 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
     payload
 }
 
-pub(crate) fn hook_message_role(role: &Role) -> &'static str {
-    role.as_str()
+pub(crate) fn hook_message_role(role: &Role) -> String {
+    role.to_string()
 }
 
 pub(crate) fn apply_chat_messages_hook_outputs(
