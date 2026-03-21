@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Canonical MCP server connection status strings (wire format).
 ///
 /// These values are produced by the server and consumed by CLI/TUI/Web.
 /// Keep them stable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, AsRefStr, EnumString,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum McpConnectionStatusWire {
@@ -18,25 +20,8 @@ pub enum McpConnectionStatusWire {
     Disconnected,
 }
 
-impl std::fmt::Display for McpConnectionStatusWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 impl McpConnectionStatusWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Connected => "connected",
-            Self::Failed => "failed",
-            Self::NeedsAuth => "needs_auth",
-            Self::NeedsClientRegistration => "needs_client_registration",
-            Self::Disabled => "disabled",
-            Self::Disconnected => "disconnected",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
+    pub fn from_str_lossy(value: &str) -> Option<Self> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return None;
@@ -72,15 +57,18 @@ mod tests {
             McpConnectionStatusWire::Disconnected,
         ];
         for value in values {
-            assert_eq!(McpConnectionStatusWire::parse(value.as_str()), Some(*value));
-            assert_eq!(value.to_string(), value.as_str());
+            assert_eq!(
+                value.to_string().parse::<McpConnectionStatusWire>().ok(),
+                Some(*value)
+            );
+            assert_eq!(value.to_string(), value.as_ref());
         }
     }
 
     #[test]
     fn mcp_connection_status_parses_prefix_error() {
         assert_eq!(
-            McpConnectionStatusWire::parse("needs_client_registration: boom"),
+            McpConnectionStatusWire::from_str_lossy("needs_client_registration: boom"),
             Some(McpConnectionStatusWire::NeedsClientRegistration)
         );
     }

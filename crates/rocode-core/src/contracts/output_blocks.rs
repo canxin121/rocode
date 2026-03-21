@@ -1,4 +1,4 @@
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Shared metadata keys used for structured output blocks and UI rendering.
 pub mod keys {
@@ -123,28 +123,10 @@ pub mod scheduler_decision_spec_keys {
 /// Canonical display mode override values used in `display.mode`.
 ///
 /// Wire format: lowercase strings (`"block"`, ...).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum DisplayModeWire {
     Block,
-}
-
-impl std::fmt::Display for DisplayModeWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl DisplayModeWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Block => "block",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }
 
 /// Canonical output block "kind" strings for the web/streaming contract.
@@ -153,7 +135,7 @@ impl DisplayModeWire {
 /// consumed by:
 /// - `rocode-server` (producer)
 /// - `rocode-cli` / `rocode-tui` (consumers)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum OutputBlockKind {
     Status,
@@ -166,35 +148,10 @@ pub enum OutputBlockKind {
     Inspect,
 }
 
-impl std::fmt::Display for OutputBlockKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl OutputBlockKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Message => "message",
-            Self::Reasoning => "reasoning",
-            Self::Tool => "tool",
-            Self::SessionEvent => "session_event",
-            Self::QueueItem => "queue_item",
-            Self::SchedulerStage => "scheduler_stage",
-            Self::Inspect => "inspect",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical tone strings for status/message/field styling.
 ///
 /// Wire format: lowercase strings (`"normal"`, `"warning"`, `"error"`, ...).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum BlockToneWire {
     Title,
@@ -207,35 +164,10 @@ pub enum BlockToneWire {
     Status,
 }
 
-impl std::fmt::Display for BlockToneWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl BlockToneWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Title => "title",
-            Self::Normal => "normal",
-            Self::Muted => "muted",
-            Self::Success => "success",
-            Self::Warning => "warning",
-            Self::Error => "error",
-            Self::Info => "info",
-            Self::Status => "status",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical phase strings for streaming message/reasoning blocks.
 ///
 /// Wire format: lowercase strings (`"start"`, `"delta"`, `"end"`, `"full"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum MessagePhaseWire {
     Start,
@@ -244,31 +176,10 @@ pub enum MessagePhaseWire {
     Full,
 }
 
-impl std::fmt::Display for MessagePhaseWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl MessagePhaseWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Start => "start",
-            Self::Delta => "delta",
-            Self::End => "end",
-            Self::Full => "full",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical phase strings for tool blocks.
 ///
 /// Wire format: lowercase strings (`"start"`, `"running"`, `"done"`, `"error"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(ascii_case_insensitive)]
 pub enum ToolPhaseWire {
     #[strum(serialize = "start")]
@@ -281,31 +192,10 @@ pub enum ToolPhaseWire {
     Error,
 }
 
-impl std::fmt::Display for ToolPhaseWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl ToolPhaseWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Start => "start",
-            Self::Running => "running",
-            Self::Done => "done",
-            Self::Error => "error",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical structured detail "type" strings for tool blocks.
 ///
 /// Wire format: snake_case strings (e.g. `"file_edit"`, `"bash_exec"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum ToolStructuredDetailTypeWire {
     FileEdit,
@@ -316,56 +206,13 @@ pub enum ToolStructuredDetailTypeWire {
     Generic,
 }
 
-impl std::fmt::Display for ToolStructuredDetailTypeWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl ToolStructuredDetailTypeWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FileEdit => "file_edit",
-            Self::FileWrite => "file_write",
-            Self::FileRead => "file_read",
-            Self::BashExec => "bash_exec",
-            Self::Search => "search",
-            Self::Generic => "generic",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical preview kind strings surfaced in `display.preview.kind`.
 ///
 /// Wire format: lowercase strings (`"diff"`, `"code"`, `"text"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum DisplayPreviewKindWire {
     Diff,
     Code,
     Text,
-}
-
-impl std::fmt::Display for DisplayPreviewKindWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl DisplayPreviewKindWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Diff => "diff",
-            Self::Code => "code",
-            Self::Text => "text",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }

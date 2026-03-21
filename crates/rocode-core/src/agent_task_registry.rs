@@ -55,7 +55,7 @@ impl AgentTaskStatus {
     }
 
     pub fn label(&self) -> &'static str {
-        self.kind().as_str()
+        self.kind().into()
     }
 }
 

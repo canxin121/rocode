@@ -9,7 +9,7 @@
 //! | Raw SSE            | [`StageEvent`]    | Real-time event stream & history replay|
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString, IntoStaticStr};
+use strum_macros::{AsRefStr, Display, EnumString};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSummary {
@@ -46,7 +46,7 @@ pub struct StageSummary {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, AsRefStr, EnumString,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
@@ -63,16 +63,9 @@ pub enum StageStatus {
 }
 
 impl StageStatus {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-
     pub fn from_str_lossy(s: Option<&str>) -> Self {
-        s.and_then(Self::parse).unwrap_or(Self::Running)
+        s.and_then(|value| value.trim().parse().ok())
+            .unwrap_or(Self::Running)
     }
 }
 

@@ -1,4 +1,4 @@
-use strum_macros::EnumString;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Shared file-system / file-watcher wire contracts.
 ///
@@ -19,32 +19,12 @@ pub mod keys {
 /// File watcher event kinds surfaced in `file_watcher.updated` bus events.
 ///
 /// Wire format: lowercase strings (`"add"`, `"change"`, `"unlink"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum FileWatcherEventKind {
     Add,
     Change,
     Unlink,
-}
-
-impl std::fmt::Display for FileWatcherEventKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FileWatcherEventKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Add => "add",
-            Self::Change => "change",
-            Self::Unlink => "unlink",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
 }
 
 #[cfg(test)]
@@ -59,8 +39,11 @@ mod tests {
             FileWatcherEventKind::Unlink,
         ];
         for value in values {
-            assert_eq!(FileWatcherEventKind::parse(value.as_str()), Some(*value));
-            assert_eq!(value.to_string(), value.as_str());
+            assert_eq!(
+                value.to_string().parse::<FileWatcherEventKind>().ok(),
+                Some(*value)
+            );
+            assert_eq!(value.to_string(), value.as_ref());
         }
     }
 }
