@@ -4,7 +4,7 @@ use super::*;
 fn merges_nested_structs_without_losing_existing_fields() {
     let mut base = Config {
         keybinds: Some(KeybindsConfig {
-            submit: Some("enter".to_string()),
+            input_submit: Some("enter".to_string()),
             ..Default::default()
         }),
         ..Default::default()
@@ -12,7 +12,7 @@ fn merges_nested_structs_without_losing_existing_fields() {
 
     let overlay = Config {
         keybinds: Some(KeybindsConfig {
-            interrupt: Some("esc".to_string()),
+            session_interrupt: Some("esc".to_string()),
             ..Default::default()
         }),
         ..Default::default()
@@ -21,8 +21,8 @@ fn merges_nested_structs_without_losing_existing_fields() {
     base.merge(overlay);
 
     let merged = base.keybinds.unwrap();
-    assert_eq!(merged.submit, Some("enter".to_string()));
-    assert_eq!(merged.interrupt, Some("esc".to_string()));
+    assert_eq!(merged.input_submit, Some("enter".to_string()));
+    assert_eq!(merged.session_interrupt, Some("esc".to_string()));
 }
 
 #[test]
