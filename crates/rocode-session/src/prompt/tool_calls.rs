@@ -310,7 +310,7 @@ impl SessionPrompt {
         let mut normalized_files = Vec::new();
 
         for value in raw_attachments.unwrap_or_default() {
-            let Ok(value) = serde_json::from_value::<AttachmentWire>(value) else {
+            let Ok(value) = AttachmentWire::deserialize(value) else {
                 continue;
             };
 
@@ -459,8 +459,7 @@ impl SessionPrompt {
                 content: Option<String>,
             }
 
-            let args =
-                serde_json::from_value::<WriteArgumentsWire>(input.clone()).unwrap_or_default();
+            let args = WriteArgumentsWire::deserialize(input.clone()).unwrap_or_default();
             let file_path = args
                 .file_path
                 .as_deref()

@@ -45,10 +45,7 @@ pub fn structured_output_system_prompt() -> String {
 pub fn extract_structured_output(parts: &[crate::MessagePart]) -> Option<serde_json::Value> {
     for part in parts {
         let PartType::ToolCall {
-            name,
-            input,
-            state,
-            ..
+            name, input, state, ..
         } = &part.part_type
         else {
             continue;
@@ -140,10 +137,10 @@ pub fn was_plan_agent(messages: &[SessionMessage]) -> bool {
     }
 
     fn agent_metadata_wire(metadata: &HashMap<String, serde_json::Value>) -> AgentMetadataWire {
-        let Ok(value) = serde_json::to_value(metadata) else {
-            return AgentMetadataWire::default();
-        };
-        serde_json::from_value::<AgentMetadataWire>(value).unwrap_or_default()
+        AgentMetadataWire::deserialize(serde_json::Value::Object(
+            metadata.clone().into_iter().collect(),
+        ))
+        .unwrap_or_default()
     }
 
     messages

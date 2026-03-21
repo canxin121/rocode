@@ -21,11 +21,11 @@ pub use prompt::*;
 pub use question::*;
 pub use retry::*;
 pub use revert::*;
-pub use rocode_message::message::{
-    normalize_finish_reason, CompletedTime, ErrorTime, FilePart, FinishReason, MessageError,
-    Role, RunningTime, ToolState,
-};
 pub use rocode_message::message::session_message::{Message, SessionMessage};
+pub use rocode_message::message::{
+    normalize_finish_reason, CompletedTime, ErrorTime, FilePart, FinishReason, MessageError, Role,
+    RunningTime, ToolState,
+};
 pub use rocode_message::part::{MessagePart, PartKind, PartType};
 pub use rocode_message::status::ToolCallStatus;
 pub use rocode_message::usage::MessageUsage;

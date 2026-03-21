@@ -305,10 +305,10 @@ impl SessionPrompt {
             loaded_instruction_files: Vec<String>,
         }
 
-        let Ok(value) = serde_json::to_value(&msg.metadata) else {
-            return HashSet::new();
-        };
-        let wire = serde_json::from_value::<LoadedInstructionPathsWire>(value).unwrap_or_default();
+        let wire = LoadedInstructionPathsWire::deserialize(serde_json::Value::Object(
+            msg.metadata.clone().into_iter().collect(),
+        ))
+        .unwrap_or_default();
         wire.loaded_instruction_files.into_iter().collect()
     }
 

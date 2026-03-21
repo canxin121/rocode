@@ -10,12 +10,10 @@ use tokio_util::sync::CancellationToken;
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
-use crate::message_model::{
-    session_message_to_unified_message, Part as ModelPart,
-};
-use crate::{FilePart, Role, Session, SessionMessage};
+use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
 #[cfg(test)]
 use crate::PartType;
+use crate::{FilePart, Role, Session, SessionMessage};
 
 use super::subtask::SubtaskExecutor;
 use super::{
@@ -66,7 +64,7 @@ where
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    Ok(serde_json::from_value::<Vec<McpToolWire>>(value).unwrap_or_default())
+    Ok(Vec::<McpToolWire>::deserialize(value).unwrap_or_default())
 }
 
 fn deserialize_subsessions_lossy<'de, D>(
@@ -79,7 +77,7 @@ where
     let Some(value) = value else {
         return Ok(HashMap::new());
     };
-    Ok(serde_json::from_value::<HashMap<String, PersistedSubsession>>(value).unwrap_or_default())
+    Ok(HashMap::<String, PersistedSubsession>::deserialize(value).unwrap_or_default())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -93,10 +91,10 @@ struct ToolExecutionSessionMetadataWire {
 fn tool_execution_session_metadata_wire(
     metadata: &HashMap<String, serde_json::Value>,
 ) -> ToolExecutionSessionMetadataWire {
-    let Ok(value) = serde_json::to_value(metadata) else {
-        return ToolExecutionSessionMetadataWire::default();
-    };
-    serde_json::from_value::<ToolExecutionSessionMetadataWire>(value).unwrap_or_default()
+    ToolExecutionSessionMetadataWire::deserialize(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -152,7 +150,11 @@ impl SessionPrompt {
             .messages
             .iter()
             .skip(last_assistant_index + 1)
-            .flat_map(|message| session_message_to_unified_message(message).parts.into_iter())
+            .flat_map(|message| {
+                session_message_to_unified_message(message)
+                    .parts
+                    .into_iter()
+            })
             .filter_map(|part| {
                 let ModelPart::Tool(tool) = part else {
                     return None;
@@ -169,27 +171,27 @@ impl SessionPrompt {
         let assistant_message = &session.messages[last_assistant_index];
         let tool_calls: Vec<(String, String, serde_json::Value)> =
             session_message_to_unified_message(assistant_message)
-            .parts
-            .into_iter()
-            .filter_map(|part| {
-                let ModelPart::Tool(tool) = part else {
-                    return None;
-                };
-                if resolved_call_ids.contains(&tool.call_id) || tool.tool.trim().is_empty() {
-                    return None;
-                }
+                .parts
+                .into_iter()
+                .filter_map(|part| {
+                    let ModelPart::Tool(tool) = part else {
+                        return None;
+                    };
+                    if resolved_call_ids.contains(&tool.call_id) || tool.tool.trim().is_empty() {
+                        return None;
+                    }
 
-                let (input, raw, status) = Self::state_projection(&tool.state);
+                    let (input, raw, status) = Self::state_projection(&tool.state);
 
-                Self::tool_call_input_for_execution(
-                    &status,
-                    &input,
-                    raw.as_deref(),
-                    Some(&tool.state),
-                )
-                .map(|args| (tool.call_id, tool.tool, args))
-            })
-            .collect();
+                    Self::tool_call_input_for_execution(
+                        &status,
+                        &input,
+                        raw.as_deref(),
+                        Some(&tool.state),
+                    )
+                    .map(|args| (tool.call_id, tool.tool, args))
+                })
+                .collect();
 
         if tool_calls.is_empty() {
             return Ok(0);
