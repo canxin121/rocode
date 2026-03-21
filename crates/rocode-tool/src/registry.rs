@@ -468,7 +468,7 @@ impl ToolRegistry {
             tool = %tool_id,
             "[plugin-seq] tool.execute.before"
         );
-        if rocode_plugin::should_trigger_script_hooks(
+        if rocode_plugin::should_trigger_agent_hooks(
             HookEvent::ToolExecuteBefore,
             Some(ctx.agent.as_str()),
         )
@@ -522,7 +522,7 @@ impl ToolRegistry {
             tool = %tool_id,
             "[plugin-seq] tool.execute.after"
         );
-        if rocode_plugin::should_trigger_script_hooks(
+        if rocode_plugin::should_trigger_agent_hooks(
             HookEvent::ToolExecuteAfter,
             Some(ctx.agent.as_str()),
         )

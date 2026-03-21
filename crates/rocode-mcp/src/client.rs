@@ -830,14 +830,6 @@ impl McpClientRegistry {
         }
     }
 
-    /// Backwards-compatible alias for `add_stdio`.
-    pub async fn add_client(
-        &self,
-        config: McpServerConfig,
-    ) -> Result<Arc<McpClient>, McpClientError> {
-        self.add_stdio(config).await
-    }
-
     pub async fn get(&self, name: &str) -> Option<Arc<McpClient>> {
         self.clients.read().await.get(name).cloned()
     }

@@ -1,15 +1,28 @@
 pub mod json {
     use rocode_core::contracts::patch::keys as patch_keys;
     use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+    use serde::Serialize;
+
+    fn parse_json_object(input: &str) -> Option<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(input)
+            .ok()
+            .filter(serde_json::Value::is_object)
+    }
+
+    fn to_json_value<T: Serialize>(args: T) -> Option<serde_json::Value> {
+        serde_json::to_value(args)
+            .ok()
+            .filter(serde_json::Value::is_object)
+    }
 
     fn parse_json_object_with_recovery(input: &str) -> Option<serde_json::Value> {
         let cleaned = input.trim().trim_start_matches('\u{feff}').trim();
-        if let Ok(val @ serde_json::Value::Object(_)) = serde_json::from_str(cleaned) {
+        if let Some(val) = parse_json_object(cleaned) {
             return Some(val);
         }
         let re_escaped = re_escape_control_chars_in_json(cleaned);
         if re_escaped != cleaned {
-            if let Ok(val @ serde_json::Value::Object(_)) = serde_json::from_str(&re_escaped) {
+            if let Some(val) = parse_json_object(&re_escaped) {
                 return Some(val);
             }
         }
@@ -17,7 +30,7 @@ pub mod json {
         // Python literals, comments, missing commas/colons, etc.
         let (repaired, _) = crate::jsonish_parse::repair_json_standalone(cleaned, false);
         if repaired != cleaned {
-            if let Ok(val @ serde_json::Value::Object(_)) = serde_json::from_str(&repaired) {
+            if let Some(val) = parse_json_object(&repaired) {
                 return Some(val);
             }
         }
@@ -188,39 +201,51 @@ pub mod json {
     }
 
     fn recover_write_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
+        #[derive(Serialize)]
+        struct WriteArgs {
+            file_path: String,
+            content: String,
+        }
+
         let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
             .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
         let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
-        Some(serde_json::json!({
-            (patch_keys::FILE_PATH_SNAKE): file_path,
-            (patch_keys::CONTENT): content
-        }))
+        to_json_value(WriteArgs { file_path, content })
     }
 
     fn recover_bash_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
+        #[derive(Serialize)]
+        struct BashArgs {
+            command: String,
+            description: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            workdir: Option<String>,
+        }
+
         let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
             .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
         let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
             .unwrap_or_else(|| "Execute shell command".to_string());
+        let workdir = parse_jsonish_string_field(input, "workdir")
+            .or_else(|| parse_jsonish_string_field(input, "cwd"));
 
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            tool_arg_keys::COMMAND.to_string(),
-            serde_json::Value::String(command),
-        );
-        obj.insert(
-            tool_arg_keys::DESCRIPTION.to_string(),
-            serde_json::Value::String(description),
-        );
-        if let Some(workdir) = parse_jsonish_string_field(input, "workdir")
-            .or_else(|| parse_jsonish_string_field(input, "cwd"))
-        {
-            obj.insert("workdir".to_string(), serde_json::Value::String(workdir));
-        }
-        Some(serde_json::Value::Object(obj))
+        to_json_value(BashArgs {
+            command,
+            description,
+            workdir,
+        })
     }
 
     fn recover_edit_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
+        #[derive(Serialize)]
+        struct EditArgs {
+            file_path: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            old_string: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            new_string: Option<String>,
+        }
+
         let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
             .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
         let old_string = parse_jsonish_string_field(input, patch_keys::OLD_STRING)
@@ -233,24 +258,11 @@ pub mod json {
             return None;
         }
 
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            patch_keys::FILE_PATH_SNAKE.to_string(),
-            serde_json::Value::String(file_path),
-        );
-        if let Some(old) = old_string {
-            obj.insert(
-                patch_keys::OLD_STRING.to_string(),
-                serde_json::Value::String(old),
-            );
-        }
-        if let Some(new_value) = new_string {
-            obj.insert(
-                patch_keys::NEW_STRING.to_string(),
-                serde_json::Value::String(new_value),
-            );
-        }
-        Some(serde_json::Value::Object(obj))
+        to_json_value(EditArgs {
+            file_path,
+            old_string,
+            new_string,
+        })
     }
 
     /// Best-effort recovery for truncated/malformed JSON-ish tool argument strings.
@@ -517,6 +529,12 @@ pub mod json {
     // -- Stage 6: write -----------------------------------------------------
 
     fn ultra_recover_write(input: &str) -> Option<serde_json::Value> {
+        #[derive(Serialize)]
+        struct WriteArgs {
+            file_path: String,
+            content: String,
+        }
+
         let file_path = ultra_extract_short_field(
             input,
             &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
@@ -528,15 +546,21 @@ pub mod json {
             "content",
             &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
         )?;
-        Some(serde_json::json!({
-            (patch_keys::FILE_PATH_SNAKE): file_path,
-            "content": content,
-        }))
+        to_json_value(WriteArgs { file_path, content })
     }
 
     // -- Stage 6: edit ------------------------------------------------------
 
     fn ultra_recover_edit(input: &str) -> Option<serde_json::Value> {
+        #[derive(Serialize)]
+        struct EditArgs {
+            file_path: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            old_string: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            new_string: Option<String>,
+        }
+
         let file_path = ultra_extract_short_field(
             input,
             &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
@@ -587,24 +611,11 @@ pub mod json {
             )
         });
 
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            patch_keys::FILE_PATH_SNAKE.to_string(),
-            serde_json::Value::String(file_path),
-        );
-        if let Some(v) = old_string {
-            obj.insert(
-                patch_keys::OLD_STRING.to_string(),
-                serde_json::Value::String(v),
-            );
-        }
-        if let Some(v) = new_string {
-            obj.insert(
-                patch_keys::NEW_STRING.to_string(),
-                serde_json::Value::String(v),
-            );
-        }
-        Some(serde_json::Value::Object(obj))
+        to_json_value(EditArgs {
+            file_path,
+            old_string,
+            new_string,
+        })
     }
 
     // -- Shared extraction helpers ------------------------------------------

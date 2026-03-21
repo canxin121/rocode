@@ -188,7 +188,7 @@ impl McpOAuthManager {
 
                 match self
                     .clients
-                    .add_client(McpClientConfig {
+                    .add_stdio(McpClientConfig {
                         name: server_name.to_string(),
                         command: local.command,
                         args: local.args,
