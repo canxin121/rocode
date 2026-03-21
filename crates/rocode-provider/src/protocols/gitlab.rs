@@ -325,7 +325,7 @@ fn parse_gitlab_sse(data: &str) -> Option<StreamEvent> {
     }
 
     if choice.finish_reason.as_deref().is_some_and(|reason| {
-        ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls)
+        reason.parse::<ProviderFinishReasonWire>().ok() == Some(ProviderFinishReasonWire::ToolCalls)
     }) {
         return Some(StreamEvent::Done);
     }

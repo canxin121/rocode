@@ -160,7 +160,7 @@ impl McpOAuthManager {
         if !managed.enabled {
             let info = McpServerInfo {
                 name: server_name.to_string(),
-                status: McpConnectionStatusWire::Disabled.as_str().to_string(),
+                status: McpConnectionStatusWire::Disabled.to_string(),
                 tools: 0,
                 resources: 0,
                 error: None,
@@ -208,7 +208,7 @@ impl McpOAuthManager {
                             .await;
                         McpServerInfo {
                             name: server_name.to_string(),
-                            status: McpConnectionStatusWire::Connected.as_str().to_string(),
+                            status: McpConnectionStatusWire::Connected.to_string(),
                             tools: tool_count,
                             resources: 0,
                             error: None,
@@ -221,7 +221,7 @@ impl McpOAuthManager {
                             .await;
                         McpServerInfo {
                             name: server_name.to_string(),
-                            status: McpConnectionStatusWire::Failed.as_str().to_string(),
+                            status: McpConnectionStatusWire::Failed.to_string(),
                             tools: 0,
                             resources: 0,
                             error: Some(error.to_string()),
@@ -237,7 +237,7 @@ impl McpOAuthManager {
                         .await;
                     McpServerInfo {
                         name: server_name.to_string(),
-                        status: McpConnectionStatusWire::NeedsAuth.as_str().to_string(),
+                        status: McpConnectionStatusWire::NeedsAuth.to_string(),
                         tools: 0,
                         resources: 0,
                         error: None,
@@ -253,7 +253,7 @@ impl McpOAuthManager {
                     .await;
                     McpServerInfo {
                         name: server_name.to_string(),
-                        status: McpConnectionStatusWire::Failed.as_str().to_string(),
+                        status: McpConnectionStatusWire::Failed.to_string(),
                         tools: 0,
                         resources: 0,
                         error: Some(
@@ -292,7 +292,7 @@ impl McpOAuthManager {
 
         let info = McpServerInfo {
             name: server_name.to_string(),
-            status: McpConnectionStatusWire::Disabled.as_str().to_string(),
+            status: McpConnectionStatusWire::Disabled.to_string(),
             tools: 0,
             resources: 0,
             error: None,
@@ -355,14 +355,14 @@ impl McpOAuthManager {
             .entry(server_name.to_string())
             .or_insert_with(|| McpServerInfo {
                 name: server_name.to_string(),
-                status: McpConnectionStatusWire::NeedsAuth.as_str().to_string(),
+                status: McpConnectionStatusWire::NeedsAuth.to_string(),
                 tools: 0,
                 resources: 0,
                 error: None,
                 oauth_required: true,
                 oauth_status: Some(McpOAuthStatus::Pending),
             });
-        info.status = McpConnectionStatusWire::NeedsAuth.as_str().to_string();
+        info.status = McpConnectionStatusWire::NeedsAuth.to_string();
         info.error = None;
         info.oauth_required = true;
         info.oauth_status = Some(McpOAuthStatus::Pending);
@@ -482,7 +482,7 @@ impl McpOAuthManager {
                 .cloned()
                 .unwrap_or_else(|| McpServerInfo {
                     name: server_name.to_string(),
-                    status: McpConnectionStatusWire::Disabled.as_str().to_string(),
+                    status: McpConnectionStatusWire::Disabled.to_string(),
                     tools: 0,
                     resources: 0,
                     error: None,
@@ -493,9 +493,9 @@ impl McpOAuthManager {
             info.oauth_status = None;
             if managed.config.oauth_required() {
                 info.status = if managed.enabled {
-                    McpConnectionStatusWire::NeedsAuth.as_str().to_string()
+                    McpConnectionStatusWire::NeedsAuth.to_string()
                 } else {
-                    McpConnectionStatusWire::Disabled.as_str().to_string()
+                    McpConnectionStatusWire::Disabled.to_string()
                 };
                 info.error = None;
             }
@@ -542,7 +542,7 @@ impl McpOAuthManager {
 
         McpServerInfo {
             name: server_name.to_string(),
-            status: status.as_str().to_string(),
+            status: status.to_string(),
             tools: 0,
             resources: 0,
             error: None,

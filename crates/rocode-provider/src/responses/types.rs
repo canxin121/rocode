@@ -1,3 +1,4 @@
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -243,6 +244,25 @@ pub enum FinishReason {
     ToolCalls,
     Error,
     Unknown,
+}
+
+impl From<FinishReason> for ProviderFinishReasonWire {
+    fn from(value: FinishReason) -> Self {
+        match value {
+            FinishReason::Stop => Self::Stop,
+            FinishReason::Length => Self::Length,
+            FinishReason::ContentFilter => Self::ContentFilter,
+            FinishReason::ToolCalls => Self::ToolCalls,
+            FinishReason::Error => Self::Error,
+            FinishReason::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<FinishReason> for String {
+    fn from(value: FinishReason) -> Self {
+        ProviderFinishReasonWire::from(value).to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
