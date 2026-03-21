@@ -26,7 +26,6 @@ use crate::database::DatabaseError;
 use crate::entities::{messages, parts, session_shares, sessions, todos};
 use crate::StorageConnection;
 
-const STORAGE_UNPARSED_DATA_KEY: &str = "__rocode_storage_unparsed_data";
 const STORAGE_SESSION_ID_KEY: &str = "__rocode_storage_session_id";
 const STORAGE_SESSION_PARENT_ID_KEY: &str = "__rocode_storage_session_parent_id";
 const STORAGE_MESSAGE_ID_KEY: &str = "__rocode_storage_message_id";
@@ -61,18 +60,6 @@ fn decode_part_ids_from_data(data: Option<&str>) -> Option<(String, Option<Strin
         .and_then(|value| value.as_str())
         .map(ToString::to_string);
     Some((id, message_id))
-}
-
-fn message_has_unparsed_data(message: &SessionMessage) -> bool {
-    message
-        .metadata
-        .get(STORAGE_UNPARSED_DATA_KEY)
-        .and_then(|value| value.as_str())
-        .is_some_and(|raw| !raw.trim().is_empty())
-}
-
-fn should_skip_parts_sync(message: &SessionMessage) -> bool {
-    message.parts.is_empty() && message_has_unparsed_data(message)
 }
 
 fn map_query_err(err: sea_orm::DbErr) -> DatabaseError {
@@ -334,9 +321,6 @@ fn session_from_model(model: sessions::Model) -> Session {
 
 fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveModel, DatabaseError> {
     let mut metadata_to_store = message.metadata.clone();
-    let preserved_raw_data = metadata_to_store
-        .remove(STORAGE_UNPARSED_DATA_KEY)
-        .and_then(|value| value.as_str().map(ToString::to_string));
     metadata_put_string(&mut metadata_to_store, STORAGE_MESSAGE_ID_KEY, &message.id);
     metadata_put_string(
         &mut metadata_to_store,
@@ -345,16 +329,8 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
     );
 
     let unified_parts = session_message_to_unified_message(message).parts;
-    let data_json = if message.parts.is_empty() {
-        if let Some(raw) = preserved_raw_data {
-            raw
-        } else {
-            serde_json::to_string(&unified_parts)
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?
-        }
-    } else {
-        serde_json::to_string(&unified_parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?
-    };
+    let data_json =
+        serde_json::to_string(&unified_parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?;
     let metadata_json = serde_json::to_string(&metadata_to_store)
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
@@ -395,10 +371,6 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
         Some(raw) => match try_parse_unified_parts(raw, created, &message_id) {
             Some(parts) => parts,
             None => {
-                metadata.insert(
-                    STORAGE_UNPARSED_DATA_KEY.to_string(),
-                    serde_json::Value::String(raw.to_string()),
-                );
                 tracing::warn!(
                     message_id = %message_id,
                     session_id = %session_id,
@@ -751,9 +723,6 @@ impl SessionRepository {
         messages_to_upsert: &[SessionMessage],
     ) -> Result<(), DatabaseError> {
         for msg in messages_to_upsert {
-            if should_skip_parts_sync(msg) {
-                continue;
-            }
             for (idx, part) in msg.parts.iter().enumerate() {
                 parts::Entity::insert(part_insert_model(
                     msg.session_id.as_str(),
@@ -892,9 +861,6 @@ impl SessionRepository {
             self.delete_stale_messages_in_tx(&tx, &session.id, &keep_ids)
                 .await?;
             for msg in messages_to_flush {
-                if should_skip_parts_sync(msg) {
-                    continue;
-                }
                 let keep_parts: HashSet<String> = msg.parts.iter().map(|p| p.id.clone()).collect();
                 self.delete_stale_parts_for_message_in_tx(&tx, &msg.id, &keep_parts)
                     .await?;

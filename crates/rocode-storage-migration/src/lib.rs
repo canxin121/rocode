@@ -8,11 +8,8 @@ mod m20260317_000004_create_todos;
 mod m20260317_000005_create_permissions;
 mod m20260317_000006_create_session_shares;
 mod m20260317_000007_create_indexes;
-mod m20260317_000008_legacy_alter_columns;
-mod m20260317_000009_migrate_tool_call_input_data;
 mod m20260317_000010_add_pagination_indexes;
 mod m20260317_000011_add_part_todo_pagination_indexes;
-mod m20260318_000012_backfill_parts_from_messages_data;
 mod m20260319_000013_int_primary_keys;
 mod m20260319_000014_session_shares_session_id_pk;
 
@@ -29,11 +26,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260317_000005_create_permissions::Migration),
             Box::new(m20260317_000006_create_session_shares::Migration),
             Box::new(m20260317_000007_create_indexes::Migration),
-            Box::new(m20260317_000008_legacy_alter_columns::Migration),
-            Box::new(m20260317_000009_migrate_tool_call_input_data::Migration),
             Box::new(m20260317_000010_add_pagination_indexes::Migration),
             Box::new(m20260317_000011_add_part_todo_pagination_indexes::Migration),
-            Box::new(m20260318_000012_backfill_parts_from_messages_data::Migration),
             Box::new(m20260319_000013_int_primary_keys::Migration),
             Box::new(m20260319_000014_session_shares_session_id_pk::Migration),
         ]

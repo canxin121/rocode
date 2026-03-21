@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use strum_macros::{AsRefStr, EnumString};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,23 +52,13 @@ pub enum RunStatus {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AsRefStr, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum PendingReason {
     Question,
     Permission,
     QuestionAndPermission,
-}
-
-impl PendingReason {
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "question" => Some(Self::Question),
-            "permission" => Some(Self::Permission),
-            "question_and_permission" => Some(Self::QuestionAndPermission),
-            _ => None,
-        }
-    }
 }
 
 impl Default for RunStatus {
@@ -256,7 +247,7 @@ impl RuntimeStateStore {
     pub async fn mark_pending(&self, session_id: &str, reason: String) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Pending;
-            s.pending_reason = PendingReason::from_str(reason.as_str());
+            s.pending_reason = reason.parse().ok();
             s.error_message = None;
         })
         .await;
