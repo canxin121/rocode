@@ -935,7 +935,9 @@ impl PluginSubprocess {
             let message = super::protocol::JsonRpcMessage::from_value(raw)
                 .map_err(PluginSubprocessError::from)?;
             match message {
-                super::protocol::JsonRpcMessage::Response(response) if response.id == expected_id => {
+                super::protocol::JsonRpcMessage::Response(response)
+                    if response.id == expected_id =>
+                {
                     return Ok(response);
                 }
                 _ => continue,

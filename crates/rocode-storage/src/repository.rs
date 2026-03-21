@@ -8,19 +8,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use rocode_session::message_model::{
-    session_message_to_unified_message, try_parse_unified_parts,
-};
 #[cfg(test)]
 use rocode_session::message_model::parse_unified_parts as parse_storage_message_parts;
-use rocode_session::{
-    MessagePart, MessageUsage, Role, Session, SessionMessage, SessionSummary,
-    SessionTime, SessionUsage,
-};
+use rocode_session::message_model::{session_message_to_unified_message, try_parse_unified_parts};
 #[cfg(test)]
 use rocode_session::PartType;
 #[cfg(test)]
 use rocode_session::ToolCallStatus;
+use rocode_session::{
+    MessagePart, MessageUsage, Role, Session, SessionMessage, SessionSummary, SessionTime,
+    SessionUsage,
+};
 
 use crate::database::DatabaseError;
 use crate::entities::{messages, parts, session_shares, sessions, todos};
@@ -353,7 +351,8 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
                 .map_err(|e| DatabaseError::QueryError(e.to_string()))?
         }
     } else {
-        serde_json::to_string(&unified_parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        serde_json::to_string(&unified_parts)
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?
     };
     let metadata_json = serde_json::to_string(&metadata_to_store)
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
@@ -1004,48 +1003,47 @@ impl MessageRepository {
             i64,
             Option<String>,
             Option<String>,
-        )> =
-            messages::Entity::find()
-                .filter(
-                    messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?),
-                )
-                .select_only()
-                .column(messages::Column::Id)
-                .column(messages::Column::SessionId)
-                .column(messages::Column::Role)
-                .column(messages::Column::CreatedAt)
-                .column(messages::Column::Finish)
-                .column(messages::Column::Metadata)
-                .order_by_asc(messages::Column::CreatedAt)
-                .order_by_asc(messages::Column::Id)
-                .limit(limit)
-                .offset(offset)
-                .into_tuple()
-                .all(&self.conn)
-                .await
-                .map_err(map_query_err)?;
+        )> = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?))
+            .select_only()
+            .column(messages::Column::Id)
+            .column(messages::Column::SessionId)
+            .column(messages::Column::Role)
+            .column(messages::Column::CreatedAt)
+            .column(messages::Column::Finish)
+            .column(messages::Column::Metadata)
+            .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
         rows.into_iter()
-            .map(|(id, session_id, role, created_at, finish, metadata_json)| {
-                let mut metadata = metadata_json
-                    .as_deref()
-                    .and_then(|m| serde_json::from_str::<HashMap<String, serde_json::Value>>(m).ok())
-                    .unwrap_or_default();
-                let message_id =
-                    metadata_take_string(&mut metadata, STORAGE_MESSAGE_ID_KEY).unwrap_or(id.to_string());
-                let message_session_id = metadata_take_string(
-                    &mut metadata,
-                    STORAGE_MESSAGE_SESSION_ID_KEY,
-                )
-                .unwrap_or(session_id.to_string());
-                Ok(MessageHeaderRow {
-                    id: message_id,
-                    session_id: message_session_id,
-                    role: role_from_model(role),
-                    created_at,
-                    finish,
-                })
-            })
+            .map(
+                |(id, session_id, role, created_at, finish, metadata_json)| {
+                    let mut metadata = metadata_json
+                        .as_deref()
+                        .and_then(|m| {
+                            serde_json::from_str::<HashMap<String, serde_json::Value>>(m).ok()
+                        })
+                        .unwrap_or_default();
+                    let message_id = metadata_take_string(&mut metadata, STORAGE_MESSAGE_ID_KEY)
+                        .unwrap_or(id.to_string());
+                    let message_session_id =
+                        metadata_take_string(&mut metadata, STORAGE_MESSAGE_SESSION_ID_KEY)
+                            .unwrap_or(session_id.to_string());
+                    Ok(MessageHeaderRow {
+                        id: message_id,
+                        session_id: message_session_id,
+                        role: role_from_model(role),
+                        created_at,
+                        finish,
+                    })
+                },
+            )
             .collect()
     }
 
@@ -1349,49 +1347,6 @@ impl PartRepository {
         Ok(row.map(|r| {
             let ids = decode_part_ids_from_data(r.data.as_deref());
             PartRow {
-            id: ids
-                .as_ref()
-                .map(|(id, _)| id.clone())
-                .unwrap_or_else(|| r.id.to_string()),
-            message_id: ids
-                .as_ref()
-                .and_then(|(_, message_id)| message_id.clone())
-                .unwrap_or_else(|| r.message_id.to_string()),
-            session_id: r.session_id.to_string(),
-            created_at: r.created_at,
-            part_type: r.part_type,
-            text: r.text,
-            tool_name: r.tool_name,
-            tool_call_id: r.tool_call_id,
-            tool_arguments: r.tool_arguments,
-            tool_result: r.tool_result,
-            tool_error: r.tool_error,
-            tool_status: r.tool_status,
-            file_url: r.file_url,
-            file_filename: r.file_filename,
-            file_mime: r.file_mime,
-            reasoning: r.reasoning,
-            sort_order: r.sort_order,
-            data: r.data,
-        }
-        }))
-    }
-
-    pub async fn list_for_message(&self, message_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
-        let rows = parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
-            .order_by_asc(parts::Column::SortOrder)
-            .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Id)
-            .all(&self.conn)
-            .await
-            .map_err(map_query_err)?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                let ids = decode_part_ids_from_data(r.data.as_deref());
-                PartRow {
                 id: ids
                     .as_ref()
                     .map(|(id, _)| id.clone())
@@ -1417,6 +1372,49 @@ impl PartRepository {
                 sort_order: r.sort_order,
                 data: r.data,
             }
+        }))
+    }
+
+    pub async fn list_for_message(&self, message_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
+        let rows = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let ids = decode_part_ids_from_data(r.data.as_deref());
+                PartRow {
+                    id: ids
+                        .as_ref()
+                        .map(|(id, _)| id.clone())
+                        .unwrap_or_else(|| r.id.to_string()),
+                    message_id: ids
+                        .as_ref()
+                        .and_then(|(_, message_id)| message_id.clone())
+                        .unwrap_or_else(|| r.message_id.to_string()),
+                    session_id: r.session_id.to_string(),
+                    created_at: r.created_at,
+                    part_type: r.part_type,
+                    text: r.text,
+                    tool_name: r.tool_name,
+                    tool_call_id: r.tool_call_id,
+                    tool_arguments: r.tool_arguments,
+                    tool_result: r.tool_result,
+                    tool_error: r.tool_error,
+                    tool_status: r.tool_status,
+                    file_url: r.file_url,
+                    file_filename: r.file_filename,
+                    file_mime: r.file_mime,
+                    reasoning: r.reasoning,
+                    sort_order: r.sort_order,
+                    data: r.data,
+                }
             })
             .collect())
     }
@@ -1436,15 +1434,7 @@ impl PartRepository {
         offset: i64,
     ) -> Result<Vec<PartSummaryRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
-        let rows: Vec<(
-            i64,
-            i64,
-            i64,
-            i64,
-            String,
-            i64,
-            Option<String>,
-        )> = parts::Entity::find()
+        let rows: Vec<(i64, i64, i64, i64, String, i64, Option<String>)> = parts::Entity::find()
             .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .select_only()
             .column(parts::Column::Id)
@@ -1467,26 +1457,20 @@ impl PartRepository {
         Ok(rows
             .into_iter()
             .map(
-                |(
-                    id,
-                    message_id,
-                    session_id,
-                    created_at,
-                    part_type,
-                    sort_order,
-                    data,
-                )| PartSummaryRow {
-                    id: decode_part_ids_from_data(data.as_deref())
-                        .map(|ids| ids.0)
-                        .unwrap_or_else(|| id.to_string()),
-                    message_id: decode_part_ids_from_data(data.as_deref())
-                        .and_then(|ids| ids.1)
-                        .unwrap_or_else(|| message_id.to_string()),
-                    session_id: session_id.to_string(),
-                    created_at,
-                    part_type,
-                    sort_order,
-                    data,
+                |(id, message_id, session_id, created_at, part_type, sort_order, data)| {
+                    PartSummaryRow {
+                        id: decode_part_ids_from_data(data.as_deref())
+                            .map(|ids| ids.0)
+                            .unwrap_or_else(|| id.to_string()),
+                        message_id: decode_part_ids_from_data(data.as_deref())
+                            .and_then(|ids| ids.1)
+                            .unwrap_or_else(|| message_id.to_string()),
+                        session_id: session_id.to_string(),
+                        created_at,
+                        part_type,
+                        sort_order,
+                        data,
+                    }
                 },
             )
             .collect())
@@ -1515,31 +1499,31 @@ impl PartRepository {
             .map(|r| {
                 let ids = decode_part_ids_from_data(r.data.as_deref());
                 PartRow {
-                id: ids
-                    .as_ref()
-                    .map(|(id, _)| id.clone())
-                    .unwrap_or_else(|| r.id.to_string()),
-                message_id: ids
-                    .as_ref()
-                    .and_then(|(_, message_id)| message_id.clone())
-                    .unwrap_or_else(|| r.message_id.to_string()),
-                session_id: r.session_id.to_string(),
-                created_at: r.created_at,
-                part_type: r.part_type,
-                text: r.text,
-                tool_name: r.tool_name,
-                tool_call_id: r.tool_call_id,
-                tool_arguments: r.tool_arguments,
-                tool_result: r.tool_result,
-                tool_error: r.tool_error,
-                tool_status: r.tool_status,
-                file_url: r.file_url,
-                file_filename: r.file_filename,
-                file_mime: r.file_mime,
-                reasoning: r.reasoning,
-                sort_order: r.sort_order,
-                data: r.data,
-            }
+                    id: ids
+                        .as_ref()
+                        .map(|(id, _)| id.clone())
+                        .unwrap_or_else(|| r.id.to_string()),
+                    message_id: ids
+                        .as_ref()
+                        .and_then(|(_, message_id)| message_id.clone())
+                        .unwrap_or_else(|| r.message_id.to_string()),
+                    session_id: r.session_id.to_string(),
+                    created_at: r.created_at,
+                    part_type: r.part_type,
+                    text: r.text,
+                    tool_name: r.tool_name,
+                    tool_call_id: r.tool_call_id,
+                    tool_arguments: r.tool_arguments,
+                    tool_result: r.tool_result,
+                    tool_error: r.tool_error,
+                    tool_status: r.tool_status,
+                    file_url: r.file_url,
+                    file_filename: r.file_filename,
+                    file_mime: r.file_mime,
+                    reasoning: r.reasoning,
+                    sort_order: r.sort_order,
+                    data: r.data,
+                }
             })
             .collect())
     }
@@ -1559,31 +1543,31 @@ impl PartRepository {
             .map(|r| {
                 let ids = decode_part_ids_from_data(r.data.as_deref());
                 PartRow {
-                id: ids
-                    .as_ref()
-                    .map(|(id, _)| id.clone())
-                    .unwrap_or_else(|| r.id.to_string()),
-                message_id: ids
-                    .as_ref()
-                    .and_then(|(_, message_id)| message_id.clone())
-                    .unwrap_or_else(|| r.message_id.to_string()),
-                session_id: r.session_id.to_string(),
-                created_at: r.created_at,
-                part_type: r.part_type,
-                text: r.text,
-                tool_name: r.tool_name,
-                tool_call_id: r.tool_call_id,
-                tool_arguments: r.tool_arguments,
-                tool_result: r.tool_result,
-                tool_error: r.tool_error,
-                tool_status: r.tool_status,
-                file_url: r.file_url,
-                file_filename: r.file_filename,
-                file_mime: r.file_mime,
-                reasoning: r.reasoning,
-                sort_order: r.sort_order,
-                data: r.data,
-            }
+                    id: ids
+                        .as_ref()
+                        .map(|(id, _)| id.clone())
+                        .unwrap_or_else(|| r.id.to_string()),
+                    message_id: ids
+                        .as_ref()
+                        .and_then(|(_, message_id)| message_id.clone())
+                        .unwrap_or_else(|| r.message_id.to_string()),
+                    session_id: r.session_id.to_string(),
+                    created_at: r.created_at,
+                    part_type: r.part_type,
+                    text: r.text,
+                    tool_name: r.tool_name,
+                    tool_call_id: r.tool_call_id,
+                    tool_arguments: r.tool_arguments,
+                    tool_result: r.tool_result,
+                    tool_error: r.tool_error,
+                    tool_status: r.tool_status,
+                    file_url: r.file_url,
+                    file_filename: r.file_filename,
+                    file_mime: r.file_mime,
+                    reasoning: r.reasoning,
+                    sort_order: r.sort_order,
+                    data: r.data,
+                }
             })
             .collect())
     }

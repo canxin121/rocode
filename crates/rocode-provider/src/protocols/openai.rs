@@ -579,14 +579,6 @@ fn increment_tool_args_invalid(tool_name: &str, phase: &'static str, raw_len: us
 // Layer 3 — SSE Parsing
 // ===========================================================================
 
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-struct LegacySseParserState {
-    tool_call_ids: HashMap<u32, String>,
-    tool_call_names: HashMap<u32, String>,
-    reasoning_open: bool,
-}
-
 #[derive(Debug, Deserialize)]
 struct LegacySseChunk {
     #[serde(default)]
@@ -631,233 +623,6 @@ struct LegacySseFunction {
     name: Option<String>,
     #[serde(default)]
     arguments: Option<Value>,
-}
-
-#[allow(dead_code)]
-fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<StreamEvent> {
-    let mut events = Vec::new();
-
-    if data == "[DONE]" {
-        if state.reasoning_open {
-            events.push(StreamEvent::ReasoningEnd {
-                id: "reasoning-0".to_string(),
-            });
-            state.reasoning_open = false;
-        }
-        events.push(StreamEvent::Done);
-        return events;
-    }
-
-    let chunk: LegacySseChunk = match serde_json::from_str(data) {
-        Ok(v) => v,
-        Err(_) => return events,
-    };
-
-    let prompt_tokens = chunk
-        .usage
-        .as_ref()
-        .and_then(|u| u.prompt_tokens)
-        .unwrap_or(0);
-    let completion_tokens = chunk
-        .usage
-        .as_ref()
-        .and_then(|u| u.completion_tokens)
-        .unwrap_or(0);
-
-    if chunk.usage.is_some() {
-        events.push(StreamEvent::Usage {
-            prompt_tokens,
-            completion_tokens,
-        });
-    }
-
-    for choice in chunk.choices {
-        if let Some(delta) = choice.delta {
-            let reasoning = delta
-                .reasoning_content
-                .as_deref()
-                .or(delta.reasoning_text.as_deref())
-                .unwrap_or("");
-
-            if !reasoning.is_empty() {
-                if !state.reasoning_open {
-                    state.reasoning_open = true;
-                    events.push(StreamEvent::ReasoningStart {
-                        id: "reasoning-0".to_string(),
-                    });
-                }
-                events.push(StreamEvent::ReasoningDelta {
-                    id: "reasoning-0".to_string(),
-                    text: reasoning.to_string(),
-                });
-            }
-
-            if let Some(text) = delta.content.as_deref() {
-                if !text.is_empty() {
-                    if state.reasoning_open {
-                        state.reasoning_open = false;
-                        events.push(StreamEvent::ReasoningEnd {
-                            id: "reasoning-0".to_string(),
-                        });
-                    }
-                    events.push(StreamEvent::TextDelta(text.to_string()));
-                }
-            }
-
-            if !delta.tool_calls.is_empty() {
-                if state.reasoning_open {
-                    state.reasoning_open = false;
-                    events.push(StreamEvent::ReasoningEnd {
-                        id: "reasoning-0".to_string(),
-                    });
-                }
-                for tc in delta.tool_calls {
-                    let index = tc.index.unwrap_or(0);
-                    let id = if let Some(id) = tc.id.as_deref().filter(|id| !id.is_empty()) {
-                        let id = id.to_string();
-                        state.tool_call_ids.insert(index, id.clone());
-                        id
-                    } else {
-                        state
-                            .tool_call_ids
-                            .entry(index)
-                            .or_insert_with(|| format!("tool-call-{}", index))
-                            .clone()
-                    };
-
-                    if let Some(func) = tc.function {
-                        if let Some(name) = func.name.as_deref() {
-                            let should_emit_start = state
-                                .tool_call_names
-                                .get(&index)
-                                .map(|existing| existing != name)
-                                .unwrap_or(true);
-                            state.tool_call_names.insert(index, name.to_string());
-                            if should_emit_start {
-                                events.push(StreamEvent::ToolCallStart {
-                                    id: id.clone(),
-                                    name: name.to_string(),
-                                });
-                            }
-                        }
-
-                        if let Some(arguments_value) = func.arguments {
-                            match arguments_value {
-                                Value::String(arguments) => {
-                                    if !arguments.is_empty() {
-                                        tracing::info!(
-                                            tool_call_id = %id,
-                                            arguments_len = arguments.len(),
-                                            arguments_preview = %arguments.chars().take(200).collect::<String>(),
-                                            "[DIAG-SSE] ToolCallDelta emitted from SSE arguments string"
-                                        );
-                                        events.push(StreamEvent::ToolCallDelta {
-                                            id,
-                                            input: arguments,
-                                        });
-                                    }
-                                }
-                                arguments_value => {
-                                    // LiteLLM or other proxies may send arguments as a JSON
-                                    // object instead of a string. Handle this case.
-                                    let arguments_type = if arguments_value.is_object() {
-                                        "object"
-                                    } else if arguments_value.is_null() {
-                                        "null"
-                                    } else {
-                                        "other"
-                                    };
-                                    tracing::info!(
-                                        tool_call_id = %id,
-                                        arguments_type = %arguments_type,
-                                        arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
-                                        "[DIAG-SSE] arguments field is NOT a string"
-                                    );
-                                    if arguments_value.is_object()
-                                        && !arguments_value
-                                            .as_object()
-                                            .is_none_or(|object| object.is_empty())
-                                    {
-                                        let serialized = arguments_value.to_string();
-                                        events.push(StreamEvent::ToolCallDelta {
-                                            id,
-                                            input: serialized,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(reason) = choice.finish_reason.as_deref() {
-            if state.reasoning_open {
-                state.reasoning_open = false;
-                events.push(StreamEvent::ReasoningEnd {
-                    id: "reasoning-0".to_string(),
-                });
-            }
-            let normalized_reason = if reason == "tool_calls" {
-                "tool-calls".to_string()
-            } else {
-                reason.to_string()
-            };
-            events.push(StreamEvent::FinishStep {
-                finish_reason: Some(normalized_reason),
-                usage: crate::stream::StreamUsage {
-                    prompt_tokens,
-                    completion_tokens,
-                    ..Default::default()
-                },
-                provider_metadata: None,
-            });
-        }
-    }
-
-    events
-}
-
-#[allow(dead_code)]
-fn parse_legacy_sse_line(line: &str, state: &mut LegacySseParserState) -> Vec<StreamEvent> {
-    let line = line.trim();
-    if !line.starts_with("data:") {
-        return Vec::new();
-    }
-    let data = line.trim_start_matches("data:").trim();
-    if data.is_empty() {
-        return Vec::new();
-    }
-    parse_legacy_sse_data(data, state)
-}
-
-#[allow(dead_code)]
-fn drain_legacy_sse_events(
-    buffer: &mut String,
-    state: &mut LegacySseParserState,
-    flush_remainder: bool,
-) -> Vec<StreamEvent> {
-    let mut events = Vec::new();
-
-    while let Some(newline_idx) = buffer.find('\n') {
-        let mut line = buffer[..newline_idx].to_string();
-        buffer.drain(..=newline_idx);
-        if line.ends_with('\r') {
-            line.pop();
-        }
-        events.extend(parse_legacy_sse_line(&line, state));
-    }
-
-    if flush_remainder && !buffer.is_empty() {
-        let mut tail = std::mem::take(buffer);
-        if tail.ends_with('\r') {
-            tail.pop();
-        }
-        events.extend(parse_legacy_sse_line(&tail, state));
-    }
-
-    events
 }
 
 // ===========================================================================
@@ -1244,17 +1009,6 @@ fn tools_to_input_tools(tools: Option<&Vec<crate::ToolDefinition>>) -> Option<Ve
     )
 }
 
-fn finish_reason_to_string(reason: FinishReason) -> String {
-    match reason {
-        FinishReason::Stop => "stop".to_string(),
-        FinishReason::Length => "length".to_string(),
-        FinishReason::ContentFilter => "content_filter".to_string(),
-        FinishReason::ToolCalls => "tool-calls".to_string(),
-        FinishReason::Error => "error".to_string(),
-        FinishReason::Unknown => "unknown".to_string(),
-    }
-}
-
 fn responses_chat_response(
     request: &ChatRequest,
     result: crate::responses::ResponsesGenerateResult,
@@ -1283,7 +1037,7 @@ fn responses_chat_response(
         choices: vec![Choice {
             index: 0,
             message: result.message,
-            finish_reason: Some(finish_reason_to_string(result.finish_reason)),
+            finish_reason: Some(String::from(result.finish_reason)),
         }],
         usage: Some(usage),
     }
@@ -1873,54 +1627,6 @@ mod tests {
             err,
             ProviderError::ConfigError(msg)
                 if msg.contains("requires `base_url` for OpenAI-compatible routing")
-        ));
-    }
-
-    #[test]
-    fn drain_legacy_sse_events_handles_partial_and_multiple_lines() {
-        let mut state = LegacySseParserState::default();
-        let mut buffer = String::from("data: {\"choices\":[{\"delta\":{\"content\":\"hel");
-
-        let events = drain_legacy_sse_events(&mut buffer, &mut state, false);
-        assert!(events.is_empty(), "partial line should not be parsed");
-
-        buffer.push_str("lo\"}}]}\n");
-        buffer.push_str("data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n");
-        let events = drain_legacy_sse_events(&mut buffer, &mut state, false);
-
-        assert_eq!(events.len(), 2);
-        assert!(matches!(
-            &events[0],
-            StreamEvent::TextDelta(text) if text == "hello"
-        ));
-        assert!(matches!(
-            &events[1],
-            StreamEvent::Usage {
-                prompt_tokens: 1,
-                completion_tokens: 2
-            }
-        ));
-    }
-
-    #[test]
-    fn parse_legacy_sse_data_uses_stable_tool_call_id_when_missing() {
-        let mut state = LegacySseParserState::default();
-        let start = parse_legacy_sse_data(
-            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"bash\"}}]}}]}",
-            &mut state,
-        );
-        assert!(matches!(
-            start.first(),
-            Some(StreamEvent::ToolCallStart { id, name }) if id == "tool-call-0" && name == "bash"
-        ));
-
-        let delta = parse_legacy_sse_data(
-            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\"}}]}}]}",
-            &mut state,
-        );
-        assert!(matches!(
-            delta.first(),
-            Some(StreamEvent::ToolCallDelta { id, input }) if id == "tool-call-0" && input == "{\"cmd\":\"ls\"}"
         ));
     }
 

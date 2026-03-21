@@ -13,8 +13,8 @@ use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use crate::bootstrap::should_use_copilot_responses_api;
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::{
-    FinishReason, GenerateOptions, OpenAIResponsesConfig, OpenAIResponsesLanguageModel,
-    ResponsesProviderOptions, StreamOptions,
+    GenerateOptions, OpenAIResponsesConfig, OpenAIResponsesLanguageModel, ResponsesProviderOptions,
+    StreamOptions,
 };
 use crate::tools::InputTool;
 use crate::{
@@ -252,19 +252,6 @@ impl CopilotProtocol {
         )
     }
 
-    fn finish_reason_to_string(reason: FinishReason) -> String {
-        match reason {
-            FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str().to_string(),
-            FinishReason::Length => ProviderFinishReasonWire::Length.as_str().to_string(),
-            FinishReason::ContentFilter => {
-                ProviderFinishReasonWire::ContentFilter.as_str().to_string()
-            }
-            FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
-            FinishReason::Error => ProviderFinishReasonWire::Error.as_str().to_string(),
-            FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str().to_string(),
-        }
-    }
-
     fn responses_chat_response(
         request: &ChatRequest,
         result: crate::responses::ResponsesGenerateResult,
@@ -293,7 +280,7 @@ impl CopilotProtocol {
             choices: vec![Choice {
                 index: 0,
                 message: result.message,
-                finish_reason: Some(Self::finish_reason_to_string(result.finish_reason)),
+                finish_reason: Some(String::from(result.finish_reason)),
             }],
             usage: Some(usage),
         }
@@ -682,7 +669,7 @@ fn parse_copilot_sse(data: &str) -> Option<StreamEvent> {
     }
 
     if choice.finish_reason.as_deref().is_some_and(|reason| {
-        ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls)
+        reason.parse::<ProviderFinishReasonWire>().ok() == Some(ProviderFinishReasonWire::ToolCalls)
     }) {
         return Some(StreamEvent::Done);
     }
