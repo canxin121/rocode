@@ -250,50 +250,35 @@ pub struct ChildSessionInfo {
 pub fn collect_child_sessions(messages: &[Message]) -> Vec<ChildSessionInfo> {
     #[derive(Debug, Deserialize, Default)]
     struct SchedulerStageMeta {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         scheduler_stage_child_session_id: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         scheduler_stage: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         scheduler_stage_title: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
         scheduler_stage_index: Option<u64>,
-        #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
         scheduler_stage_total: Option<u64>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         scheduler_stage_status: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         stage_id: Option<String>,
-    }
-
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            }
-            _ => None,
-        })
-    }
-
-    fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::Number(number)) => number.as_u64(),
-            Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
-            _ => None,
-        })
     }
 
     let mut seen = HashMap::new();

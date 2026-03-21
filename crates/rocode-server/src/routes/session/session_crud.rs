@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue},
     Json,
 };
+use rocode_types::deserialize_opt_string_lossy;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
@@ -318,19 +319,6 @@ pub(crate) fn resolved_session_directory(raw: &str) -> String {
         .unwrap_or(candidate)
         .to_string_lossy()
         .to_string()
-}
-
-fn deserialize_opt_string_lossy<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -878,9 +866,7 @@ pub(super) async fn get_message(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -1107,9 +1093,7 @@ pub(super) async fn cancel_tool_call(
             session_message_to_unified_message(msg)
                 .parts
                 .into_iter()
-                .any(|part| {
-                    matches!(part, ModelPart::Tool(tool) if tool.call_id == tool_call_id)
-                })
+                .any(|part| matches!(part, ModelPart::Tool(tool) if tool.call_id == tool_call_id))
         });
 
         if !found {

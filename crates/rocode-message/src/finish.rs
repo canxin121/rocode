@@ -14,37 +14,16 @@ pub enum FinishReason {
 }
 
 impl FinishReason {
-    fn normalize_style(value: &str) -> String {
-        let trimmed = value.trim();
-        let mut out = String::with_capacity(trimmed.len() + 2);
-        for (idx, ch) in trimmed.chars().enumerate() {
-            if ch.is_ascii_uppercase() {
-                if idx > 0 {
-                    out.push('_');
-                }
-                out.push(ch.to_ascii_lowercase());
-            } else {
-                out.push(ch.to_ascii_lowercase());
-            }
-        }
-        out
-    }
-
-    /// Parse and normalize known aliases.
+    /// Parse canonical finish-reason wire text.
     pub fn parse(value: impl AsRef<str>) -> Self {
         let raw = value.as_ref().trim();
         if raw.is_empty() {
             return Self::Unknown;
         }
 
-        if raw.eq_ignore_ascii_case("tool-calls") {
-            return Self::ToolCalls;
-        }
-
-        let normalized = Self::normalize_style(raw);
-        match normalized.as_str() {
+        match raw {
             "stop" => Self::Stop,
-            "tool_calls" => Self::ToolCalls,
+            "tool-calls" => Self::ToolCalls,
             "length" => Self::Length,
             "content_filter" => Self::ContentFilter,
             "error" => Self::Error,
@@ -96,7 +75,7 @@ impl<'de> Deserialize<'de> for FinishReason {
     }
 }
 
-/// Normalize a free-form finish reason into canonical wire text.
+/// Return canonical finish-reason text for known values, otherwise preserve input.
 pub fn normalize_finish_reason(value: impl AsRef<str>) -> String {
     FinishReason::parse(value).as_str().to_string()
 }
@@ -106,14 +85,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_style_variants() {
+    fn parse_requires_canonical_wire_values() {
         assert_eq!(FinishReason::parse("tool-calls"), FinishReason::ToolCalls);
-        assert_eq!(FinishReason::parse("toolCalls"), FinishReason::ToolCalls);
+        assert_eq!(
+            FinishReason::parse("toolCalls"),
+            FinishReason::Custom("toolCalls".to_string())
+        );
         assert_eq!(
             FinishReason::parse("contentFilter"),
-            FinishReason::ContentFilter
+            FinishReason::Custom("contentFilter".to_string())
         );
-        assert_eq!(normalize_finish_reason("toolCalls"), "tool-calls");
     }
 
     #[test]
@@ -123,5 +104,6 @@ mod tests {
             "provider_specific"
         );
         assert_eq!(FinishReason::parse("end_turn").as_str(), "end_turn");
+        assert_eq!(normalize_finish_reason("toolCalls"), "toolCalls");
     }
 }

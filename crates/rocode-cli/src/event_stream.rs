@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use rocode_types::SessionRunStatusWire;
+use rocode_types::{deserialize_opt_string_lossy, SessionRunStatusWire};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
@@ -93,17 +93,6 @@ pub enum CliServerEvent {
 
 fn default_empty_array() -> serde_json::Value {
     serde_json::Value::Array(Vec::new())
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 fn deserialize_u64_lossy<'de, D>(deserializer: D) -> Result<u64, D::Error>

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use rocode_types::Role;
 
-use crate::finish::FinishReason;
 use crate::id::new_message_id;
 use crate::part::{MessagePart, PartKind, PartType, RunningTime, ToolState};
 use crate::status::ToolCallStatus;
@@ -14,26 +13,22 @@ mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
     pub const MODEL_ID: &str = "model_id";
     pub const MODE: &str = "mode";
-    pub const FINISH_REASON: &str = "finish_reason";
 }
 
 /// Canonical session message model shared across runtime/storage/UI layers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionMessage {
     pub id: String,
-    #[serde(alias = "sessionId")]
     pub session_id: String,
     pub role: Role,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<MessagePart>,
-    #[serde(alias = "createdAt")]
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<MessageUsage>,
-    /// Provider finish reason (normalized string preferred, but kept as text
-    /// for compatibility with existing stored payloads).
+    /// Provider finish reason as wire text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
 }
@@ -254,24 +249,6 @@ impl SessionMessage {
         self.add_text(text);
     }
 
-    pub fn finish_reason(&self) -> Option<FinishReason> {
-        if let Some(reason) = self.finish.as_deref() {
-            return Some(FinishReason::parse(reason));
-        }
-        self.metadata
-            .get(keys::FINISH_REASON)
-            .and_then(serde_json::Value::as_str)
-            .map(FinishReason::parse)
-    }
-
-    pub fn set_finish_reason(&mut self, reason: FinishReason) {
-        self.finish = Some(reason.as_str().to_string());
-        self.metadata.insert(
-            keys::FINISH_REASON.to_string(),
-            serde_json::Value::String(reason.as_str().to_string()),
-        );
-    }
-
     pub fn metadata_str(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).and_then(serde_json::Value::as_str)
     }
@@ -342,10 +319,18 @@ mod tests {
     }
 
     #[test]
-    fn finish_reason_is_normalized() {
-        let mut message = SessionMessage::assistant("ses_1");
-        message.finish = Some("toolCalls".to_string());
-        assert_eq!(message.finish_reason(), Some(FinishReason::ToolCalls));
+    fn session_message_rejects_legacy_camel_case_fields() {
+        let value = serde_json::json!({
+            "id": "1",
+            "sessionId": "2",
+            "role": "assistant",
+            "parts": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "metadata": {}
+        });
+
+        let parsed = serde_json::from_value::<SessionMessage>(value);
+        assert!(parsed.is_err());
     }
 
     #[test]

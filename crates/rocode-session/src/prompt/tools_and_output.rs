@@ -45,10 +45,7 @@ pub fn structured_output_system_prompt() -> String {
 pub fn extract_structured_output(parts: &[crate::MessagePart]) -> Option<serde_json::Value> {
     for part in parts {
         let PartType::ToolCall {
-            name,
-            input,
-            state,
-            ..
+            name, input, state, ..
         } = &part.part_type
         else {
             continue;
@@ -122,20 +119,12 @@ pub fn insert_reminders(
 }
 
 pub fn was_plan_agent(messages: &[SessionMessage]) -> bool {
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
     #[derive(Debug, Default, Deserialize)]
     struct AgentMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         agent: Option<String>,
     }
 

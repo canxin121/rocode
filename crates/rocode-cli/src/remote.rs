@@ -7,6 +7,7 @@ use rocode_command::output_blocks::{
 };
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
+use rocode_types::deserialize_opt_string_lossy;
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,17 +147,6 @@ struct SessionEventFieldWire {
     value: String,
     #[serde(default)]
     tone: Option<String>,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 fn deserialize_session_event_fields_lossy<'de, D>(

@@ -55,7 +55,6 @@ pub(super) struct MessageTokensInfo {
     pub cache_write: u64,
 }
 
-
 #[derive(Debug, Serialize)]
 pub(super) struct MessageSummaryInfo {
     pub id: String,
@@ -130,9 +129,7 @@ pub(super) async fn list_message_summaries(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -253,9 +250,7 @@ pub(super) async fn list_message_parts(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -326,9 +321,7 @@ pub(super) async fn get_message_part(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -355,68 +348,42 @@ pub(super) async fn get_message_part(
     ))
 }
 
-fn message_to_info(
-    session_id: &str,
-    message: &rocode_session::SessionMessage,
-) -> MessageInfo {
-    fn deserialize_opt_string_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
-    fn deserialize_opt_i64_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<i64>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::Number(value)) => value.as_i64(),
-            Some(serde_json::Value::String(value)) => value.parse::<i64>().ok(),
-            _ => None,
-        })
-    }
-
-    fn deserialize_opt_f64_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<f64>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::Number(value)) => value.as_f64(),
-            Some(serde_json::Value::String(value)) => value.parse::<f64>().ok(),
-            _ => None,
-        })
-    }
-
+fn message_to_info(session_id: &str, message: &rocode_session::SessionMessage) -> MessageInfo {
     #[derive(Debug, Default, Deserialize)]
     struct MessageMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         model_id: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         model_provider: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_f64_lossy")]
         cost: Option<f64>,
-        #[serde(default, deserialize_with = "deserialize_opt_i64_lossy")]
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
         completed_at: Option<i64>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         agent: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         mode: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         finish_reason: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         error: Option<String>,
     }
 
@@ -477,22 +444,12 @@ fn augment_scheduler_decision_metadata_for_response(
     if metadata.contains_key("scheduler_decision_title") {
         return;
     }
-    fn deserialize_opt_string_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
     #[derive(Debug, Default, Deserialize)]
     struct SchedulerStageWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         scheduler_stage: Option<String>,
     }
 

@@ -10,21 +10,10 @@ use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_core::process_registry::{global_registry, ProcessKind};
 use rocode_permission::{BashArity, PermissionKind};
 use rocode_plugin::{HookContext, HookEvent};
+use rocode_types::deserialize_opt_u64_lossy;
 
 const DEFAULT_TIMEOUT_MS: u64 = 2 * 60 * 1000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-
-fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(number)) => number.as_u64(),
-        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
-        _ => None,
-    })
-}
 
 fn deserialize_string_map_lossy<'de, D>(
     deserializer: D,

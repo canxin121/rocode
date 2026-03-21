@@ -57,9 +57,9 @@ use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_model::{
     session_message_to_unified_message, ModelRef as V2ModelRef, Part as ModelPart,
 };
-use crate::{Role, Session, SessionMessage, SessionStateManager};
 #[cfg(test)]
 use crate::PartType;
+use crate::{Role, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
@@ -856,12 +856,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         .await;
                     }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
-                        SessionPrompt::upsert_tool_call_part(
-                            assistant,
-                            id,
-                            None,
-                            Some(tool_state),
-                        );
+                        SessionPrompt::upsert_tool_call_part(assistant, id, None, Some(tool_state));
                     }
                 }
             }
@@ -1542,28 +1537,27 @@ impl SessionPrompt {
             }
         };
 
-        fn deserialize_opt_string_lossy<'de, D>(
-            deserializer: D,
-        ) -> std::result::Result<Option<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            Ok(match value {
-                Some(serde_json::Value::String(value)) => Some(value),
-                _ => None,
-            })
-        }
-
         #[derive(Debug, Default, Deserialize)]
         struct ResumeSessionMetadataWire {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_provider: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             agent: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_variant: Option<String>,
         }
 
@@ -2313,10 +2307,8 @@ impl SessionPrompt {
                     return None;
                 }
 
-                let (agent, prompt, meta_description) = metadata_by_id
-                    .get(&subtask.id)
-                    .cloned()
-                    .unwrap_or_else(|| {
+                let (agent, prompt, meta_description) =
+                    metadata_by_id.get(&subtask.id).cloned().unwrap_or_else(|| {
                         (
                             subtask.id.clone(),
                             subtask.description.clone(),

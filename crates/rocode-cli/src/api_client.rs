@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::util::server_url;
 use rocode_config::Config;
 use rocode_permission::{PermissionReply, PermissionReplyRequest};
+use rocode_types::deserialize_opt_bool_lossy;
 use serde::Deserialize;
 
 // Re-export shared types from TUI api module so callers don't need to
@@ -493,22 +494,6 @@ impl CliApiClient {
         let bytes = Self::expect_success(resp, action).await?;
         Ok(serde_json::from_slice(&bytes)?)
     }
-}
-
-fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Bool(value)) => Some(value),
-        Some(serde_json::Value::String(raw)) => match raw.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" | "y" => Some(true),
-            "false" | "0" | "no" | "n" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    })
 }
 
 fn deserialize_string_vec_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

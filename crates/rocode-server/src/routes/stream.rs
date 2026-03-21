@@ -17,6 +17,7 @@ use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_provider::ToolDefinition;
 use rocode_session::{MessageUsage, Role as SessionMessageRole, Session};
+use rocode_types::deserialize_opt_string_lossy;
 
 use super::permission::request_permission;
 use super::session::{
@@ -55,19 +56,6 @@ pub(crate) async fn send_stream_usage_event(
         message_id,
     };
     send_sse_server_event(tx, &event).await;
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
 }
 
 #[derive(Debug, Default, Deserialize)]

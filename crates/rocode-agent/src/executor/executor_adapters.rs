@@ -12,22 +12,10 @@ use rocode_orchestrator::{
 };
 use rocode_provider::ProviderRegistry;
 use rocode_tool::{ToolContext, ToolRegistry};
+use rocode_types::deserialize_opt_string_lossy;
 
 use super::{attach_subsession_callbacks, map_tool_error, SubsessionState};
 use crate::AgentInfo;
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Default, Deserialize)]
 struct ExecutionMetadataWire {

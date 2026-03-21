@@ -298,22 +298,12 @@ fn select_active_tool_parent_id(
 fn select_active_agent_task_parent_id(
     records: &[crate::runtime_control::ExecutionRecord],
 ) -> Option<String> {
-    fn deserialize_opt_string_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
     #[derive(Debug, Default, Deserialize)]
     struct ToolCallMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         tool_name: Option<String>,
     }
 

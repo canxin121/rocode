@@ -3,30 +3,8 @@ use std::sync::Arc;
 
 use rocode_plugin::subprocess::PluginLoader;
 use rocode_provider::{AuthError, AuthInfo, AuthManager, AuthMethodType, Authorization};
+use rocode_types::{deserialize_opt_i64_lossy, deserialize_opt_string_lossy};
 use serde::{Deserialize, Serialize};
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_i64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<i64>().ok(),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Deserialize, Default)]
 struct OauthCallbackWire {

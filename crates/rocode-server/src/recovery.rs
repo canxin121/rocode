@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use rocode_session::message_model::{session_message_to_unified_message, Part as ModelPart};
+use rocode_types::{deserialize_opt_string_lossy, deserialize_opt_u32_lossy};
 
 use crate::runtime_control::{
     ExecutionKind, ExecutionStatus, SessionExecutionNode, SessionExecutionTopology,
@@ -160,30 +161,6 @@ fn assistant_visible_text_from_message(message: &rocode_session::SessionMessage)
         }
     }
     out
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let parsed_u64 = match value {
-        Some(serde_json::Value::Number(value)) => value.as_u64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().ok(),
-        _ => None,
-    };
-    Ok(parsed_u64.map(|value| value.min(u32::MAX as u64) as u32))
 }
 
 fn parse_wire_from_metadata_map<T: DeserializeOwned + Default>(

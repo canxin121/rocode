@@ -4,6 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rocode_provider::{get_model_context_limit, ChatResponse, Content, Provider};
+use rocode_types::{
+    deserialize_opt_f64_lossy, deserialize_opt_string_lossy, deserialize_opt_u64_lossy,
+};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -30,41 +33,6 @@ type HistoricalToolResult = (
 );
 
 type HistoricalToolResultMap = HashMap<String, HistoricalToolResult>;
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_u64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().ok(),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_f64_lossy<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_f64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<f64>().ok(),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct HistoricalUsageWire {
@@ -370,7 +338,13 @@ impl SessionPrompt {
                         if *is_error {
                             Some((
                                 tool_call_id.clone(),
-                                (content.clone(), true, Some(tool_name), metadata.clone(), None),
+                                (
+                                    content.clone(),
+                                    true,
+                                    Some(tool_name),
+                                    metadata.clone(),
+                                    None,
+                                ),
                             ))
                         } else {
                             Some((
@@ -448,16 +422,16 @@ impl SessionPrompt {
 
                 let (state_input, state_raw, status) = Self::state_projection(&tool.state);
 
-                    tool.state = Self::hydrate_tool_state_for_unified(ToolStateHydrationInput {
-                        tool_call_id: &tool.call_id,
-                        tool_name: &tool.tool,
-                        input: &state_input,
-                        status: &status,
-                        raw: state_raw.as_deref().unwrap_or_default(),
-                        tool_result: historical_tool_results.get(&tool.call_id),
-                        session_id: &msg.session_id,
-                        message_id: &msg.id,
-                    });
+                tool.state = Self::hydrate_tool_state_for_unified(ToolStateHydrationInput {
+                    tool_call_id: &tool.call_id,
+                    tool_name: &tool.tool,
+                    input: &state_input,
+                    status: &status,
+                    raw: state_raw.as_deref().unwrap_or_default(),
+                    tool_result: historical_tool_results.get(&tool.call_id),
+                    session_id: &msg.session_id,
+                    message_id: &msg.id,
+                });
             }
 
             if let Some(snapshot) = meta
@@ -580,9 +554,7 @@ impl SessionPrompt {
         out
     }
 
-    fn hydrate_tool_state_for_unified(
-        input_data: ToolStateHydrationInput<'_>,
-    ) -> crate::ToolState {
+    fn hydrate_tool_state_for_unified(input_data: ToolStateHydrationInput<'_>) -> crate::ToolState {
         let now = chrono::Utc::now().timestamp_millis();
         match input_data.status {
             crate::ToolCallStatus::Pending => crate::ToolState::Pending {

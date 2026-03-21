@@ -335,33 +335,6 @@ impl OpenAIResponsesLanguageModel {
             });
         }
 
-        fn deserialize_opt_string_lossy<'de, D>(
-            deserializer: D,
-        ) -> std::result::Result<Option<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<Value>::deserialize(deserializer)?;
-            Ok(match value {
-                Some(Value::String(value)) => Some(value),
-                _ => None,
-            })
-        }
-
-        fn deserialize_opt_u64_lossy<'de, D>(
-            deserializer: D,
-        ) -> std::result::Result<Option<u64>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<Value>::deserialize(deserializer)?;
-            Ok(match value {
-                Some(Value::Number(value)) => value.as_u64(),
-                Some(Value::String(value)) => value.parse::<u64>().ok(),
-                _ => None,
-            })
-        }
-
         fn deserialize_vec_value_lossy<'de, D>(
             deserializer: D,
         ) -> std::result::Result<Vec<Value>, D::Error>
@@ -403,7 +376,10 @@ impl OpenAIResponsesLanguageModel {
 
         #[derive(Debug, Default, Deserialize)]
         struct IncompleteDetailsWire {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             reason: Option<String>,
         }
 
@@ -415,13 +391,22 @@ impl OpenAIResponsesLanguageModel {
             usage: ResponsesUsage,
             #[serde(default, deserialize_with = "deserialize_incomplete_details_lossy")]
             incomplete_details: Option<IncompleteDetailsWire>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
             created_at: Option<u64>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             service_tier: Option<String>,
         }
 

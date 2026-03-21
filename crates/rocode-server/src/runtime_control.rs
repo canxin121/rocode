@@ -5,50 +5,14 @@ pub use rocode_session::execution::{
 };
 pub use rocode_session::question::{QuestionInfo, QuestionItemInfo, QuestionOptionInfo};
 pub use rocode_session::run_status::{PendingStatusReason, SessionRunStatus};
+use rocode_types::{
+    deserialize_opt_i64_lossy, deserialize_opt_string_lossy, deserialize_opt_u32_lossy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => {
-            value.as_u64().and_then(|value| u32::try_from(value).ok())
-        }
-        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_i64(),
-        Some(serde_json::Value::String(value)) => value.parse::<i64>().ok(),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Default, Deserialize)]
 struct ExecutionRecordMetadataWire {

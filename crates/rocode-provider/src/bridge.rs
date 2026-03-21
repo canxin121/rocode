@@ -22,6 +22,7 @@ use crate::provider::ProviderError;
 use crate::stream::{StreamEvent, StreamResult, StreamUsage};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use rocode_types::{deserialize_opt_string_lossy, deserialize_opt_u64_lossy};
 use serde::Deserialize;
 use std::pin::Pin;
 
@@ -163,31 +164,6 @@ pub fn bridge_streaming_events(
 }
 
 // ---- Phase 2: DriverResponse → ChatResponse conversion ----
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_u64(),
-        Some(serde_json::Value::String(value)) => value.parse::<u64>().ok(),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Default, Deserialize)]
 struct DriverResponseMetaWire {
