@@ -3809,6 +3809,8 @@ dependencies = [
  "rocode-permission",
  "serde",
  "serde_json",
+ "strum 0.26.3",
+ "strum_macros",
  "thiserror 2.0.18",
  "uuid",
 ]

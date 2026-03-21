@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use rocode_core::contracts::{
     task::metadata_keys as task_metadata_keys,
     tools::{arg_keys as tool_arg_keys, BuiltinToolName},
-    wire::aliases as wire_aliases,
 };
 use rocode_message::message::{MessageInfo, ModelRef, Part as ModelPart, UserTime};
 use serde::{Deserialize, Serialize};
@@ -163,10 +162,7 @@ impl Tool for PlanEnterTool {
 
         let mut metadata = Metadata::new();
         metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("plan"));
-        metadata.insert(
-            wire_aliases::SESSION_ID_SNAKE.to_string(),
-            serde_json::json!(ctx.session_id),
-        );
+        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
         if let Some(ref m) = model {
             metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }
@@ -255,10 +251,7 @@ impl Tool for PlanExitTool {
 
         let mut metadata = Metadata::new();
         metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("build"));
-        metadata.insert(
-            wire_aliases::SESSION_ID_SNAKE.to_string(),
-            serde_json::json!(ctx.session_id),
-        );
+        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
         if let Some(ref m) = model {
             metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }

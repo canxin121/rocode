@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use regex::Regex;
 use reqwest::Client;
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
-use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -381,7 +380,7 @@ impl Tool for BrowserSessionTool {
                     "type": "string",
                     "enum": operations
                 },
-                (wire_aliases::SESSION_ID_SNAKE): {
+                ("session_id"): {
                     "type": "string",
                     "description": "Existing browser session id"
                 },

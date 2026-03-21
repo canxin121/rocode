@@ -43,23 +43,6 @@ pub mod headers {
     pub const X_ROCODE_INTERNAL_TOKEN: &str = "x-rocode-internal-token";
 }
 
-/// Alternate key spellings accepted for backwards compatibility.
-pub mod aliases {
-    pub const SESSION_ID_CAMEL: &str = "sessionId";
-    pub const SESSION_ID_SNAKE: &str = "session_id";
-    pub const MESSAGE_ID_CAMEL: &str = "messageId";
-    pub const MESSAGE_ID_SNAKE: &str = "message_id";
-    pub const PARENT_ID_CAMEL: &str = "parentId";
-    pub const PARENT_ID_SNAKE: &str = "parent_id";
-    pub const CHILD_ID_CAMEL: &str = "childId";
-    pub const CHILD_ID_SNAKE: &str = "child_id";
-    pub const REQUEST_ID_CAMEL: &str = "requestId";
-    pub const REQUEST_ID_SNAKE: &str = "request_id";
-    pub const PERMISSION_ID_CAMEL: &str = "permissionId";
-    pub const PERMISSION_ID_SNAKE: &str = "permission_id";
-    pub const TOOL_CALL_ID_SNAKE: &str = "tool_call_id";
-}
-
 /// Common non-identifier payload field names reused across wire contracts.
 pub mod fields {
     pub const SOURCE: &str = "source";
@@ -67,7 +50,6 @@ pub mod fields {
     pub const PHASE: &str = "phase";
     pub const ROLE: &str = "role";
     pub const TOOL_NAME: &str = "toolName";
-    pub const TOOL_NAME_SNAKE: &str = "tool_name";
     pub const RESOLUTION: &str = "resolution";
     pub const QUESTIONS: &str = "questions";
     pub const QUESTION: &str = "question";
@@ -85,49 +67,6 @@ pub mod fields {
     pub const DELETIONS: &str = "deletions";
 }
 
-/// Reusable key-sets for tolerant readers that accept canonical and legacy keys.
-pub mod keysets {
-    use super::{aliases, keys};
-
-    pub const SESSION_ID_ANY: &[&str] = &[
-        keys::SESSION_ID,
-        aliases::SESSION_ID_CAMEL,
-        aliases::SESSION_ID_SNAKE,
-    ];
-    pub const MESSAGE_ID_ANY: &[&str] = &[
-        keys::MESSAGE_ID,
-        aliases::MESSAGE_ID_CAMEL,
-        aliases::MESSAGE_ID_SNAKE,
-    ];
-    pub const REQUEST_ID_ANY: &[&str] = &[
-        keys::REQUEST_ID,
-        aliases::REQUEST_ID_CAMEL,
-        aliases::REQUEST_ID_SNAKE,
-        fields::ID,
-    ];
-    pub const PERMISSION_ID_ANY: &[&str] = &[
-        keys::PERMISSION_ID,
-        aliases::PERMISSION_ID_CAMEL,
-        aliases::PERMISSION_ID_SNAKE,
-        keys::REQUEST_ID,
-        aliases::REQUEST_ID_CAMEL,
-        fields::ID,
-    ];
-    pub const PARENT_ID_ANY: &[&str] = &[
-        keys::PARENT_ID,
-        aliases::PARENT_ID_CAMEL,
-        aliases::PARENT_ID_SNAKE,
-    ];
-    pub const CHILD_ID_ANY: &[&str] = &[
-        keys::CHILD_ID,
-        aliases::CHILD_ID_CAMEL,
-        aliases::CHILD_ID_SNAKE,
-    ];
-    pub const TOOL_CALL_ID_ANY: &[&str] = &[keys::TOOL_CALL_ID, aliases::TOOL_CALL_ID_SNAKE];
-
-    use super::fields;
-}
-
 /// Small JSON key lookup helpers for wire payload readers.
 pub mod selectors {
     use serde_json::Value;
@@ -143,40 +82,40 @@ pub mod selectors {
 
 #[cfg(test)]
 mod tests {
-    use super::{keysets, selectors};
+    use super::{keys, selectors};
 
     #[test]
-    fn session_id_selector_accepts_aliases() {
+    fn session_id_selector_uses_canonical_key() {
         let payload = serde_json::json!({
-            "sessionId": "session-1",
+            "sessionID": "session-1",
         });
 
         assert_eq!(
-            selectors::first_str(&payload, keysets::SESSION_ID_ANY),
+            selectors::first_str(&payload, &[keys::SESSION_ID]),
             Some("session-1")
         );
     }
 
     #[test]
-    fn permission_id_selector_falls_back_to_request_id() {
+    fn permission_id_selector_uses_canonical_key() {
         let payload = serde_json::json!({
-            "requestID": "permission-1",
+            "permissionID": "permission-1",
         });
 
         assert_eq!(
-            selectors::first_str(&payload, keysets::PERMISSION_ID_ANY),
+            selectors::first_str(&payload, &[keys::PERMISSION_ID]),
             Some("permission-1")
         );
     }
 
     #[test]
-    fn tool_call_id_selector_accepts_snake_case() {
+    fn tool_call_id_selector_uses_canonical_key() {
         let payload = serde_json::json!({
-            "tool_call_id": "tool-1",
+            "toolCallId": "tool-1",
         });
 
         assert_eq!(
-            selectors::first_str(&payload, keysets::TOOL_CALL_ID_ANY),
+            selectors::first_str(&payload, &[keys::TOOL_CALL_ID]),
             Some("tool-1")
         );
     }
