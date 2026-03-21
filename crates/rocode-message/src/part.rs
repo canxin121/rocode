@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use strum_macros::{Display, EnumString};
 
 use crate::id::new_part_id;
 use crate::status::ToolCallStatus;
@@ -14,21 +15,26 @@ fn default_pending_status() -> String {
 }
 
 /// Canonical part kind string used for indexing/filtering.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, EnumString)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum PartKind {
     #[serde(rename = "text")]
     Text,
-    #[serde(rename = "tool_call")]
+    #[strum(serialize = "tool_call", serialize = "toolCall")]
+    #[serde(rename = "tool_call", alias = "toolCall")]
     ToolCall,
-    #[serde(rename = "tool_result")]
+    #[strum(serialize = "tool_result", serialize = "toolResult")]
+    #[serde(rename = "tool_result", alias = "toolResult")]
     ToolResult,
     #[serde(rename = "reasoning")]
     Reasoning,
     #[serde(rename = "file")]
     File,
-    #[serde(rename = "step_start")]
+    #[strum(serialize = "step_start", serialize = "stepStart")]
+    #[serde(rename = "step_start", alias = "stepStart")]
     StepStart,
-    #[serde(rename = "step_finish")]
+    #[strum(serialize = "step_finish", serialize = "stepFinish")]
+    #[serde(rename = "step_finish", alias = "stepFinish")]
     StepFinish,
     #[serde(rename = "snapshot")]
     Snapshot,
@@ -42,51 +48,6 @@ pub enum PartKind {
     Retry,
     #[serde(rename = "compaction")]
     Compaction,
-}
-
-impl PartKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::ToolCall => "tool_call",
-            Self::ToolResult => "tool_result",
-            Self::Reasoning => "reasoning",
-            Self::File => "file",
-            Self::StepStart => "step_start",
-            Self::StepFinish => "step_finish",
-            Self::Snapshot => "snapshot",
-            Self::Patch => "patch",
-            Self::Agent => "agent",
-            Self::Subtask => "subtask",
-            Self::Retry => "retry",
-            Self::Compaction => "compaction",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "text" => Some(Self::Text),
-            "tool_call" => Some(Self::ToolCall),
-            "tool_result" => Some(Self::ToolResult),
-            "reasoning" => Some(Self::Reasoning),
-            "file" => Some(Self::File),
-            "step_start" => Some(Self::StepStart),
-            "step_finish" => Some(Self::StepFinish),
-            "snapshot" => Some(Self::Snapshot),
-            "patch" => Some(Self::Patch),
-            "agent" => Some(Self::Agent),
-            "subtask" => Some(Self::Subtask),
-            "retry" => Some(Self::Retry),
-            "compaction" => Some(Self::Compaction),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for PartKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -381,10 +342,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn part_kind_parses_only_canonical_snake_case() {
-        assert_eq!(PartKind::parse("tool_result"), Some(PartKind::ToolResult));
-        assert_eq!(PartKind::parse("toolCall"), None);
-        assert_eq!(PartKind::parse("stepStart"), None);
+    fn part_kind_parses_snake_and_camel() {
+        assert_eq!(
+            "toolCall".parse::<PartKind>().ok(),
+            Some(PartKind::ToolCall)
+        );
+        assert_eq!(
+            "stepStart".parse::<PartKind>().ok(),
+            Some(PartKind::StepStart)
+        );
+        assert_eq!(
+            "tool_result".parse::<PartKind>().ok(),
+            Some(PartKind::ToolResult)
+        );
+        assert_eq!("step-start".parse::<PartKind>().ok(), None);
     }
 
     #[test]

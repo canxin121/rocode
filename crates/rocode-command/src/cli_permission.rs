@@ -82,7 +82,7 @@ fn format_permission_summary(
         "  {} {} {}",
         icon,
         style.bold(label.as_ref()),
-        style.dim(&format!("({})", permission.as_str()))
+        style.dim(&format!("({})", permission))
     ));
 
     // Show patterns (file paths, commands, etc.)

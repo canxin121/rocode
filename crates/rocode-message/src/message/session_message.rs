@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::finish::FinishReason;
 use rocode_types::Role;
 
 use crate::id::new_message_id;
@@ -13,6 +14,7 @@ mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
     pub const MODEL_ID: &str = "model_id";
     pub const MODE: &str = "mode";
+    pub const FINISH_REASON: &str = "finish_reason";
 }
 
 /// Canonical session message model shared across runtime/storage/UI layers.
@@ -247,6 +249,24 @@ impl SessionMessage {
         self.parts
             .retain(|part| !matches!(part.part_type, PartType::Text { .. }));
         self.add_text(text);
+    }
+
+    pub fn finish_reason(&self) -> Option<FinishReason> {
+        if let Some(reason) = self.finish.as_deref() {
+            return Some(FinishReason::from(reason));
+        }
+        self.metadata
+            .get(keys::FINISH_REASON)
+            .and_then(serde_json::Value::as_str)
+            .map(FinishReason::from)
+    }
+
+    pub fn set_finish_reason(&mut self, reason: FinishReason) {
+        self.finish = Some(reason.to_string());
+        self.metadata.insert(
+            keys::FINISH_REASON.to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
     }
 
     pub fn metadata_str(&self, key: &str) -> Option<&str> {

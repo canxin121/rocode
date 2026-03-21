@@ -47,7 +47,7 @@ fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset]) -> 
     let merged = merge(rulesets);
 
     let matched = merged.iter().rev().find(|rule| {
-        wildcard_match(permission, rule.permission.as_str())
+        wildcard_match(permission, rule.permission.as_ref())
             && wildcard_match(pattern, &rule.pattern)
     });
 
@@ -82,7 +82,8 @@ pub fn evaluate_tool_permission(
 
     // Step 2-3: map tool name and evaluate against rulesets
     let permission = tool_to_permission(tool_name);
-    evaluate(permission.as_str(), "*", rulesets).action
+    let permission_name = permission.to_string();
+    evaluate(&permission_name, "*", rulesets).action
 }
 
 fn default_ruleset() -> PermissionRuleset {

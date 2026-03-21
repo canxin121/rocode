@@ -704,14 +704,14 @@ fn build_builtin_preset_mode_list() -> Vec<ExecutionModeInfo> {
         .iter()
         .copied()
         .map(|preset| ExecutionModeInfo {
-            id: preset.as_str().to_string(),
-            name: preset.as_str().to_string(),
+            id: preset.to_string(),
+            name: preset.to_string(),
             kind: "preset".to_string(),
             description: Some(builtin_preset_mode_description(preset).to_string()),
             mode: None,
             hidden: None,
             color: None,
-            orchestrator: Some(preset.as_str().to_string()),
+            orchestrator: Some(preset.to_string()),
         })
         .collect()
 }

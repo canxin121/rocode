@@ -1334,7 +1334,7 @@ async fn build_cli_execution_runtime(
 fn cli_available_presets(config: &Config) -> Vec<String> {
     let mut names = BTreeSet::new();
     for preset in SchedulerPresetKind::public_presets() {
-        names.insert(preset.as_str().to_string());
+        names.insert(preset.to_string());
     }
 
     if let Some(path) = config

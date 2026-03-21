@@ -76,13 +76,7 @@ fn route_preset_description(kind: SchedulerPresetKind) -> &'static str {
 fn route_preset_list(presets: &[SchedulerPresetKind]) -> String {
     presets
         .iter()
-        .map(|preset| {
-            format!(
-                "- {}: {}.",
-                preset.as_str(),
-                route_preset_description(*preset)
-            )
-        })
+        .map(|preset| format!("- {}: {}.", preset, route_preset_description(*preset)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -90,7 +84,7 @@ fn route_preset_list(presets: &[SchedulerPresetKind]) -> String {
 fn route_preset_schema_values() -> String {
     SchedulerPresetKind::all()
         .iter()
-        .map(|preset| preset.as_str())
+        .map(|preset| preset.to_string())
         .collect::<Vec<_>>()
         .join(" | ")
 }
@@ -226,7 +220,7 @@ pub fn apply_route_decision(
     if let Some(preset_name) = decision.preset.as_deref() {
         if let Ok(kind) = preset_name.parse::<SchedulerPresetKind>() {
             suffix = default_post_route_stages(kind);
-            resolved_plan.orchestrator = Some(kind.as_str().to_string());
+            resolved_plan.orchestrator = Some(kind.to_string());
         }
     }
 

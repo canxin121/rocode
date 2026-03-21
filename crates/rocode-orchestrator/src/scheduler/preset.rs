@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::str::FromStr;
+use strum_macros::{Display, EnumString};
 
 use super::{
     scheduler_preset_definition, SchedulerConfig, SchedulerConfigError, SchedulerPresetDefinition,
@@ -23,7 +23,8 @@ pub struct SchedulerPresetMetadata {
     pub deprecated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerPresetKind {
     Sisyphus,
     Prometheus,
@@ -89,23 +90,13 @@ impl SchedulerPresetKind {
         self.metadata().deprecated
     }
 
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sisyphus => "sisyphus",
-            Self::Prometheus => "prometheus",
-            Self::Atlas => "atlas",
-            Self::Hephaestus => "hephaestus",
-        }
-    }
-
     pub fn from_profile_config(
         profile: &SchedulerProfileConfig,
     ) -> Result<Self, SchedulerConfigError> {
-        profile
-            .orchestrator
-            .as_deref()
-            .unwrap_or("sisyphus")
+        let orchestrator = profile.orchestrator.as_deref().unwrap_or("sisyphus");
+        orchestrator
             .parse()
+            .map_err(|_| SchedulerConfigError::UnknownOrchestrator(orchestrator.to_string()))
     }
 
     pub fn plan_from_profile(
@@ -167,20 +158,6 @@ pub fn scheduler_plan_from_file(
 ) -> Result<SchedulerProfilePlan, SchedulerConfigError> {
     let config = SchedulerConfig::load_from_file(path)?;
     scheduler_plan_from_config(&config)
-}
-
-impl FromStr for SchedulerPresetKind {
-    type Err = SchedulerConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "sisyphus" => Ok(Self::Sisyphus),
-            "prometheus" => Ok(Self::Prometheus),
-            "atlas" => Ok(Self::Atlas),
-            "hephaestus" => Ok(Self::Hephaestus),
-            other => Err(SchedulerConfigError::UnknownOrchestrator(other.to_string())),
-        }
-    }
 }
 
 pub fn scheduler_request_defaults_from_plan(
@@ -392,32 +369,42 @@ mod tests {
         assert_eq!(
             SchedulerPresetKind::public_presets()
                 .iter()
-                .map(|preset| preset.as_str())
+                .map(|preset| preset.to_string())
                 .collect::<Vec<_>>(),
-            vec!["sisyphus", "prometheus", "atlas", "hephaestus"]
+            vec![
+                "sisyphus".to_string(),
+                "prometheus".to_string(),
+                "atlas".to_string(),
+                "hephaestus".to_string()
+            ]
         );
         assert_eq!(
             SchedulerPresetKind::router_recommended_presets()
                 .iter()
-                .map(|preset| preset.as_str())
+                .map(|preset| preset.to_string())
                 .collect::<Vec<_>>(),
-            vec!["sisyphus", "prometheus", "atlas", "hephaestus"]
+            vec![
+                "sisyphus".to_string(),
+                "prometheus".to_string(),
+                "atlas".to_string(),
+                "hephaestus".to_string()
+            ]
         );
     }
 
     #[test]
     fn scheduler_omo_presets_are_public_and_recommended() {
         for preset in SchedulerPresetKind::public_presets() {
-            assert!(preset.is_public(), "{} should stay public", preset.as_str());
+            assert!(preset.is_public(), "{} should stay public", preset);
             assert!(
                 preset.is_router_recommended(),
                 "{} should stay router recommended",
-                preset.as_str()
+                preset
             );
             assert!(
                 !preset.is_deprecated(),
                 "{} should not be deprecated",
-                preset.as_str()
+                preset
             );
         }
     }

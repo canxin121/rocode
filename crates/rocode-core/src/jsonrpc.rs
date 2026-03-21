@@ -55,21 +55,14 @@ pub struct JsonRpcResponse {
 ///
 /// Uses `i64` for the error code to accommodate both standard codes
 /// (-32700 to -32603) and custom application codes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
+#[error("[{code}] {message}")]
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
-
-impl std::fmt::Display for JsonRpcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for JsonRpcError {}
 
 // ---------------------------------------------------------------------------
 // Notification

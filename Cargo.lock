@@ -3503,6 +3503,8 @@ dependencies = [
  "rocode-types",
  "serde",
  "serde_json",
+ "strum 0.26.3",
+ "strum_macros",
 ]
 
 [[package]]
@@ -3540,6 +3542,8 @@ dependencies = [
  "rocode-plugin",
  "serde",
  "serde_json",
+ "strum 0.26.3",
+ "strum_macros",
  "thiserror 2.0.18",
  "tokio",
 ]

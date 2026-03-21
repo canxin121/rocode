@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use rocode_agent::{AgentInfo, AgentMode, AgentRegistry};
@@ -58,9 +57,9 @@ fn resolve_builtin_scheduler_request_defaults(
     let profile_name = requested_profile
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    let preset = SchedulerPresetKind::from_str(profile_name).ok()?;
+    let preset = profile_name.parse::<SchedulerPresetKind>().ok()?;
     let profile = SchedulerProfileConfig {
-        orchestrator: Some(preset.as_str().to_string()),
+        orchestrator: Some(preset.to_string()),
         ..Default::default()
     };
     let plan = scheduler_plan_from_profile(Some(profile_name.to_string()), &profile).ok()?;
@@ -123,7 +122,8 @@ pub(super) fn scheduler_system_prompt_preview(
     profile: &SchedulerProfileConfig,
 ) -> String {
     let orchestrator = profile.orchestrator.as_deref().unwrap_or(profile_name);
-    SchedulerPresetKind::from_str(orchestrator)
+    orchestrator
+        .parse::<SchedulerPresetKind>()
         .ok()
         .map(|preset| preset.definition().system_prompt_preview().to_string())
         .unwrap_or_else(|| {
@@ -136,7 +136,7 @@ Boundary: preserve the profile's execution constraints and role semantics."
 }
 
 pub(super) fn scheduler_mode_kind(profile_name: &str) -> &'static str {
-    if SchedulerPresetKind::from_str(profile_name).is_ok() {
+    if profile_name.parse::<SchedulerPresetKind>().is_ok() {
         "preset"
     } else {
         "profile"
@@ -162,11 +162,11 @@ pub(super) fn resolve_scheduler_profile_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
 
-    if let Ok(preset) = SchedulerPresetKind::from_str(profile_name) {
+    if let Ok(preset) = profile_name.parse::<SchedulerPresetKind>() {
         return Some((
             profile_name.to_string(),
             SchedulerProfileConfig {
-                orchestrator: Some(preset.as_str().to_string()),
+                orchestrator: Some(preset.to_string()),
                 ..Default::default()
             },
         ));

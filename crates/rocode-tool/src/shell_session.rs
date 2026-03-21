@@ -828,7 +828,7 @@ mod tests {
                 permissions_clone
                     .lock()
                     .await
-                    .push(req.permission.as_str().to_string());
+                    .push(req.permission.to_string());
                 Ok(())
             }
         });
