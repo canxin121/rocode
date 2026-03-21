@@ -57,7 +57,7 @@ impl Tool for GlobTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let input: GlobToolInput = serde_json::from_value(args).unwrap_or_default();
+        let input = GlobToolInput::from(&args);
         let pattern = input
             .pattern
             .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?;

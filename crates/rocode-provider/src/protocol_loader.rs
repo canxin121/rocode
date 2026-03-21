@@ -1,3 +1,4 @@
+use rocode_types::deserialize_opt_string_lossy;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,19 +46,6 @@ pub struct DecoderConfig {
 
 pub struct ProtocolLoader {
     base_path: Option<PathBuf>,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
 }
 
 #[derive(Debug, Default, Deserialize)]

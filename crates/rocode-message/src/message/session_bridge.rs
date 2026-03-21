@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::session_message::SessionMessage;
@@ -11,12 +10,6 @@ use super::{
 };
 use crate::part::{MessagePart, PartType};
 use crate::status::ToolCallStatus;
-
-#[derive(Debug, Deserialize)]
-struct UnifiedPartsEnvelope {
-    #[serde(default)]
-    parts: Vec<Part>,
-}
 
 fn datetime_from_millis_or_fallback(ms: Option<i64>, fallback: DateTime<Utc>) -> DateTime<Utc> {
     ms.and_then(DateTime::from_timestamp_millis)
@@ -78,10 +71,7 @@ pub fn session_message_to_unified_message(message: &SessionMessage) -> MessageWi
     let agent = metadata_string(&metadata, "agent").unwrap_or_else(|| "general".to_string());
     let mode = metadata_string(&metadata, "mode").unwrap_or_else(|| "default".to_string());
     let variant = metadata_string(&metadata, "variant");
-    let finish = message
-        .finish
-        .clone()
-        .or_else(|| metadata_string(&metadata, "finish_reason"));
+    let finish = message.finish.clone();
 
     let info = match message.role {
         rocode_types::Role::User => MessageInfo::User {
@@ -198,7 +188,7 @@ pub fn unified_message_to_session_message(message: MessageWithParts) -> SessionM
     let created_at =
         DateTime::from_timestamp_millis(info.created_at_millis()).unwrap_or_else(Utc::now);
     let usage = usage.or_else(|| assistant_usage_from_info(&info));
-    let finish = finish.or_else(|| info.finish_reason().map(ToString::to_string));
+    let finish = finish;
     let parts = unified_parts_to_session(parts, created_at, &id);
 
     SessionMessage {
@@ -748,10 +738,7 @@ pub fn unified_parts_to_session(
 
 /// Parse unified-only storage payload into canonical session parts.
 ///
-/// Supports:
-/// - unified `Vec<Part>`
-/// - unified `MessageWithParts`
-/// - `{ parts: ... }` envelope for unified arrays
+/// Supports canonical unified `Vec<Part>` payload only.
 pub fn try_parse_unified_parts(
     raw: &str,
     fallback_created_at: DateTime<Utc>,
@@ -760,20 +747,6 @@ pub fn try_parse_unified_parts(
     if let Ok(parts) = serde_json::from_str::<Vec<Part>>(raw) {
         return Some(unified_parts_to_session(
             parts,
-            fallback_created_at,
-            message_id,
-        ));
-    }
-    if let Ok(message) = serde_json::from_str::<MessageWithParts>(raw) {
-        return Some(unified_parts_to_session(
-            message.parts,
-            fallback_created_at,
-            message_id,
-        ));
-    }
-    if let Ok(env) = serde_json::from_str::<UnifiedPartsEnvelope>(raw) {
-        return Some(unified_parts_to_session(
-            env.parts,
             fallback_created_at,
             message_id,
         ));
@@ -885,7 +858,7 @@ mod tests {
             parts: Vec::new(),
             metadata: HashMap::new(),
             usage: None,
-            finish: None,
+            finish: Some("stop".to_string()),
         };
 
         let converted = unified_message_to_session_message(message);
@@ -1036,6 +1009,32 @@ mod tests {
         .expect("serialize canonical part array");
 
         let parsed = try_parse_unified_parts(&raw, chrono::Utc::now(), "msg_legacy");
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn try_parse_unified_parts_rejects_message_wrapper_object() {
+        let raw = serde_json::json!({
+            "info": {
+                "role": "system",
+                "id": "msg_1",
+                "session_id": "ses_1",
+                "time": { "created": 1 }
+            },
+            "parts": [],
+            "metadata": {}
+        })
+        .to_string();
+
+        let parsed = try_parse_unified_parts(&raw, chrono::Utc::now(), "msg_1");
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn try_parse_unified_parts_rejects_parts_envelope_object() {
+        let raw = serde_json::json!({ "parts": [] }).to_string();
+
+        let parsed = try_parse_unified_parts(&raw, chrono::Utc::now(), "msg_1");
         assert!(parsed.is_none());
     }
 

@@ -7,6 +7,7 @@ use walkdir::WalkDir;
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_types::deserialize_opt_u64_lossy;
 
 const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
@@ -21,18 +22,6 @@ struct ReadAttachment {
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     filename: Option<String>,
-}
-
-fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(number)) => number.as_u64(),
-        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
-        _ => None,
-    })
 }
 
 const INSTRUCTION_FILES: &[&str] = &[

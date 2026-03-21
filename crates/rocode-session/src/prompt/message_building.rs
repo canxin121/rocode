@@ -4,6 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rocode_provider::{get_model_context_limit, ChatResponse, Content, Provider};
+use rocode_types::{
+    deserialize_opt_f64_lossy, deserialize_opt_string_lossy, deserialize_opt_u64_lossy,
+};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -30,41 +33,6 @@ type HistoricalToolResult = (
 );
 
 type HistoricalToolResultMap = HashMap<String, HistoricalToolResult>;
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_u64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().ok(),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_f64_lossy<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(value)) => value.as_f64(),
-        Some(serde_json::Value::String(raw)) => raw.trim().parse::<f64>().ok(),
-        _ => None,
-    })
-}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct HistoricalUsageWire {

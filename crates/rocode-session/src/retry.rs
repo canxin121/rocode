@@ -1,3 +1,4 @@
+use rocode_types::deserialize_opt_string_lossy;
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -58,17 +59,6 @@ pub struct ApiErrorInfo {
     pub is_retryable: bool,
     pub response_headers: Option<std::collections::HashMap<String, String>>,
     pub response_body: Option<String>,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 pub fn retryable(error: &crate::MessageError) -> Option<String> {

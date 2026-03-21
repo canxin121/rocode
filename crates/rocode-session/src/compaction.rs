@@ -852,17 +852,6 @@ pub fn generate_continue_message() -> String {
 }
 
 fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>, Vec<String>) {
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
     fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -891,7 +880,10 @@ fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>
 
     #[derive(Debug, Deserialize, Default)]
     struct CompactionHookStructuredWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         prompt: Option<String>,
         #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
         context: Vec<String>,

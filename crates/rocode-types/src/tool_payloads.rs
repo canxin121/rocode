@@ -158,6 +158,14 @@ where
     })
 }
 
+/// Deserialize an optional u32 from a JSON value, accepting number/string/bool.
+pub fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_opt_u64_lossy(deserializer)?.and_then(|value| u32::try_from(value).ok()))
+}
+
 /// Deserialize an optional i64 from a JSON value, accepting number/string/bool.
 pub fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where
@@ -169,6 +177,21 @@ where
         Some(Value::Number(value)) => value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)),
         Some(Value::Bool(value)) => Some(i64::from(value)),
         Some(Value::String(raw)) => raw.trim().parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
+/// Deserialize an optional f64 from a JSON value, accepting number/string/bool.
+pub fn deserialize_opt_f64_lossy<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(value)) => value.as_f64(),
+        Some(Value::Bool(value)) => Some(if value { 1.0 } else { 0.0 }),
+        Some(Value::String(raw)) => raw.trim().parse::<f64>().ok(),
         _ => None,
     })
 }

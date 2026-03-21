@@ -13,40 +13,22 @@ fn default_pending_status() -> String {
     "pending".to_string()
 }
 
-fn normalize_tag(value: &str) -> String {
-    let trimmed = value.trim();
-    let mut out = String::with_capacity(trimmed.len() + 2);
-
-    for (idx, ch) in trimmed.chars().enumerate() {
-        if ch.is_ascii_uppercase() {
-            if idx > 0 && !out.ends_with('_') {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push(ch.to_ascii_lowercase());
-        }
-    }
-
-    out
-}
-
 /// Canonical part kind string used for indexing/filtering.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum PartKind {
     #[serde(rename = "text")]
     Text,
-    #[serde(rename = "tool_call", alias = "toolCall")]
+    #[serde(rename = "tool_call")]
     ToolCall,
-    #[serde(rename = "tool_result", alias = "toolResult")]
+    #[serde(rename = "tool_result")]
     ToolResult,
     #[serde(rename = "reasoning")]
     Reasoning,
     #[serde(rename = "file")]
     File,
-    #[serde(rename = "step_start", alias = "stepStart")]
+    #[serde(rename = "step_start")]
     StepStart,
-    #[serde(rename = "step_finish", alias = "stepFinish")]
+    #[serde(rename = "step_finish")]
     StepFinish,
     #[serde(rename = "snapshot")]
     Snapshot,
@@ -82,7 +64,7 @@ impl PartKind {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match normalize_tag(value).as_str() {
+        match value {
             "text" => Some(Self::Text),
             "tool_call" => Some(Self::ToolCall),
             "tool_result" => Some(Self::ToolResult),
@@ -204,9 +186,8 @@ impl ToolState {
 pub struct MessagePart {
     pub id: String,
     pub part_type: PartType,
-    #[serde(alias = "createdAt")]
     pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "messageId")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }
 
@@ -233,7 +214,6 @@ impl MessagePart {
 /// Canonical part payload.
 ///
 /// - Writes as `snake_case` tags.
-/// - Reads camelCase tags for TS compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum PartType {
@@ -245,7 +225,7 @@ pub enum PartType {
         #[serde(skip_serializing_if = "Option::is_none")]
         ignored: Option<bool>,
     },
-    #[serde(rename = "tool_call", alias = "toolCall")]
+    #[serde(rename = "tool_call")]
     ToolCall {
         id: String,
         name: String,
@@ -258,12 +238,10 @@ pub enum PartType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state: Option<ToolState>,
     },
-    #[serde(rename = "tool_result", alias = "toolResult")]
+    #[serde(rename = "tool_result")]
     ToolResult {
-        #[serde(alias = "toolCallId")]
         tool_call_id: String,
         content: String,
-        #[serde(alias = "isError")]
         is_error: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
@@ -280,13 +258,13 @@ pub enum PartType {
         filename: String,
         mime: String,
     },
-    #[serde(rename = "step_start", alias = "stepStart")]
+    #[serde(rename = "step_start")]
     StepStart {
         id: String,
         #[serde(default)]
         name: String,
     },
-    #[serde(rename = "step_finish", alias = "stepFinish")]
+    #[serde(rename = "step_finish")]
     StepFinish {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,23 +381,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn part_kind_parses_snake_and_camel() {
-        assert_eq!(PartKind::parse("toolCall"), Some(PartKind::ToolCall));
-        assert_eq!(PartKind::parse("stepStart"), Some(PartKind::StepStart));
+    fn part_kind_parses_only_canonical_snake_case() {
         assert_eq!(PartKind::parse("tool_result"), Some(PartKind::ToolResult));
-        assert_eq!(PartKind::parse("step-start"), None);
+        assert_eq!(PartKind::parse("toolCall"), None);
+        assert_eq!(PartKind::parse("stepStart"), None);
     }
 
     #[test]
-    fn part_type_deserializes_camel_case_tag() {
+    fn part_type_deserializes_snake_case_tag() {
         let value = serde_json::json!({
-            "type": "toolCall",
+            "type": "tool_call",
             "id": "call_1",
             "name": "bash",
             "input": {"command": "ls"},
             "status": "running"
         });
-        let part: PartType = serde_json::from_value(value).expect("parse toolCall");
+        let part: PartType = serde_json::from_value(value).expect("parse tool_call");
         match part {
             PartType::ToolCall {
                 id, name, status, ..
@@ -433,19 +410,13 @@ mod tests {
     }
 
     #[test]
-    fn part_type_deserializes_camel_step_tag() {
+    fn part_type_rejects_legacy_camel_case_tag() {
         let value = serde_json::json!({
             "type": "stepStart",
             "id": "step_1"
         });
-        let part: PartType = serde_json::from_value(value).expect("parse stepStart");
-        match part {
-            PartType::StepStart { id, name } => {
-                assert_eq!(id, "step_1");
-                assert!(name.is_empty());
-            }
-            _ => panic!("expected step start"),
-        }
+        let parsed = serde_json::from_value::<PartType>(value);
+        assert!(parsed.is_err());
     }
 
     #[test]

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_types::{deserialize_bool_lossy, deserialize_opt_string_lossy};
 
 use crate::task::TaskTool;
 use crate::todo::TodoWriteTool;
@@ -168,35 +169,6 @@ struct TaskInvokeArgs<'a> {
 #[derive(Debug, Serialize)]
 struct TodoWriteArgs {
     todos: Vec<TodoItemData>,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
-}
-
-fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Bool(value)) => value,
-        Some(serde_json::Value::Number(value)) => value.as_i64().is_some_and(|value| value != 0),
-        Some(serde_json::Value::String(value)) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        _ => false,
-    })
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue},
     Json,
 };
+use rocode_types::deserialize_opt_string_lossy;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
@@ -318,19 +319,6 @@ pub(crate) fn resolved_session_directory(raw: &str) -> String {
         .unwrap_or(candidate)
         .to_string_lossy()
         .to_string()
-}
-
-fn deserialize_opt_string_lossy<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 #[derive(Debug, Default, Deserialize)]

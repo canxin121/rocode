@@ -1,29 +1,11 @@
 use std::collections::HashMap;
 
 use crate::models;
+use rocode_types::deserialize_opt_bool_lossy;
 use serde::{Deserialize, Serialize};
 
 use super::model_config::sdk_key;
 use super::normalize::slug_override;
-
-fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Bool(value)) => Some(value),
-        Some(serde_json::Value::Number(value)) => value.as_i64().map(|value| value != 0),
-        Some(serde_json::Value::String(value)) => {
-            match value.trim().to_ascii_lowercase().as_str() {
-                "1" | "true" | "yes" | "on" => Some(true),
-                "0" | "false" | "no" | "off" => Some(false),
-                _ => None,
-            }
-        }
-        _ => None,
-    })
-}
 
 #[derive(Debug, Default, Deserialize)]
 struct RuntimeOptionsWire {

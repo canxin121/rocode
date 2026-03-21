@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
+use rocode_types::deserialize_opt_string_lossy;
 
 use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
 #[cfg(test)]
@@ -33,17 +34,6 @@ struct ToolExecutionOptions {
     provider_id: String,
     model_id: String,
     hooks: PromptHooks,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
 }
 
 #[derive(Debug, Deserialize, Default)]

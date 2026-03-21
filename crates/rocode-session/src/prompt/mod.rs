@@ -1537,28 +1537,27 @@ impl SessionPrompt {
             }
         };
 
-        fn deserialize_opt_string_lossy<'de, D>(
-            deserializer: D,
-        ) -> std::result::Result<Option<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            Ok(match value {
-                Some(serde_json::Value::String(value)) => Some(value),
-                _ => None,
-            })
-        }
-
         #[derive(Debug, Default, Deserialize)]
         struct ResumeSessionMetadataWire {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_provider: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             agent: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             model_variant: Option<String>,
         }
 

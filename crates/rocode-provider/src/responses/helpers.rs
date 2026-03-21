@@ -521,19 +521,6 @@ pub(super) fn process_stream_chunk(
 pub(super) fn parse_output_items(
     output: &[Value],
 ) -> (Vec<ContentPart>, bool, Vec<Vec<LogprobEntry>>) {
-    fn deserialize_opt_string_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
     fn deserialize_opt_logprobs_lossy<'de, D>(
         deserializer: D,
     ) -> std::result::Result<Option<Vec<LogprobEntry>>, D::Error>
@@ -575,7 +562,10 @@ pub(super) fn parse_output_items(
 
     #[derive(Debug, Default, Deserialize)]
     struct ReasoningSummaryPartWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
         text: Option<String>,
     }
 
@@ -584,7 +574,10 @@ pub(super) fn parse_output_items(
     enum MessageContentWire {
         #[serde(rename = "output_text")]
         OutputText {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             text: Option<String>,
             #[serde(default, deserialize_with = "deserialize_opt_logprobs_lossy")]
             logprobs: Option<Vec<LogprobEntry>>,
@@ -598,9 +591,15 @@ pub(super) fn parse_output_items(
     enum OutputItemWire {
         #[serde(rename = "reasoning")]
         Reasoning {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             encrypted_content: Option<String>,
             #[serde(default, deserialize_with = "deserialize_vec_reasoning_summary_lossy")]
             summary: Vec<ReasoningSummaryPartWire>,
@@ -612,23 +611,38 @@ pub(super) fn parse_output_items(
         },
         #[serde(rename = "function_call")]
         FunctionCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             call_id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             name: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             arguments: Option<String>,
         },
         #[serde(rename = "web_search_call")]
         WebSearchCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
             #[serde(default)]
             action: Option<Value>,
         },
         #[serde(rename = "file_search_call")]
         FileSearchCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
             #[serde(default)]
             queries: Option<Value>,
@@ -637,7 +651,10 @@ pub(super) fn parse_output_items(
         },
         #[serde(rename = "code_interpreter_call")]
         CodeInterpreterCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
             #[serde(default)]
             code: Option<Value>,
@@ -648,21 +665,30 @@ pub(super) fn parse_output_items(
         },
         #[serde(rename = "image_generation_call")]
         ImageGenerationCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
             #[serde(default)]
             result: Option<Value>,
         },
         #[serde(rename = "local_shell_call")]
         LocalShellCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             call_id: Option<String>,
             #[serde(default)]
             action: Option<Value>,
         },
         #[serde(rename = "computer_call")]
         ComputerCall {
-            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            #[serde(
+                default,
+                deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            )]
             id: Option<String>,
             #[serde(default)]
             status: Option<Value>,

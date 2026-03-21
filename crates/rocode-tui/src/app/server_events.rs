@@ -1,5 +1,7 @@
 use super::*;
-use rocode_types::{SessionRunStatus, SessionRunStatusWire};
+use rocode_types::{
+    deserialize_opt_string_lossy, deserialize_opt_u32_lossy, SessionRunStatus, SessionRunStatusWire,
+};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -324,31 +326,6 @@ struct OutputBlockEvent {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     id: Option<String>,
     block: serde_json::Value,
-}
-
-fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::String(value)) => Some(value),
-        _ => None,
-    })
-}
-
-fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(number)) => {
-            number.as_u64().and_then(|v| u32::try_from(v).ok())
-        }
-        Some(serde_json::Value::String(raw)) => raw.parse::<u32>().ok(),
-        _ => None,
-    })
 }
 
 fn deserialize_u32_lossy<'de, D>(deserializer: D) -> Result<u32, D::Error>
