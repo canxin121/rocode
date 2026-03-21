@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use reqwest::blocking::Client;
+use strum_macros::AsRefStr;
 use walkdir::WalkDir;
 
 use crate::context_docs::{
@@ -15,21 +16,12 @@ const REMOTE_DOCS_INDEX_TIMEOUT_SECS: u64 = 20;
 const MAX_REMOTE_DOCS_INDEX_BYTES: usize = 2 * 1024 * 1024;
 const DOCS_FETCH_USER_AGENT: &str = "ROCode context_docs/2026.3.4";
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum ContextDocsBackendKind {
     DocsIndex,
     MarkdownBundle,
     RemoteDocsIndex,
-}
-
-impl ContextDocsBackendKind {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::DocsIndex => "docs_index",
-            Self::MarkdownBundle => "markdown_bundle",
-            Self::RemoteDocsIndex => "remote_docs_index",
-        }
-    }
 }
 
 pub(crate) fn load_registered_docs_source(

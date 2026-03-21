@@ -3,7 +3,7 @@ use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
-use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
+use strum_macros::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::git_runtime::{ensure_git_available, run_git_command, DEFAULT_GIT_TIMEOUT_SECS};
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
@@ -33,6 +33,7 @@ It exists to give models stable, structured git semantics instead of free-form s
     Eq,
     Serialize,
     Deserialize,
+    AsRefStr,
     Display,
     EnumIter,
     EnumString,
@@ -47,12 +48,6 @@ enum RepoHistoryOperation {
     ShowCommit,
     DiffUncommitted,
     Blame,
-}
-
-impl RepoHistoryOperation {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +193,7 @@ impl RepoHistoryTool {
         let mut metadata = Metadata::new();
         metadata.insert(
             tool_arg_keys::OPERATION.to_string(),
-            serde_json::json!(RepoHistoryOperation::Head.as_str()),
+            serde_json::json!(RepoHistoryOperation::Head.as_ref()),
         );
         metadata.insert(
             tool_arg_keys::HEAD.to_string(),
@@ -424,7 +419,7 @@ impl Tool for RepoHistoryTool {
 
     fn parameters(&self) -> serde_json::Value {
         let operations: Vec<&'static str> = RepoHistoryOperation::iter()
-            .map(RepoHistoryOperation::as_str)
+            .map(|operation| <&'static str>::from(operation))
             .collect();
         serde_json::json!({
             "type": "object",
@@ -478,7 +473,7 @@ impl Tool for RepoHistoryTool {
         let mut permission = PermissionRequest::new(BuiltinToolName::RepoHistory.as_str())
             .with_metadata(
                 tool_arg_keys::OPERATION,
-                serde_json::json!(input.operation.as_str()),
+                serde_json::json!(input.operation.as_ref()),
             )
             .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
             .always_allow();
@@ -624,7 +619,7 @@ fn base_metadata(input: &RepoHistoryInput, repo_root: &Path) -> Metadata {
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(input.operation.as_str()),
+        serde_json::json!(input.operation.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::REPO_ROOT.to_string(),

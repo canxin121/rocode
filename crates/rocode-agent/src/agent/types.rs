@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use strum_macros::{AsRefStr, Display, EnumString};
 
 use rocode_permission::PermissionRuleset;
 
@@ -10,8 +11,11 @@ pub struct GeneratedAgentConfig {
     pub system_prompt: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, Display, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum BuiltinAgent {
     Build,
     Plan,
@@ -31,26 +35,6 @@ pub enum BuiltinAgent {
 }
 
 impl BuiltinAgent {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Build => "build",
-            Self::Plan => "plan",
-            Self::General => "general",
-            Self::Explore => "explore",
-            Self::DeepWorker => "deep-worker",
-            Self::ArchitectureAdvisor => "architecture-advisor",
-            Self::DocsResearcher => "docs-researcher",
-            Self::CodeExplorer => "code-explorer",
-            Self::MediaReader => "media-reader",
-            Self::Metis => "metis",
-            Self::Momus => "momus",
-            Self::Oracle => "oracle",
-            Self::SisyphusJunior => "sisyphus-junior",
-            Self::Compaction => "compaction",
-            Self::Title => "title",
-        }
-    }
-
     pub const fn all() -> [BuiltinAgent; 15] {
         [
             BuiltinAgent::Build,

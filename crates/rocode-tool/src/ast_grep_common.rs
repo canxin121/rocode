@@ -1,6 +1,7 @@
 use ast_grep_core::Pattern as AstPattern;
 use ast_grep_language::SupportLang;
 use std::path::{Component, Path, PathBuf};
+use strum_macros::AsRefStr;
 use walkdir::DirEntry;
 
 use crate::{ToolContext, ToolError};
@@ -31,18 +32,11 @@ pub(crate) const DEFAULT_IGNORED_DIRS: &[&str] = &[
     "logs",
 ];
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, AsRefStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum AstGrepLanguage {
     Rust,
-}
-
-impl AstGrepLanguage {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-        }
-    }
 }
 
 pub(crate) fn compile_pattern(

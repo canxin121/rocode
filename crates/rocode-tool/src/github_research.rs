@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use strum::IntoEnumIterator;
-use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
+use strum_macros::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -52,6 +52,7 @@ GitHub-native platform operations use the GitHub API:
     Eq,
     Serialize,
     Deserialize,
+    AsRefStr,
     Display,
     EnumIter,
     EnumString,
@@ -74,12 +75,6 @@ enum GitHubResearchOperation {
     ListTags,
     GitLog,
     GitBlame,
-}
-
-impl GitHubResearchOperation {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1605,7 +1600,7 @@ impl Tool for GitHubResearchTool {
 
     fn parameters(&self) -> serde_json::Value {
         let operations: Vec<&'static str> = GitHubResearchOperation::iter()
-            .map(GitHubResearchOperation::as_str)
+            .map(|operation| <&'static str>::from(operation))
             .collect();
         serde_json::json!({
             "type": "object",
@@ -1700,7 +1695,7 @@ impl Tool for GitHubResearchTool {
             .with_pattern(&input.repo)
             .with_metadata(
                 tool_arg_keys::OPERATION,
-                serde_json::json!(input.operation.as_str()),
+                serde_json::json!(input.operation.as_ref()),
             )
             .with_metadata(tool_arg_keys::REPO, serde_json::json!(&input.repo))
             .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
@@ -1944,7 +1939,7 @@ fn base_metadata(input: &GitHubResearchInput) -> Metadata {
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(input.operation.as_str()),
+        serde_json::json!(input.operation.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::REPO.to_string(),

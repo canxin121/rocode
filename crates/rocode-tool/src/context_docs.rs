@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
-use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
+use strum_macros::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::context_docs_backend::{
     load_registered_docs_source, resolve_registered_docs_source_display,
@@ -44,6 +44,7 @@ Not yet included:
     Eq,
     Serialize,
     Deserialize,
+    AsRefStr,
     Display,
     EnumIter,
     EnumString,
@@ -55,12 +56,6 @@ enum ContextDocsOperation {
     ResolveLibrary,
     QueryDocs,
     GetPage,
-}
-
-impl ContextDocsOperation {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,7 +238,7 @@ impl Tool for ContextDocsTool {
 
     fn parameters(&self) -> serde_json::Value {
         let operations: Vec<&'static str> = ContextDocsOperation::iter()
-            .map(ContextDocsOperation::as_str)
+            .map(|operation| <&'static str>::from(operation))
             .collect();
         serde_json::json!({
             "type": "object",
@@ -301,7 +296,7 @@ impl Tool for ContextDocsTool {
         let mut permission = crate::PermissionRequest::new(BuiltinToolName::ContextDocs.as_str())
             .with_metadata(
                 tool_arg_keys::OPERATION,
-                serde_json::json!(input.operation.as_str()),
+                serde_json::json!(input.operation.as_ref()),
             )
             .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
             .always_allow();
@@ -456,7 +451,7 @@ fn execute_resolve_library(
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(ContextDocsOperation::ResolveLibrary.as_str()),
+        serde_json::json!(ContextDocsOperation::ResolveLibrary.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::LIBRARY.to_string(),
@@ -542,7 +537,7 @@ fn execute_query_docs(
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(ContextDocsOperation::QueryDocs.as_str()),
+        serde_json::json!(ContextDocsOperation::QueryDocs.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::LIBRARY_ID.to_string(),
@@ -552,7 +547,7 @@ fn execute_query_docs(
     metadata.insert(tool_arg_keys::RESULTS.to_string(), serde_json::json!(hits));
     metadata.insert(
         tool_arg_keys::BACKEND.to_string(),
-        serde_json::json!(backend.as_str()),
+        serde_json::json!(backend.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::TRUNCATED.to_string(),
@@ -639,7 +634,7 @@ fn execute_get_page(
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(ContextDocsOperation::GetPage.as_str()),
+        serde_json::json!(ContextDocsOperation::GetPage.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::LIBRARY_ID.to_string(),
@@ -648,7 +643,7 @@ fn execute_get_page(
     metadata.insert(tool_arg_keys::PAGE.to_string(), serde_json::json!(view));
     metadata.insert(
         tool_arg_keys::BACKEND.to_string(),
-        serde_json::json!(backend.as_str()),
+        serde_json::json!(backend.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::TRUNCATED.to_string(),
@@ -1339,7 +1334,9 @@ mod tests {
         let ops = schema["properties"]["operation"]["enum"]
             .as_array()
             .expect("enum should exist");
-        for expected in ContextDocsOperation::iter().map(ContextDocsOperation::as_str) {
+        for expected in
+            ContextDocsOperation::iter().map(|operation| <&'static str>::from(operation))
+        {
             assert!(ops.iter().any(|v| v == expected), "missing {expected}");
         }
     }
@@ -1409,7 +1406,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::ResolveLibrary.as_str(),
+                    "operation": ContextDocsOperation::ResolveLibrary.as_ref(),
                     "library": "react router"
                 }),
                 tool_ctx_with_registry(&registry_path),
@@ -1431,7 +1428,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::QueryDocs.as_str(),
+                    "operation": ContextDocsOperation::QueryDocs.as_ref(),
                     "library_id": "react-router",
                     "query": "loader redirect"
                 }),
@@ -1454,7 +1451,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::GetPage.as_str(),
+                    "operation": ContextDocsOperation::GetPage.as_ref(),
                     "library_id": "react-router",
                     "page_id": "guides/data-loading"
                 }),
@@ -1477,7 +1474,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::QueryDocs.as_str(),
+                    "operation": ContextDocsOperation::QueryDocs.as_ref(),
                     "library_id": "react-router",
                     "query": "loader redirect"
                 }),
@@ -1504,7 +1501,7 @@ mod tests {
         let result = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::GetPage.as_str(),
+                    "operation": ContextDocsOperation::GetPage.as_ref(),
                     "library_id": "react-router",
                     "page_id": "guides/loaders"
                 }),
@@ -1529,7 +1526,7 @@ mod tests {
         let error = tool
             .execute(
                 serde_json::json!({
-                    "operation": ContextDocsOperation::ResolveLibrary.as_str(),
+                    "operation": ContextDocsOperation::ResolveLibrary.as_ref(),
                     "library": "react router"
                 }),
                 ToolContext::new("session-1".into(), "message-1".into(), ".".into()),

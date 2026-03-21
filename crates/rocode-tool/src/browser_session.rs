@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use strum::IntoEnumIterator;
-use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
+use strum_macros::{AsRefStr, Display, EnumIter, EnumString, IntoStaticStr};
 use tokio::sync::RwLock;
 use url::Url;
 
@@ -35,6 +35,7 @@ This is not a JS browser. It is the single authority for stateful web page navig
     Deserialize,
     PartialEq,
     Eq,
+    AsRefStr,
     Display,
     EnumIter,
     EnumString,
@@ -48,12 +49,6 @@ enum BrowserSessionOperation {
     Read,
     Status,
     Terminate,
-}
-
-impl BrowserSessionOperation {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -371,7 +366,7 @@ impl Tool for BrowserSessionTool {
 
     fn parameters(&self) -> serde_json::Value {
         let operations: Vec<&'static str> = BrowserSessionOperation::iter()
-            .map(BrowserSessionOperation::as_str)
+            .map(|operation| <&'static str>::from(operation))
             .collect();
         serde_json::json!({
             "type": "object",
@@ -679,7 +674,7 @@ fn session_metadata(operation: BrowserSessionOperation, session: &BrowserSession
     let mut metadata = Metadata::new();
     metadata.insert(
         tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(operation.as_str()),
+        serde_json::json!(operation.as_ref()),
     );
     metadata.insert(
         tool_arg_keys::SESSION.to_string(),

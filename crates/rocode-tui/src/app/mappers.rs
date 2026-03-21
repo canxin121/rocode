@@ -338,7 +338,10 @@ pub(super) fn provider_from_model(model: &str) -> Option<String> {
 
 pub(super) fn map_api_todo(item: &crate::api::ApiTodoItem) -> crate::context::TodoItem {
     use crate::context::{TodoItem, TodoStatus};
-    let status = TodoStatus::parse(item.status.as_str()).unwrap_or(TodoStatus::Pending);
+    let status = item
+        .status
+        .parse::<TodoStatus>()
+        .unwrap_or(TodoStatus::Pending);
     TodoItem {
         content: item.content.clone(),
         status,

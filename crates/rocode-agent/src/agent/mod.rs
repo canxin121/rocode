@@ -34,10 +34,10 @@ mod tests {
         let registry = AgentRegistry::new();
         for builtin in BuiltinAgent::all() {
             let agent = registry
-                .get(builtin.as_str())
-                .unwrap_or_else(|| panic!("missing builtin agent '{}'", builtin.as_str()));
+                .get(builtin.as_ref())
+                .unwrap_or_else(|| panic!("missing builtin agent '{}'", builtin.as_ref()));
             assert!(agent.native, "builtin agent should be native");
-            assert_eq!(agent.name, builtin.as_str());
+            assert_eq!(agent.name, builtin.as_ref());
         }
 
         assert!(matches!(

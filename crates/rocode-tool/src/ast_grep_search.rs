@@ -174,7 +174,7 @@ impl Tool for AstGrepSearchTool {
         ctx.ask_permission(
             PermissionRequest::new(BuiltinToolName::AstGrepSearch.as_str())
                 .with_pattern(&input.pattern)
-                .with_metadata("language", serde_json::json!(input.language.as_str()))
+                .with_metadata("language", serde_json::json!(input.language.as_ref()))
                 .with_metadata("path", serde_json::json!(search_root))
                 .always_allow(),
         )
@@ -215,7 +215,7 @@ impl Tool for AstGrepSearchTool {
         );
         metadata.insert(
             "language".to_string(),
-            serde_json::json!(input.language.as_str()),
+            serde_json::json!(input.language.as_ref()),
         );
         metadata.insert("engine".to_string(), serde_json::json!("ast-grep"));
         metadata.insert(
