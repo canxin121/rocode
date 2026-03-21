@@ -14,10 +14,10 @@ use crate::session_runtime::events::{
     broadcast_server_event, broadcast_session_updated, ServerEvent,
 };
 use crate::{ApiError, Result, ServerState};
+use rocode_core::contracts::run_status::SessionStatusInfo;
 use rocode_session::message_model::{
     session_message_to_unified_message, unified_parts_to_session, Part as ModelPart,
 };
-use rocode_session::run_status::SessionStatusInfo;
 
 fn parse_update_part_payload(
     payload: ModelPart,

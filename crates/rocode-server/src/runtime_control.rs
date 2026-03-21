@@ -1,10 +1,10 @@
 use chrono::Utc;
 use rocode_command::stage_protocol::{ExecutionNode, ExecutionNodeKind, ExecutionNodeStatus};
-pub use rocode_session::execution::{
+pub use rocode_core::contracts::execution::{
     ExecutionKind, ExecutionStatus, SessionExecutionNode, SessionExecutionTopology,
 };
-pub use rocode_session::question::{QuestionInfo, QuestionItemInfo, QuestionOptionInfo};
-pub use rocode_session::run_status::{PendingStatusReason, SessionRunStatus};
+pub use rocode_core::contracts::question::{QuestionInfo, QuestionItemInfo, QuestionOptionInfo};
+pub use rocode_core::contracts::run_status::{PendingStatusReason, SessionRunStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

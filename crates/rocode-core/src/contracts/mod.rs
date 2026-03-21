@@ -1,5 +1,6 @@
 pub mod agent_tasks;
 pub mod attachments;
+pub mod execution;
 pub mod events;
 pub mod fs;
 pub mod mcp;
@@ -8,8 +9,11 @@ pub mod patch;
 pub mod permission;
 pub mod plugin_hooks;
 pub mod provider;
+pub mod question;
+pub mod run_status;
 pub mod scheduler;
 pub mod session;
+pub mod status;
 pub mod task;
 pub mod todo;
 pub mod tools;

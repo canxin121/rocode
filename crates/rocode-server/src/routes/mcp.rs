@@ -358,12 +358,17 @@ fn parse_runtime_from_loaded_config(
             let enabled = server.enabled.unwrap_or(true);
 
             if let Some(url) = server.url {
+                let (oauth_enabled, client_id) = match server.oauth {
+                    Some(rocode_config::McpOAuthConfig::Disabled(value)) => (value, None),
+                    Some(rocode_config::McpOAuthConfig::Config(oauth)) => (true, oauth.client_id),
+                    None => (true, None),
+                };
                 return Ok(Some((
                     McpRuntimeConfig::Remote(RemoteMcpConfig {
                         url,
-                        oauth_enabled: true,
-                        client_id: server.client_id,
-                        authorization_url: server.authorization_url,
+                        oauth_enabled,
+                        client_id,
+                        authorization_url: None,
                     }),
                     enabled,
                 )));
@@ -372,13 +377,12 @@ fn parse_runtime_from_loaded_config(
             if !server.command.is_empty() {
                 let mut cmd_iter = server.command.into_iter();
                 let command = cmd_iter.next().unwrap();
-                let mut args: Vec<String> = cmd_iter.collect();
-                args.extend(server.args);
+                let args: Vec<String> = cmd_iter.collect();
                 return Ok(Some((
                     McpRuntimeConfig::Local(LocalMcpConfig {
                         command,
                         args,
-                        env: server.env,
+                        env: server.environment,
                         timeout: server.timeout,
                     }),
                     enabled,

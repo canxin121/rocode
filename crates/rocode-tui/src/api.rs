@@ -37,12 +37,12 @@ pub struct SessionRevertInfo {
     pub diff: Option<String>,
 }
 
-pub type SessionStatusInfo = rocode_session::run_status::SessionStatusInfo;
+pub type SessionStatusInfo = rocode_core::contracts::run_status::SessionStatusInfo;
 
-pub type ExecutionKind = rocode_session::execution::ExecutionKind;
-pub type ExecutionStatus = rocode_session::execution::ExecutionStatus;
-pub type SessionExecutionNode = rocode_session::execution::SessionExecutionNode;
-pub type SessionExecutionTopology = rocode_session::execution::SessionExecutionTopology;
+pub type ExecutionKind = rocode_core::contracts::execution::ExecutionKind;
+pub type ExecutionStatus = rocode_core::contracts::execution::ExecutionStatus;
+pub type SessionExecutionNode = rocode_core::contracts::execution::SessionExecutionNode;
+pub type SessionExecutionTopology = rocode_core::contracts::execution::SessionExecutionTopology;
 
 // ── Session Runtime State (from GET /session/{id}/runtime) ──────────────
 
@@ -128,9 +128,9 @@ pub struct ExecuteRecoveryRequest {
     pub target_id: Option<String>,
 }
 
-pub type QuestionOptionInfo = rocode_session::question::QuestionOptionInfo;
-pub type QuestionItemInfo = rocode_session::question::QuestionItemInfo;
-pub type QuestionInfo = rocode_session::question::QuestionInfo;
+pub type QuestionOptionInfo = rocode_core::contracts::question::QuestionOptionInfo;
+pub type QuestionItemInfo = rocode_core::contracts::question::QuestionItemInfo;
+pub type QuestionInfo = rocode_core::contracts::question::QuestionInfo;
 
 pub type PermissionRequestInfo = rocode_permission::PermissionRequestInfo;
 
