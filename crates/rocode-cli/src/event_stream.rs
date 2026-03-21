@@ -157,15 +157,9 @@ enum ServerEventWire {
 
 #[derive(Debug, Deserialize)]
 struct QuestionCreatedWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
-    #[serde(
-        rename = "requestID",
-        default
-    )]
+    #[serde(rename = "requestID", default)]
     request_id: String,
     #[serde(default = "default_empty_array")]
     questions: serde_json::Value,
@@ -173,24 +167,15 @@ struct QuestionCreatedWire {
 
 #[derive(Debug, Deserialize)]
 struct QuestionResolvedWire {
-    #[serde(
-        rename = "requestID",
-        default
-    )]
+    #[serde(rename = "requestID", default)]
     request_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct PermissionRequestedWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
-    #[serde(
-        rename = "permissionID",
-        default
-    )]
+    #[serde(rename = "permissionID", default)]
     permission_id: String,
     #[serde(default)]
     info: serde_json::Value,
@@ -198,19 +183,13 @@ struct PermissionRequestedWire {
 
 #[derive(Debug, Deserialize)]
 struct PermissionResolvedWire {
-    #[serde(
-        rename = "permissionID",
-        default
-    )]
+    #[serde(rename = "permissionID", default)]
     permission_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ToolCallLifecycleWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
     #[serde(rename = "toolCallId", default)]
     tool_call_id: String,
@@ -221,32 +200,8 @@ struct ToolCallLifecycleWire {
 }
 
 #[derive(Debug, Deserialize)]
-struct ToolCallStartWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
-    session_id: String,
-    #[serde(rename = "toolCallId", default)]
-    tool_call_id: String,
-    #[serde(rename = "toolName", default)]
-    tool_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCallCompleteWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
-    session_id: String,
-    #[serde(rename = "toolCallId", default)]
-    tool_call_id: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ChildSessionWire {
-    #[serde(rename = "parentID", alias = "parentId", alias = "parent_id", default)]
+    #[serde(rename = "parentID", default)]
     parent_id: String,
     #[serde(rename = "childID", default)]
     child_id: String,
@@ -254,10 +209,7 @@ struct ChildSessionWire {
 
 #[derive(Debug, Deserialize)]
 struct OutputBlockWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     id: Option<String>,
@@ -267,10 +219,7 @@ struct OutputBlockWire {
 
 #[derive(Debug, Deserialize)]
 struct ErrorWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     error: Option<String>,
@@ -284,10 +233,7 @@ struct ErrorWire {
 
 #[derive(Debug, Deserialize)]
 struct UsageWire {
-    #[serde(
-        rename = "sessionID",
-        default
-    )]
+    #[serde(rename = "sessionID", default)]
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_u64_lossy")]
     prompt_tokens: u64,

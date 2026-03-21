@@ -328,7 +328,7 @@ mod tests {
             crate::runtime_control::ExecutionKind::ToolCall
         ));
         assert_eq!(tool.parent_id.as_deref(), Some("msg_stage_1"));
-        assert_eq!(tool.label.as_deref(), Some("Tool: bash"));
+        assert_eq!(tool.label.as_deref(), Some("Tool: shell"));
     }
 
     #[test]

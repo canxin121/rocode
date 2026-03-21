@@ -34,31 +34,6 @@ type HistoricalToolResult = (
 
 type HistoricalToolResultMap = HashMap<String, HistoricalToolResult>;
 
-#[derive(Debug, Clone, Deserialize, Default)]
-struct HistoricalUsageWire {
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    prompt_tokens: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    completion_tokens: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    cache_read_tokens: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    cache_write_tokens: Option<u64>,
-}
-
-fn deserialize_opt_historical_usage_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Option<HistoricalUsageWire>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    Ok(HistoricalUsageWire::deserialize(value).ok())
-}
-
 #[derive(Debug, Deserialize, Default)]
 struct MessageMetadataWire {
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
@@ -72,13 +47,6 @@ struct MessageMetadataWire {
     tokens_input: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
     tokens_output: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    tokens_cache_read: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-    tokens_cache_write: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_opt_historical_usage_lossy")]
-    usage: Option<HistoricalUsageWire>,
-
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     finish_reason: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
@@ -1018,14 +986,6 @@ mod tests {
     #[test]
     fn token_usage_from_messages_prefers_usage_field_over_metadata() {
         let mut msg = SessionMessage::assistant("ses_test");
-        msg.metadata
-            .insert("tokens_input".to_string(), serde_json::json!(1_u64));
-        msg.metadata
-            .insert("tokens_output".to_string(), serde_json::json!(2_u64));
-        msg.metadata
-            .insert("tokens_cache_read".to_string(), serde_json::json!(3_u64));
-        msg.metadata
-            .insert("tokens_cache_write".to_string(), serde_json::json!(4_u64));
         msg.usage = Some(crate::MessageUsage {
             input_tokens: 100,
             output_tokens: 200,
@@ -1041,29 +1001,6 @@ mod tests {
         assert_eq!(usage.cache_read, 30);
         assert_eq!(usage.cache_write, 20);
         assert_eq!(usage.total, 350);
-    }
-    // PLACEHOLDER_TESTS_CONTINUE_4
-
-    #[test]
-    fn token_usage_from_messages_falls_back_to_usage_metadata_object() {
-        let mut msg = SessionMessage::assistant("ses_test");
-        msg.metadata.insert(
-            "usage".to_string(),
-            serde_json::json!({
-                "prompt_tokens": 77_u64,
-                "completion_tokens": 33_u64,
-                "reasoning_tokens": 11_u64,
-                "cache_read_tokens": 5_u64,
-                "cache_write_tokens": 2_u64
-            }),
-        );
-
-        let usage = SessionPrompt::token_usage_from_messages(&[msg]);
-        assert_eq!(usage.input, 77);
-        assert_eq!(usage.output, 33);
-        assert_eq!(usage.cache_read, 5);
-        assert_eq!(usage.cache_write, 2);
-        assert_eq!(usage.total, 117);
     }
 
     #[test]

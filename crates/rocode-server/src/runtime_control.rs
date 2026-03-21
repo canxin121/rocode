@@ -1107,23 +1107,6 @@ fn now_millis() -> i64 {
     Utc::now().timestamp_millis()
 }
 
-fn normalize_question_options(questions: &[rocode_tool::QuestionDef]) -> Option<Vec<Vec<String>>> {
-    let options: Vec<Vec<String>> = questions
-        .iter()
-        .map(|q| {
-            q.options
-                .iter()
-                .map(|o| o.label.clone())
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    if options.iter().all(|entry| entry.is_empty()) {
-        None
-    } else {
-        Some(options)
-    }
-}
-
 fn question_record_to_info(record: &ExecutionRecord) -> Option<QuestionInfo> {
     if !matches!(record.kind, ExecutionKind::Question) {
         return None;

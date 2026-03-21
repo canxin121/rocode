@@ -1747,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_message_parts_compat_accepts_unified_parts_envelope() {
+    fn parse_message_parts_compat_rejects_unified_parts_envelope() {
         let raw = serde_json::json!({
             "parts": [
                 {
@@ -1762,11 +1762,7 @@ mod tests {
         .to_string();
 
         let parts = parse_storage_message_parts(Some(&raw), Utc::now(), "42");
-        assert_eq!(parts.len(), 1);
-        assert!(matches!(
-            &parts[0].part_type,
-            PartType::Text { text, .. } if text == "hello"
-        ));
+        assert!(parts.is_empty());
     }
 
     #[test]

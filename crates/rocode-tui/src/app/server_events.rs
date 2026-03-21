@@ -179,7 +179,7 @@ fn consume_server_event_stream(
 enum ServerEvent {
     #[serde(rename = "session.updated")]
     SessionUpdated {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         source: Option<String>,
@@ -188,7 +188,7 @@ enum ServerEvent {
     ConfigUpdated,
     #[serde(rename = "session.status")]
     SessionStatus {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         status: SessionRunStatusWire,
     },
@@ -198,7 +198,7 @@ enum ServerEvent {
     QuestionResolved(QuestionEvent),
     #[serde(rename = "permission.requested")]
     PermissionRequested {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         info: crate::api::PermissionRequestInfo,
     },
@@ -208,7 +208,7 @@ enum ServerEvent {
     ToolCallLifecycle(ToolCallLifecycleEvent),
     #[serde(rename = "execution.topology.changed")]
     TopologyChanged {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
     },
     #[serde(rename = "diff.updated")]
@@ -221,9 +221,9 @@ enum ServerEvent {
 
 #[derive(Debug, Deserialize)]
 struct QuestionEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
+    #[serde(rename = "sessionID")]
     session_id: String,
-    #[serde(rename = "requestID", alias = "requestId")]
+    #[serde(rename = "requestID")]
     request_id: String,
 }
 
@@ -231,15 +231,15 @@ struct QuestionEvent {
 #[serde(untagged)]
 enum PermissionResolvedEvent {
     PermissionId {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(rename = "permissionID", alias = "permissionId")]
+        #[serde(rename = "permissionID")]
         permission_id: String,
     },
     RequestId {
-        #[serde(rename = "sessionID", alias = "sessionId")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(rename = "requestID", alias = "requestId")]
+        #[serde(rename = "requestID")]
         permission_id: String,
     },
 }
@@ -262,7 +262,7 @@ impl PermissionResolvedEvent {
 
 #[derive(Debug, Deserialize)]
 struct ToolCallLifecycleEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
+    #[serde(rename = "sessionID")]
     session_id: String,
     #[serde(rename = "toolCallId")]
     tool_call_id: Option<String>,
@@ -272,26 +272,8 @@ struct ToolCallLifecycleEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct ToolCallStartEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
-    session_id: String,
-    #[serde(rename = "toolCallId")]
-    tool_call_id: Option<String>,
-    #[serde(rename = "toolName")]
-    tool_name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCallCompleteEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
-    session_id: String,
-    #[serde(rename = "toolCallId")]
-    tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct DiffEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
+    #[serde(rename = "sessionID")]
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_diff_entries_lossy")]
     diff: Vec<DiffEntryWire>,
@@ -309,7 +291,7 @@ struct DiffEntryWire {
 
 #[derive(Debug, Deserialize)]
 struct OutputBlockEvent {
-    #[serde(rename = "sessionID", alias = "sessionId")]
+    #[serde(rename = "sessionID")]
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     id: Option<String>,

@@ -12,12 +12,7 @@ pub mod json {
         parse_json_object(cleaned)
     }
 
-    /// Try to parse `input` as a JSON object with extra recovery steps:
-    /// - trims surrounding whitespace and BOM
-    /// - re-escapes literal control characters in string values
-    /// - unwraps one layer when `input` itself is a JSON string containing JSON
-    ///
-    /// Returns `Some(Value::Object)` on success, `None` otherwise.
+    /// Try to parse `input` as a JSON object after trimming whitespace/BOM.
     pub fn try_parse_json_object_robust(input: &str) -> Option<serde_json::Value> {
         parse_json_object_with_recovery(input)
     }

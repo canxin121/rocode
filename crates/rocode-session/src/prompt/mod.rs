@@ -6,6 +6,7 @@ pub mod shell;
 pub mod subtask;
 mod tool_calls;
 mod tool_execution;
+#[path = "../tools_and_output.rs"]
 pub mod tools_and_output;
 
 pub use compaction_helpers::{should_compact, trigger_compaction};

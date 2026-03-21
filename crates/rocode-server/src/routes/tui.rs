@@ -656,11 +656,6 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.created")
-                && event.get("sessionID").and_then(|value| value.as_str())
-                    == Some(session_id.as_str())
-        }));
-        assert!(events.iter().any(|event| {
             event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
                 && event.get("resolution").and_then(|value| value.as_str()) == Some("answered")
         }));
