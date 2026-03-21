@@ -15,12 +15,6 @@ pub enum LogLevel {
     Error,
 }
 
-impl LogLevel {
-    fn from_str(s: &str) -> Self {
-        s.parse().unwrap_or(LogLevel::Info)
-    }
-}
-
 static LAST_TIMESTAMP: Mutex<i64> = Mutex::new(0);
 static LOGGERS: LazyLock<Mutex<HashMap<String, CachedLogger>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -51,7 +45,7 @@ impl Logger {
     fn new(tags: HashMap<String, String>, writer: Arc<Mutex<Box<dyn Write + Send>>>) -> Self {
         let level = tags
             .get("level")
-            .map(|l| LogLevel::from_str(l))
+            .map(|level| level.parse().unwrap_or(LogLevel::Info))
             .unwrap_or(LogLevel::Info);
         Self {
             tags,

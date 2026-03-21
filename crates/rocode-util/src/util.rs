@@ -9,87 +9,9 @@ pub mod json {
             .filter(serde_json::Value::is_object)
     }
 
-    fn to_json_value<T: Serialize>(args: T) -> Option<serde_json::Value> {
-        serde_json::to_value(args)
-            .ok()
-            .filter(serde_json::Value::is_object)
-    }
-
     fn parse_json_object_with_recovery(input: &str) -> Option<serde_json::Value> {
         let cleaned = input.trim().trim_start_matches('\u{feff}').trim();
-        if let Some(val) = parse_json_object(cleaned) {
-            return Some(val);
-        }
-        let re_escaped = re_escape_control_chars_in_json(cleaned);
-        if re_escaped != cleaned {
-            if let Some(val) = parse_json_object(&re_escaped) {
-                return Some(val);
-            }
-        }
-        // Full repair pipeline: handles ANSI, XML wrappers, unquoted keys,
-        // Python literals, comments, missing commas/colons, etc.
-        let (repaired, _) = crate::jsonish_parse::repair_json_standalone(cleaned, false);
-        if repaired != cleaned {
-            if let Some(val) = parse_json_object(&repaired) {
-                return Some(val);
-            }
-        }
-        None
-    }
-
-    /// Re-escape literal control characters (0x00–0x1F) that appear inside JSON
-    /// string values.  A simple state machine tracks whether we are inside a
-    /// `"`-delimited string; only characters inside strings are escaped.
-    /// Characters outside strings (structural whitespace like `\n` between keys)
-    /// are left untouched.
-    pub fn re_escape_control_chars_in_json(input: &str) -> String {
-        let mut out = String::with_capacity(input.len());
-        let mut in_string = false;
-        let mut prev_backslash = false;
-
-        for ch in input.chars() {
-            if in_string {
-                if prev_backslash {
-                    // This character is escaped — emit as-is.
-                    out.push(ch);
-                    prev_backslash = false;
-                    continue;
-                }
-                if ch == '\\' {
-                    out.push(ch);
-                    prev_backslash = true;
-                    continue;
-                }
-                if ch == '"' {
-                    in_string = false;
-                    out.push(ch);
-                    continue;
-                }
-                // Inside a JSON string: re-escape control characters.
-                if ch.is_control() && (ch as u32) < 0x20 {
-                    match ch {
-                        '\n' => out.push_str("\\n"),
-                        '\r' => out.push_str("\\r"),
-                        '\t' => out.push_str("\\t"),
-                        '\u{08}' => out.push_str("\\b"),
-                        '\u{0C}' => out.push_str("\\f"),
-                        other => {
-                            // Generic \uXXXX escape for remaining control chars.
-                            out.push_str(&format!("\\u{:04x}", other as u32));
-                        }
-                    }
-                    continue;
-                }
-                out.push(ch);
-            } else {
-                // Outside a JSON string.
-                if ch == '"' {
-                    in_string = true;
-                }
-                out.push(ch);
-            }
-        }
-        out
+        parse_json_object(cleaned)
     }
 
     /// Try to parse `input` as a JSON object with extra recovery steps:
@@ -115,194 +37,14 @@ pub mod json {
         try_parse_json_object_robust(input)
     }
 
-    fn normalize_single_escaped_quotes(input: &str) -> String {
-        let mut out = String::with_capacity(input.len());
-        let mut chars = input.chars().peekable();
-        let mut prev: Option<char> = None;
-
-        while let Some(ch) = chars.next() {
-            if ch == '\\' && matches!(chars.peek(), Some('"')) && prev != Some('\\') {
-                out.push('"');
-                chars.next();
-                prev = Some('"');
-                continue;
-            }
-            out.push(ch);
-            prev = Some(ch);
-        }
-
-        out
-    }
-
-    fn parse_jsonish_string_field(input: &str, field: &str) -> Option<String> {
-        let needle = format!("\"{}\"", field);
-        let field_idx = input.find(&needle)?;
-        let after_field = &input[field_idx + needle.len()..];
-        let colon_idx = after_field.find(':')?;
-        let mut chars = after_field[colon_idx + 1..].chars().peekable();
-
-        while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
-            chars.next();
-        }
-        if !matches!(chars.next(), Some('"')) {
-            return None;
-        }
-
-        let mut out = String::new();
-        let mut escaped = false;
-        while let Some(ch) = chars.next() {
-            if escaped {
-                match ch {
-                    '"' => out.push('"'),
-                    '\\' => out.push('\\'),
-                    '/' => out.push('/'),
-                    'n' => out.push('\n'),
-                    'r' => out.push('\r'),
-                    't' => out.push('\t'),
-                    'b' => out.push('\u{08}'),
-                    'f' => out.push('\u{0c}'),
-                    'u' => {
-                        let mut hex = String::new();
-                        for _ in 0..4 {
-                            match chars.peek().copied() {
-                                Some(c) if c.is_ascii_hexdigit() => {
-                                    hex.push(c);
-                                    chars.next();
-                                }
-                                _ => break,
-                            }
-                        }
-                        if hex.len() == 4 {
-                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                                if let Some(decoded) = char::from_u32(code) {
-                                    out.push(decoded);
-                                }
-                            }
-                        } else {
-                            out.push('u');
-                            out.push_str(&hex);
-                        }
-                    }
-                    other => out.push(other),
-                }
-                escaped = false;
-                continue;
-            }
-
-            match ch {
-                '\\' => escaped = true,
-                '"' => return Some(out),
-                other => out.push(other),
-            }
-        }
-
-        // Unterminated JSON string: keep best-effort content.
-        Some(out)
-    }
-
-    fn recover_write_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        #[derive(Serialize)]
-        struct WriteArgs {
-            file_path: String,
-            content: String,
-        }
-
-        let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
-            .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
-        let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
-        to_json_value(WriteArgs { file_path, content })
-    }
-
-    fn recover_bash_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        #[derive(Serialize)]
-        struct BashArgs {
-            command: String,
-            description: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            workdir: Option<String>,
-        }
-
-        let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
-            .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
-        let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
-            .unwrap_or_else(|| "Execute shell command".to_string());
-        let workdir = parse_jsonish_string_field(input, "workdir")
-            .or_else(|| parse_jsonish_string_field(input, "cwd"));
-
-        to_json_value(BashArgs {
-            command,
-            description,
-            workdir,
-        })
-    }
-
-    fn recover_edit_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        #[derive(Serialize)]
-        struct EditArgs {
-            file_path: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            old_string: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            new_string: Option<String>,
-        }
-
-        let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
-            .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
-        let old_string = parse_jsonish_string_field(input, patch_keys::OLD_STRING)
-            .or_else(|| parse_jsonish_string_field(input, "oldString"));
-        let new_string = parse_jsonish_string_field(input, patch_keys::NEW_STRING)
-            .or_else(|| parse_jsonish_string_field(input, "newString"));
-
-        // Keep recovery conservative: require file_path plus at least one edit payload field.
-        if old_string.is_none() && new_string.is_none() {
-            return None;
-        }
-
-        to_json_value(EditArgs {
-            file_path,
-            old_string,
-            new_string,
-        })
-    }
-
     /// Best-effort recovery for truncated/malformed JSON-ish tool argument strings.
     /// Returns an object only when required fields for the given tool can be extracted.
     pub fn recover_tool_arguments_from_jsonish(
         tool_name: &str,
         input: &str,
     ) -> Option<serde_json::Value> {
-        let tool = BuiltinToolName::parse(tool_name)?;
-        let recover_once = match tool {
-            BuiltinToolName::Write => {
-                recover_write_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
-            }
-            BuiltinToolName::Bash => {
-                recover_bash_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
-            }
-            BuiltinToolName::Edit | BuiltinToolName::MultiEdit => {
-                recover_edit_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
-            }
-            _ => return None,
-        };
-
-        if let Some(recovered) = recover_once(input) {
-            return Some(recovered);
-        }
-
-        if let Ok(inner) = serde_json::from_str::<String>(input) {
-            if let Some(recovered) = recover_once(&inner) {
-                return Some(recovered);
-            }
-        }
-
-        if input.contains("\\\"") {
-            let de_escaped = normalize_single_escaped_quotes(input);
-            if let Some(recovered) = recover_once(&de_escaped) {
-                return Some(recovered);
-            }
-        }
-
-        None
+        let _tool = BuiltinToolName::parse(tool_name)?;
+        try_parse_json_object_robust(input)
     }
 
     // -----------------------------------------------------------------------
@@ -312,48 +54,8 @@ pub mod json {
     /// Top-level entry point for structural recovery of malformed tool-call
     /// arguments.  Works through six stages, from cheapest to most aggressive.
     pub fn recover_tool_call_ultra(tool: &str, raw: &str) -> Option<serde_json::Value> {
-        // Stage 1 — sanitise input (markdown fences, BOM, whitespace)
-        let clean = ultra_clean_raw(raw);
-
-        // Stage 2 — extract the best `{…}` candidate region (scored)
-        let candidate = ultra_pick_best_candidate(&clean).unwrap_or_else(|| clean.clone());
-
-        // Stage 3 — normal parse (fast path)
-        if let Ok(v @ serde_json::Value::Object(_)) =
-            serde_json::from_str::<serde_json::Value>(&candidate)
-        {
-            return Some(v);
-        }
-
-        // Stage 4 — truncated-JSON repair (close open quotes / braces)
-        if let Some(v) = ultra_repair_truncated(&candidate) {
-            return Some(v);
-        }
-
-        // Stage 5 — tool-specific structural recovery (knows the schema,
-        // so it handles unescaped quotes in large content fields).
-        match BuiltinToolName::parse(tool) {
-            Some(BuiltinToolName::Write) => {
-                if let Some(v) = ultra_recover_write(&candidate) {
-                    return Some(v);
-                }
-            }
-            Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit) => {
-                if let Some(v) = ultra_recover_edit(&candidate) {
-                    return Some(v);
-                }
-            }
-            _ => {}
-        }
-
-        // Stage 6 — generic loose-object scanner (last resort)
-        if let Some(v) = ultra_recover_loose_object(&candidate) {
-            if v.as_object().is_some_and(|m| !m.is_empty()) {
-                return Some(v);
-            }
-        }
-
-        None
+        let _tool = BuiltinToolName::parse(tool)?;
+        try_parse_json_object_robust(raw)
     }
 
     // -- Stage 1 helpers ----------------------------------------------------
@@ -1096,38 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn re_escape_noop_on_clean_json() {
-        let input = r#"{"file_path":"/tmp/test.html","content":"<h1>Hello</h1>"}"#;
-        assert_eq!(json::re_escape_control_chars_in_json(input), input);
-    }
-
-    #[test]
-    fn re_escape_literal_newline_in_string_value() {
-        let input = "{\"file_path\":\"/tmp/test.html\",\"content\":\"line1\nline2\"}";
-        let expected = r#"{"file_path":"/tmp/test.html","content":"line1\nline2"}"#;
-        assert_eq!(json::re_escape_control_chars_in_json(input), expected);
-    }
-
-    #[test]
-    fn re_escape_tab_and_cr_in_string_value() {
-        let input = "{\"content\":\"col1\tcol2\r\n\"}";
-        let expected = r#"{"content":"col1\tcol2\r\n"}"#;
-        assert_eq!(json::re_escape_control_chars_in_json(input), expected);
-    }
-
-    #[test]
-    fn re_escape_preserves_already_escaped_sequences() {
-        let input = r#"{"content":"line1\nline2"}"#;
-        assert_eq!(json::re_escape_control_chars_in_json(input), input);
-    }
-
-    #[test]
-    fn re_escape_leaves_structural_whitespace_alone() {
-        let input = "{\n  \"file_path\": \"/tmp/a\",\n  \"content\": \"hello\"\n}";
-        assert_eq!(json::re_escape_control_chars_in_json(input), input);
-    }
-
-    #[test]
     fn try_parse_json_object_clean() {
         let input = r#"{"file_path":"/tmp/a"}"#;
         let val = json::try_parse_json_object(input).unwrap();
@@ -1135,11 +805,9 @@ mod tests {
     }
 
     #[test]
-    fn try_parse_json_object_with_literal_newline() {
+    fn try_parse_json_object_rejects_literal_newline() {
         let input = "{\"file_path\":\"/tmp/a\",\"content\":\"line1\nline2\"}";
-        let val = json::try_parse_json_object(input).unwrap();
-        assert_eq!(val["file_path"], "/tmp/a");
-        assert_eq!(val["content"], "line1\nline2");
+        assert!(json::try_parse_json_object(input).is_none());
     }
 
     #[test]
@@ -1169,28 +837,27 @@ mod tests {
         let inner_with_literal_newline = "{\"file_path\":\"/tmp/a\",\"content\":\"line1\nline2\"}";
         let outer =
             serde_json::to_string(inner_with_literal_newline).expect("stringify should succeed");
-        let val = json::try_parse_json_object_robust(&outer).expect("should parse object");
-        assert_eq!(val["file_path"], "/tmp/a");
-        assert_eq!(val["content"], "line1\nline2");
+        assert!(json::try_parse_json_object_robust(&outer).is_none());
     }
 
     #[test]
-    fn recover_tool_arguments_from_jsonish_recovers_truncated_write_payload() {
+    fn recover_tool_arguments_from_jsonish_rejects_truncated_write_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"<html><body>hello";
-        let recovered =
-            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Write.as_str(), malformed)
-                .expect("write payload should be recoverable");
-        assert_eq!(recovered["file_path"], "/tmp/t2.html");
-        assert_eq!(recovered["content"], "<html><body>hello");
+        assert!(json::recover_tool_arguments_from_jsonish(
+            BuiltinToolName::Write.as_str(),
+            malformed
+        )
+        .is_none());
     }
 
     #[test]
-    fn recover_tool_arguments_from_jsonish_recovers_truncated_bash_payload() {
+    fn recover_tool_arguments_from_jsonish_rejects_truncated_bash_payload() {
         let malformed = "{\"command\":\"cat > t2.html << 'EOF'\\n<html>";
-        let recovered =
-            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Bash.as_str(), malformed)
-                .expect("bash payload should be recoverable");
-        assert_eq!(recovered["command"], "cat > t2.html << 'EOF'\n<html>");
+        assert!(json::recover_tool_arguments_from_jsonish(
+            BuiltinToolName::Bash.as_str(),
+            malformed
+        )
+        .is_none());
     }
 
     #[test]
@@ -1204,73 +871,13 @@ mod tests {
     }
 
     #[test]
-    fn recover_tool_arguments_from_jsonish_recovers_truncated_edit_payload() {
+    fn recover_tool_arguments_from_jsonish_rejects_truncated_edit_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"new_string\":\".class { color: red; }";
-        let recovered =
-            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Edit.as_str(), malformed)
-                .expect("edit payload should be recoverable");
-        assert_eq!(recovered["file_path"], "/tmp/t2.html");
-        assert_eq!(recovered["new_string"], ".class { color: red; }");
-        assert!(recovered.get("old_string").is_none());
-    }
-
-    // -- Ultra recovery tests -----------------------------------------------
-
-    #[test]
-    fn ultra_recovers_write_with_unescaped_html_quotes() {
-        // The exact scenario from the bug: HTML with unescaped quotes in attributes.
-        let raw = r#"{"content":"<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title>Test</title>\n</head>\n<body>Hello</body>\n</html>","file_path":"/tmp/test.html"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should recover write with unescaped HTML quotes");
-        assert_eq!(recovered["file_path"], "/tmp/test.html");
-        let content = recovered["content"].as_str().unwrap();
-        assert!(content.contains("<!DOCTYPE html>"));
-        assert!(content.contains("<title>Test</title>"));
-    }
-
-    #[test]
-    fn ultra_recovers_write_content_before_filepath() {
-        // content comes first, file_path at the end — the original bug scenario.
-        let raw = r#"{"content":"<h1>Hello "World"</h1>","file_path":"/tmp/a.html"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should recover when content precedes file_path");
-        assert_eq!(recovered["file_path"], "/tmp/a.html");
-    }
-
-    #[test]
-    fn ultra_recovers_truncated_write() {
-        let raw = r#"{"file_path":"/tmp/a.html","content":"<html><body>hello"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should recover truncated write");
-        assert_eq!(recovered["file_path"], "/tmp/a.html");
-        let content = recovered["content"].as_str().unwrap();
-        assert!(content.contains("<html><body>hello"));
-    }
-
-    #[test]
-    fn ultra_strips_markdown_fences() {
-        let raw = "```json\n{\"file_path\":\"/tmp/a\",\"content\":\"ok\"}\n```";
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should strip markdown fences");
-        assert_eq!(recovered["file_path"], "/tmp/a");
-        assert_eq!(recovered["content"], "ok");
-    }
-
-    #[test]
-    fn ultra_strips_reasoning_preamble() {
-        let raw = "Sure! Here is the file:\n\n{\"file_path\":\"/tmp/a\",\"content\":\"hello\"}";
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should strip reasoning preamble");
-        assert_eq!(recovered["file_path"], "/tmp/a");
-        assert_eq!(recovered["content"], "hello");
-    }
-
-    #[test]
-    fn ultra_recovers_edit_with_unescaped_content() {
-        let raw = r#"{"file_path":"/tmp/a.rs","old_string":"fn foo("bar")","new_string":"fn foo("baz")"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Edit.as_str(), raw)
-            .expect("should recover edit with unescaped quotes");
-        assert_eq!(recovered["file_path"], "/tmp/a.rs");
+        assert!(json::recover_tool_arguments_from_jsonish(
+            BuiltinToolName::Edit.as_str(),
+            malformed
+        )
+        .is_none());
     }
 
     #[test]
@@ -1288,37 +895,5 @@ mod tests {
             .expect("valid JSON should pass through");
         assert_eq!(recovered["file_path"], "/tmp/a");
         assert_eq!(recovered["content"], "hello");
-    }
-
-    #[test]
-    fn ultra_picks_best_candidate_with_reasoning_and_braces() {
-        // Reasoning text contains { } before the actual tool call JSON.
-        let raw = r#"I'll write the CSS file. The selector .card { display: flex } needs updating.
-
-{"file_path":"/tmp/style.css","content":".card { display: grid; }"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should pick the JSON candidate, not the reasoning");
-        assert_eq!(recovered["file_path"], "/tmp/style.css");
-        assert_eq!(recovered["content"], ".card { display: grid; }");
-    }
-
-    #[test]
-    fn ultra_picks_best_among_multiple_json_objects() {
-        // Two JSON objects — the second one has the tool-call keys.
-        let raw = r#"{"status":"thinking","step":1}
-{"file_path":"/tmp/a.html","content":"<h1>Hi</h1>"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should pick the object with file_path");
-        assert_eq!(recovered["file_path"], "/tmp/a.html");
-    }
-
-    #[test]
-    fn ultra_extract_short_field_skips_fake_key_in_content() {
-        // content contains a fake "file_path" key — extraction should find the
-        // real top-level key, not the one buried inside the content value.
-        let raw = r#"{"content":"see \"file_path\":\"/wrong/path\" in docs","file_path":"/correct/path.txt"}"#;
-        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
-            .expect("should extract the real file_path, not the one in content");
-        assert_eq!(recovered["file_path"], "/correct/path.txt");
     }
 }

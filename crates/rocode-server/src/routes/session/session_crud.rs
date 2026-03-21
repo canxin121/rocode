@@ -878,9 +878,7 @@ pub(super) async fn get_message(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -1107,9 +1105,7 @@ pub(super) async fn cancel_tool_call(
             session_message_to_unified_message(msg)
                 .parts
                 .into_iter()
-                .any(|part| {
-                    matches!(part, ModelPart::Tool(tool) if tool.call_id == tool_call_id)
-                })
+                .any(|part| matches!(part, ModelPart::Tool(tool) if tool.call_id == tool_call_id))
         });
 
         if !found {

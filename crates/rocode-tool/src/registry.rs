@@ -250,71 +250,6 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
                 "recovered tool arguments via robust JSON parser"
             );
             args = parsed;
-        } else {
-            if let Some(parsed) =
-                rocode_util::json::recover_tool_arguments_from_jsonish(tool_id, &s)
-            {
-                tracing::info!(
-                    tool = %tool_id,
-                    "recovered tool arguments from JSON-ish payload"
-                );
-                args = parsed;
-            } else if tool_id == "write" {
-                if let Some(parsed) = recover_write_args_from_jsonish(&s) {
-                    tracing::info!(
-                        tool = %tool_id,
-                        "recovered write arguments from JSON-ish payload"
-                    );
-                    args = parsed;
-                }
-            } else if tool_id == "bash" {
-                if let Some(parsed) = recover_bash_args_from_jsonish(&s) {
-                    tracing::info!(
-                        tool = %tool_id,
-                        "recovered bash arguments from JSON-ish payload"
-                    );
-                    args = parsed;
-                }
-            }
-            // Ultra structural recovery: handles unescaped HTML quotes,
-            // truncated JSON, markdown fences, reasoning pollution, etc.
-            if args.is_string() {
-                if let Some(parsed) = rocode_util::json::recover_tool_call_ultra(tool_id, &s) {
-                    tracing::info!(
-                        tool = %tool_id,
-                        "recovered tool arguments via ultra structural recovery"
-                    );
-                    args = parsed;
-                }
-            }
-            // If still a string, try key=value fallback.
-            if args.is_string() && !looks_like_jsonish_payload(&s) {
-                // Some models (e.g. Qwen via LiteLLM) may send arguments in
-                // non-JSON formats like "key=value" or "key: value". Try to
-                // construct a JSON object from simple key=value pairs.
-                let mut obj = serde_json::Map::new();
-                for line in s.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if let Some((key, value)) = line.split_once('=') {
-                        let key = key.trim().to_string();
-                        let value = value.trim();
-                        // Try to parse value as JSON, otherwise treat as string
-                        let json_value = serde_json::from_str(value)
-                            .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
-                        obj.insert(key, json_value);
-                    }
-                }
-                if !obj.is_empty() {
-                    tracing::info!(
-                        tool = %tool_id,
-                        "normalized non-JSON tool arguments from key=value format"
-                    );
-                    args = serde_json::Value::Object(obj);
-                }
-            }
         }
     }
 
@@ -868,49 +803,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_recovers_literal_control_characters_in_json_string_arguments() {
+    async fn execute_rejects_literal_control_characters_in_json_string_arguments() {
         let (registry, captured) = setup_capture_registry().await;
         let args = serde_json::Value::String(
             "{\"file_path\":\"/tmp/b.html\",\"content\":\"line1\nline2\"}".to_string(),
         );
 
-        let result = registry
-            .execute("capture", args, test_tool_context())
-            .await
-            .expect("tool should execute");
+        let result = registry.execute("capture", args, test_tool_context()).await;
 
-        assert_eq!(result.output, "/tmp/b.html");
-        let captured_args = captured
-            .lock()
-            .expect("lock should succeed")
-            .clone()
-            .expect("args should be captured");
-        assert_eq!(captured_args["file_path"], "/tmp/b.html");
-        assert_eq!(captured_args["content"], "line1\nline2");
+        assert!(result.is_err());
+        let captured_args = captured.lock().expect("lock should succeed").clone();
+        assert!(captured_args.is_none());
     }
 
     #[tokio::test]
-    async fn execute_keeps_key_value_fallback_for_non_json_strings() {
+    async fn execute_rejects_key_value_payload_for_non_json_strings() {
         let (registry, captured) = setup_capture_registry().await;
         let args = serde_json::Value::String("file_path=/tmp/c.html\ncontent=hello".to_string());
 
-        let result = registry
-            .execute("capture", args, test_tool_context())
-            .await
-            .expect("tool should execute");
+        let result = registry.execute("capture", args, test_tool_context()).await;
 
-        assert_eq!(result.output, "/tmp/c.html");
-        let captured_args = captured
-            .lock()
-            .expect("lock should succeed")
-            .clone()
-            .expect("args should be captured");
-        assert_eq!(captured_args["file_path"], "/tmp/c.html");
-        assert_eq!(captured_args["content"], "hello");
+        assert!(result.is_err());
+        let captured_args = captured.lock().expect("lock should succeed").clone();
+        assert!(captured_args.is_none());
     }
 
     #[tokio::test]
-    async fn execute_recovers_write_args_from_unterminated_jsonish_payload() {
+    async fn execute_rejects_write_args_from_unterminated_jsonish_payload() {
         let registry = ToolRegistry::new();
         let captured = Arc::new(Mutex::new(None));
         registry
@@ -927,21 +846,15 @@ mod tests {
 
         let result = registry
             .execute("write", malformed, test_tool_context())
-            .await
-            .expect("tool should execute");
+            .await;
 
-        assert_eq!(result.output, "/tmp/d.html");
-        let captured_args = captured
-            .lock()
-            .expect("lock should succeed")
-            .clone()
-            .expect("args should be captured");
-        assert_eq!(captured_args["file_path"], "/tmp/d.html");
-        assert_eq!(captured_args["content"], "<div class=\"x\">hello\nworld");
+        assert!(result.is_err());
+        let captured_args = captured.lock().expect("lock should succeed").clone();
+        assert!(captured_args.is_none());
     }
 
     #[tokio::test]
-    async fn execute_recovers_write_args_from_escaped_jsonish_payload() {
+    async fn execute_rejects_write_args_from_escaped_jsonish_payload() {
         let registry = ToolRegistry::new();
         let captured = Arc::new(Mutex::new(None));
         registry
@@ -957,25 +870,15 @@ mod tests {
 
         let result = registry
             .execute("write", malformed, test_tool_context())
-            .await
-            .expect("tool should execute");
+            .await;
 
-        assert_eq!(result.output, "/tmp/e.html");
-        let captured_args = captured
-            .lock()
-            .expect("lock should succeed")
-            .clone()
-            .expect("args should be captured");
-        assert_eq!(captured_args["file_path"], "/tmp/e.html");
-        let content = captured_args["content"]
-            .as_str()
-            .expect("content should be string");
-        assert!(content.contains("<div class="));
-        assert!(content.contains("hello"));
+        assert!(result.is_err());
+        let captured_args = captured.lock().expect("lock should succeed").clone();
+        assert!(captured_args.is_none());
     }
 
     #[tokio::test]
-    async fn execute_recovers_bash_args_from_unterminated_jsonish_payload() {
+    async fn execute_rejects_bash_args_from_unterminated_jsonish_payload() {
         let registry = ToolRegistry::new();
         let captured = Arc::new(Mutex::new(None));
         registry
@@ -991,30 +894,18 @@ mod tests {
 
         let result = registry
             .execute("bash", malformed, test_tool_context())
-            .await
-            .expect("tool should execute");
+            .await;
 
-        assert!(result.output.starts_with("cat > /tmp/f.html"));
-        let captured_args = captured
-            .lock()
-            .expect("lock should succeed")
-            .clone()
-            .expect("args should be captured");
-        assert_eq!(
-            captured_args["description"]
-                .as_str()
-                .expect("description should be set"),
-            "Execute shell command"
-        );
+        assert!(result.is_err());
+        let captured_args = captured.lock().expect("lock should succeed").clone();
+        assert!(captured_args.is_none());
     }
 
     #[test]
-    fn normalize_tool_arguments_recovers_bash_jsonish_payload() {
+    fn normalize_tool_arguments_rejects_bash_jsonish_payload() {
         let malformed = serde_json::Value::String("{\"command\":\"echo hello\nworld".to_string());
         let normalized = normalize_tool_arguments("bash", malformed);
-        assert!(normalized.is_object());
-        assert_eq!(normalized["command"], "echo hello\nworld");
-        assert_eq!(normalized["description"], "Execute shell command");
+        assert!(normalized.is_string());
     }
 
     #[test]
@@ -1041,16 +932,11 @@ mod tests {
     }
 
     #[test]
-    fn normalize_tool_arguments_ultra_recovers_unescaped_html_write() {
-        // Simulates the exact bug: LLM sends write args with unescaped HTML quotes.
-        // Existing recovery fails; ultra structural recovery should succeed.
+    fn normalize_tool_arguments_rejects_unescaped_html_write() {
         let raw = r#"{"content":"<html lang="en"><body>Hello</body></html>","file_path":"/tmp/test.html"}"#;
         let input = serde_json::Value::String(raw.to_string());
         let normalized = normalize_tool_arguments("write", input);
-        assert!(normalized.is_object(), "ultra should recover to object");
-        assert_eq!(normalized["file_path"], "/tmp/test.html");
-        let content = normalized["content"].as_str().unwrap();
-        assert!(content.contains("<html"));
+        assert!(normalized.is_string());
     }
 }
 

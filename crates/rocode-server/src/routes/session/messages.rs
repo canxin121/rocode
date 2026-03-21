@@ -55,7 +55,6 @@ pub(super) struct MessageTokensInfo {
     pub cache_write: u64,
 }
 
-
 #[derive(Debug, Serialize)]
 pub(super) struct MessageSummaryInfo {
     pub id: String,
@@ -130,9 +129,7 @@ pub(super) async fn list_message_summaries(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -253,9 +250,7 @@ pub(super) async fn list_message_parts(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -326,9 +321,7 @@ pub(super) async fn get_message_part(
     let session_exists = state
         .ensure_session_hydrated(&session_id)
         .await
-        .map_err(|err| {
-            ApiError::InternalError(format!("failed to hydrate session: {}", err))
-        })?;
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?;
     if !session_exists {
         return Err(ApiError::SessionNotFound(session_id));
     }
@@ -355,10 +348,7 @@ pub(super) async fn get_message_part(
     ))
 }
 
-fn message_to_info(
-    session_id: &str,
-    message: &rocode_session::SessionMessage,
-) -> MessageInfo {
+fn message_to_info(session_id: &str, message: &rocode_session::SessionMessage) -> MessageInfo {
     fn deserialize_opt_string_lossy<'de, D>(
         deserializer: D,
     ) -> std::result::Result<Option<String>, D::Error>
