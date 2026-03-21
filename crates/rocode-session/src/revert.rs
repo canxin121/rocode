@@ -6,7 +6,6 @@ use std::path::PathBuf;
 
 use crate::message_model::{session_message_to_unified_message, Part as ModelPart};
 use crate::session::{Session, SessionManager};
-use crate::session::{Session, SessionManager};
 use rocode_types::deserialize_opt_string_lossy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,30 +20,21 @@ pub enum ServerEventType {
     SessionStatus,
     #[strum(serialize = "question.created")]
     QuestionCreated,
-    #[strum(
-        serialize = "question.resolved",
-        serialize = "question.replied",
-        serialize = "question.rejected"
-    )]
+    #[strum(serialize = "question.resolved")]
     QuestionResolved,
     #[strum(serialize = "permission.requested")]
     PermissionRequested,
-    #[strum(serialize = "permission.resolved", serialize = "permission.replied")]
+    #[strum(serialize = "permission.resolved")]
     PermissionResolved,
     #[strum(serialize = "tool_call.lifecycle")]
     ToolCallLifecycle,
-    // Legacy split events (kept for forward/backward compatibility)
-    #[strum(serialize = "tool_call.start")]
-    ToolCallStart,
-    #[strum(serialize = "tool_call.complete")]
-    ToolCallComplete,
     #[strum(serialize = "execution.topology.changed")]
     ExecutionTopologyChanged,
     #[strum(serialize = "child_session.attached")]
     ChildSessionAttached,
     #[strum(serialize = "child_session.detached")]
     ChildSessionDetached,
-    #[strum(serialize = "diff.updated", serialize = "session.diff")]
+    #[strum(serialize = "diff.updated")]
     DiffUpdated,
     #[strum(serialize = "output_block")]
     OutputBlock,
@@ -54,6 +45,16 @@ pub enum ServerEventType {
     // Internal server↔TUI request bus (not consumed by most clients)
     #[strum(serialize = "tui.request")]
     TuiRequest,
+}
+
+impl ServerEventType {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }
 
 /// Phase of the tool call lifecycle events.
@@ -69,6 +70,16 @@ pub enum ToolCallPhase {
     Complete,
 }
 
+impl ToolCallPhase {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}
+
 /// Session run status tag used inside `session.status` payloads.
 ///
 /// Wire format: lowercase strings (`"busy"`, `"idle"`, `"retry"`).
@@ -78,6 +89,16 @@ pub enum SessionRunStatusType {
     Idle,
     Busy,
     Retry,
+}
+
+impl SessionRunStatusType {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }
 
 /// How a question request was resolved.
@@ -92,6 +113,16 @@ pub enum QuestionResolutionKind {
     Answered,
     Rejected,
     Cancelled,
+}
+
+impl QuestionResolutionKind {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }
 
 /// Canonical internal bus event name strings.
@@ -145,22 +176,32 @@ pub enum BusEventName {
     CommandExecuted,
 }
 
+impl BusEventName {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn server_event_type_parses_legacy_aliases() {
+    fn server_event_type_parses_canonical_names() {
         assert_eq!(
-            "question.replied".parse::<ServerEventType>().ok(),
+            "question.resolved".parse::<ServerEventType>().ok(),
             Some(ServerEventType::QuestionResolved)
         );
         assert_eq!(
-            "permission.replied".parse::<ServerEventType>().ok(),
+            "permission.resolved".parse::<ServerEventType>().ok(),
             Some(ServerEventType::PermissionResolved)
         );
         assert_eq!(
-            "session.diff".parse::<ServerEventType>().ok(),
+            "diff.updated".parse::<ServerEventType>().ok(),
             Some(ServerEventType::DiffUpdated)
         );
     }

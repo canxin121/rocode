@@ -63,3 +63,13 @@ pub enum FileChangeType {
     Delete,
     Move,
 }
+
+impl FileChangeType {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}

@@ -190,20 +190,20 @@ impl App {
         } else {
             for task in &tasks {
                 let (icon, status_str) = match &task.status {
-                    AgentTaskStatus::Pending => ("◯", task.status.kind().as_str().to_string()),
+                    AgentTaskStatus::Pending => ("◯", task.status.kind().as_ref().to_string()),
                     AgentTaskStatus::Running { step } => {
                         let steps = task
                             .max_steps
                             .map(|m| format!("{}/{}", step, m))
                             .unwrap_or(format!("{}/?", step));
-                        ("◐", format!("{}  {}", task.status.kind().as_str(), steps))
+                        ("◐", format!("{}  {}", task.status.kind().as_ref(), steps))
                     }
                     AgentTaskStatus::Completed { steps } => {
-                        ("●", format!("{}  {}", task.status.kind().as_str(), steps))
+                        ("●", format!("{}  {}", task.status.kind().as_ref(), steps))
                     }
-                    AgentTaskStatus::Cancelled => ("✗", task.status.kind().as_str().to_string()),
+                    AgentTaskStatus::Cancelled => ("✗", task.status.kind().as_ref().to_string()),
                     AgentTaskStatus::Failed { .. } => {
-                        ("✗", task.status.kind().as_str().to_string())
+                        ("✗", task.status.kind().as_ref().to_string())
                     }
                 };
                 let elapsed = now - task.started_at;
@@ -247,24 +247,24 @@ impl App {
             Some(task) => {
                 let (status_label, step_info) = match &task.status {
                     AgentTaskStatus::Pending => {
-                        (task.status.kind().as_str().to_string(), String::new())
+                        (task.status.kind().as_ref().to_string(), String::new())
                     }
                     AgentTaskStatus::Running { step } => {
                         let steps = task
                             .max_steps
                             .map(|m| format!(" (step {}/{})", step, m))
                             .unwrap_or(format!(" (step {}/?)", step));
-                        (task.status.kind().as_str().to_string(), steps)
+                        (task.status.kind().as_ref().to_string(), steps)
                     }
                     AgentTaskStatus::Completed { steps } => (
-                        task.status.kind().as_str().to_string(),
+                        task.status.kind().as_ref().to_string(),
                         format!(" ({} steps)", steps),
                     ),
                     AgentTaskStatus::Cancelled => {
-                        (task.status.kind().as_str().to_string(), String::new())
+                        (task.status.kind().as_ref().to_string(), String::new())
                     }
                     AgentTaskStatus::Failed { error } => (
-                        format!("{}: {}", task.status.kind().as_str(), error),
+                        format!("{}: {}", task.status.kind().as_ref(), error),
                         String::new(),
                     ),
                 };

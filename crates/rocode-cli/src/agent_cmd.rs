@@ -56,8 +56,8 @@ pub(crate) async fn handle_agent_command(action: AgentCommands) -> anyhow::Resul
             let yaml_description = description.replace('\n', " ").replace('"', "\\\"");
             let mode_name = mode
                 .to_possible_value()
-                .map(|value| value.get_name())
-                .unwrap_or("all");
+                .map(|value| value.get_name().to_string())
+                .unwrap_or_else(|| "all".to_string());
             let mut frontmatter = format!(
                 "---\ndescription: \"{}\"\nmode: {}\n",
                 yaml_description, mode_name,

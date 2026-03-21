@@ -410,28 +410,10 @@ impl SessionPrompt {
     pub(super) fn parse_json_or_string(raw: &str) -> serde_json::Value {
         // First try standard JSON parse.
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) {
-            // If the parsed value is a JSON string, it may itself contain a
-            // JSON object (double-encoded). Try robust object recovery first.
-            if matches!(val, serde_json::Value::String(_)) {
-                if let Some(obj) = rocode_util::json::try_parse_json_object_robust(raw) {
-                    return obj;
-                }
-            }
             return val;
         }
 
-        // Recover object-shaped arguments with robust parsing.
-        if let Some(obj) = rocode_util::json::try_parse_json_object_robust(raw) {
-            return obj;
-        }
-
-        // If the raw string looks like it could be a JSON object with issues,
-        // wrap it so tools can still access it via the registry normalizer.
-        tracing::warn!(
-            raw_len = raw.len(),
-            raw_preview = %raw.chars().take(200).collect::<String>(),
-            "tool call arguments failed JSON parse, wrapping as string"
-        );
+        // Keep malformed inputs as strings without attempting recovery.
         serde_json::Value::String(raw.to_string())
     }
 
@@ -525,13 +507,8 @@ impl SessionPrompt {
         }
 
         if let Some(raw) = input.as_str() {
-            if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(raw) {
+            if let Some(parsed) = rocode_util::json::try_parse_json_object(raw) {
                 return parsed;
-            }
-            if let Some(recovered) =
-                rocode_util::json::recover_tool_arguments_from_jsonish(tool_name, raw)
-            {
-                return recovered;
             }
 
             let mut payload = Self::invalid_tool_payload(
@@ -587,14 +564,11 @@ impl SessionPrompt {
             "[DIAG] tool_call_input_for_execution entry"
         );
 
-        let legacy_fallback_allowed = state.is_none();
-        let raw_input = if legacy_fallback_allowed {
-            state_raw.as_deref().or(raw)
-        } else {
-            state_raw.as_deref()
-        }
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+        let raw_input = state_raw
+            .as_deref()
+            .or(raw)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
         match effective_status {
             // TS parity: tool execution begins on "tool-call" (running state),
@@ -617,35 +591,6 @@ impl SessionPrompt {
 
                 // Fall back to state_input or PartType input.
                 let fallback = state_input.unwrap_or_else(|| input.clone());
-
-                // If the fallback is an empty object but the PartType input is
-                // a string (e.g. Value::String wrapping JSON), try to parse it.
-                if fallback.is_object() && fallback.as_object().is_some_and(|o| o.is_empty()) {
-                    if legacy_fallback_allowed {
-                        // Try the PartType's input directly — it might be a
-                        // Value::String containing valid JSON.
-                        if let Some(s) = input.as_str() {
-                            if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(s)
-                            {
-                                tracing::debug!(
-                                    "tool_call_input_for_execution: recovered args from input string"
-                                );
-                                return Some(parsed);
-                            }
-                        }
-                        // Also try raw from PartType even if state_raw was empty.
-                        if let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) {
-                            if let Some(parsed) =
-                                rocode_util::json::try_parse_json_object_robust(raw)
-                            {
-                                tracing::debug!(
-                                    "tool_call_input_for_execution: recovered args from raw field"
-                                );
-                                return Some(parsed);
-                            }
-                        }
-                    }
-                }
 
                 Some(fallback)
             }

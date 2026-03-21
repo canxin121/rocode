@@ -10,8 +10,6 @@ mod m20260317_000006_create_session_shares;
 mod m20260317_000007_create_indexes;
 mod m20260317_000010_add_pagination_indexes;
 mod m20260317_000011_add_part_todo_pagination_indexes;
-mod m20260319_000013_int_primary_keys;
-mod m20260319_000014_session_shares_session_id_pk;
 
 pub struct Migrator;
 
@@ -28,8 +26,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20260317_000007_create_indexes::Migration),
             Box::new(m20260317_000010_add_pagination_indexes::Migration),
             Box::new(m20260317_000011_add_part_todo_pagination_indexes::Migration),
-            Box::new(m20260319_000013_int_primary_keys::Migration),
-            Box::new(m20260319_000014_session_shares_session_id_pk::Migration),
         ]
     }
 }

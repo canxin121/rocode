@@ -327,8 +327,8 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
     );
 
     let unified_parts = session_message_to_unified_message(message).parts;
-    let data_json =
-        serde_json::to_string(&unified_parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+    let data_json = serde_json::to_string(&unified_parts)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
     let metadata_json = serde_json::to_string(&metadata_to_store)
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
@@ -366,17 +366,7 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
         .unwrap_or(model.session_id.to_string());
     let parts = match model.data.as_deref() {
         Some(raw) if raw.trim().is_empty() => Vec::new(),
-        Some(raw) => match try_parse_unified_parts(raw, created, &message_id) {
-            Some(parts) => parts,
-            None => {
-                tracing::warn!(
-                    message_id = %message_id,
-                    session_id = %session_id,
-                    "failed to parse unified messages.data payload; falling back to empty parts"
-                );
-                Vec::new()
-            }
-        },
+        Some(raw) => try_parse_unified_parts(raw, created, &message_id)?,
         None => Vec::new(),
     };
 
@@ -462,7 +452,7 @@ fn part_insert_model(
             };
 
             active.tool_arguments = Set(serde_json::to_string(effective_input).ok());
-            active.tool_status = Set(Some(effective_status.as_str().to_string()));
+            active.tool_status = Set(Some(effective_status.to_string()));
         }
         rocode_session::PartType::ToolResult {
             tool_call_id,

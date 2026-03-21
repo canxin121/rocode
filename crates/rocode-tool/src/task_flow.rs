@@ -50,7 +50,6 @@ struct TaskFlowTodoItemInput {
 #[serde(rename_all = "camelCase")]
 struct TaskFlowInput {
     operation: TaskFlowOperation,
-    #[serde(default, alias = "task_id")]
     task_id: Option<String>,
     #[serde(default)]
     agent: Option<String>,
@@ -60,15 +59,15 @@ struct TaskFlowInput {
     prompt: Option<String>,
     #[serde(default)]
     command: Option<String>,
-    #[serde(default, alias = "load_skills")]
+    #[serde(default)]
     load_skills: Option<Vec<String>>,
-    #[serde(default, alias = "run_in_background")]
+    #[serde(default)]
     run_in_background: bool,
-    #[serde(default, alias = "sync_todo")]
+    #[serde(default)]
     sync_todo: bool,
-    #[serde(default, alias = "todo_item")]
+    #[serde(default)]
     todo_item: Option<TaskFlowTodoItemInput>,
-    #[serde(default, alias = "status_filter")]
+    #[serde(default)]
     status_filter: Option<Vec<String>>,
     #[serde(default = "default_limit")]
     limit: usize,
@@ -99,9 +98,9 @@ struct TaskFlowTaskView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct TaskFlowModelView {
-    #[serde(rename = "providerID", alias = "providerId", alias = "provider_id")]
+    #[serde(rename = "providerID")]
     provider_id: String,
-    #[serde(rename = "modelID", alias = "modelId", alias = "model_id")]
+    #[serde(rename = "modelID")]
     model_id: String,
 }
 
@@ -164,29 +163,17 @@ struct TodoWriteArgs {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DelegatedTaskMetadataWire {
-    #[serde(
-        default,
-        alias = "agent_task_id",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     agent_task_id: Option<String>,
-    #[serde(
-        default,
-        alias = "session_id",
-        deserialize_with = "deserialize_opt_string_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     session_id: Option<String>,
-    #[serde(
-        default,
-        alias = "has_text_output",
-        deserialize_with = "deserialize_bool_lossy"
-    )]
+    #[serde(default, deserialize_with = "deserialize_bool_lossy")]
     has_text_output: bool,
     #[serde(default)]
     model: Option<TaskFlowModelView>,
-    #[serde(default, alias = "loaded_skills")]
+    #[serde(default)]
     loaded_skills: Option<serde_json::Value>,
-    #[serde(default, alias = "loaded_skill_count")]
+    #[serde(default)]
     loaded_skill_count: Option<serde_json::Value>,
 }
 

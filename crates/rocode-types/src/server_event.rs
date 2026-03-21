@@ -76,7 +76,7 @@ impl SessionRunStatusWire {
 pub enum ServerEvent {
     #[serde(rename = "output_block")]
     OutputBlock {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         block: serde_json::Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,12 +84,7 @@ pub enum ServerEvent {
     },
     #[serde(rename = "usage")]
     Usage {
-        #[serde(
-            rename = "sessionID",
-            alias = "sessionId",
-            alias = "session_id",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "sessionID", skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         prompt_tokens: u64,
         completion_tokens: u64,
@@ -98,12 +93,7 @@ pub enum ServerEvent {
     },
     #[serde(rename = "error")]
     Error {
-        #[serde(
-            rename = "sessionID",
-            alias = "sessionId",
-            alias = "session_id",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "sessionID", skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         error: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,44 +103,29 @@ pub enum ServerEvent {
     },
     #[serde(rename = "session.updated")]
     SessionUpdated {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         source: String,
     },
     #[serde(rename = "session.status")]
     SessionStatus {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         status: SessionRunStatusWire,
     },
     #[serde(rename = "question.created")]
     QuestionCreated {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
         session_id: String,
-        #[serde(
-            rename = "requestID",
-            alias = "requestId",
-            alias = "request_id",
-            alias = "id"
-        )]
+        #[serde(rename = "requestID")]
         request_id: String,
         #[serde(default)]
         questions: serde_json::Value,
     },
-    #[serde(
-        rename = "question.resolved",
-        alias = "question.replied",
-        alias = "question.rejected"
-    )]
+    #[serde(rename = "question.resolved")]
     QuestionResolved {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(
-            rename = "requestID",
-            alias = "requestId",
-            alias = "request_id",
-            alias = "id"
-        )]
+        #[serde(rename = "requestID")]
         request_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolution: Option<QuestionResolutionKind>,
@@ -161,29 +136,17 @@ pub enum ServerEvent {
     },
     #[serde(rename = "permission.requested")]
     PermissionRequested {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(
-            rename = "permissionID",
-            alias = "permissionId",
-            alias = "requestID",
-            alias = "requestId",
-            alias = "id"
-        )]
+        #[serde(rename = "permissionID")]
         permission_id: String,
         info: PermissionRequestInfo,
     },
-    #[serde(rename = "permission.resolved", alias = "permission.replied")]
+    #[serde(rename = "permission.resolved")]
     PermissionResolved {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(
-            rename = "permissionID",
-            alias = "permissionId",
-            alias = "requestID",
-            alias = "requestId",
-            alias = "id"
-        )]
+        #[serde(rename = "permissionID")]
         permission_id: String,
         reply: PermissionReply,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,57 +156,44 @@ pub enum ServerEvent {
     ConfigUpdated,
     #[serde(rename = "tool_call.lifecycle")]
     ToolCallLifecycle {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(rename = "toolCallId", alias = "tool_call_id", alias = "toolCallID")]
+        #[serde(rename = "toolCallId")]
         tool_call_id: String,
         phase: ToolCallPhase,
-        #[serde(
-            rename = "toolName",
-            alias = "tool_name",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "toolName", default, skip_serializing_if = "Option::is_none")]
         tool_name: Option<String>,
     },
     #[serde(rename = "execution.topology.changed")]
     TopologyChanged {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         #[serde(
             rename = "executionID",
-            alias = "executionId",
-            alias = "execution_id",
             default,
             skip_serializing_if = "Option::is_none"
         )]
         execution_id: Option<String>,
-        #[serde(
-            rename = "stageID",
-            alias = "stageId",
-            alias = "stage_id",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "stageID", default, skip_serializing_if = "Option::is_none")]
         stage_id: Option<String>,
     },
     #[serde(rename = "child_session.attached")]
     ChildSessionAttached {
-        #[serde(rename = "parentID", alias = "parentId", alias = "parent_id")]
+        #[serde(rename = "parentID")]
         parent_id: String,
-        #[serde(rename = "childID", alias = "childId", alias = "child_id")]
+        #[serde(rename = "childID")]
         child_id: String,
     },
     #[serde(rename = "child_session.detached")]
     ChildSessionDetached {
-        #[serde(rename = "parentID", alias = "parentId", alias = "parent_id")]
+        #[serde(rename = "parentID")]
         parent_id: String,
-        #[serde(rename = "childID", alias = "childId", alias = "child_id")]
+        #[serde(rename = "childID")]
         child_id: String,
     },
-    #[serde(rename = "diff.updated", alias = "session.diff")]
+    #[serde(rename = "diff.updated")]
     DiffUpdated {
-        #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+        #[serde(rename = "sessionID")]
         session_id: String,
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         diff: Vec<DiffEntry>,

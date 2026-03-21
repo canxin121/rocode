@@ -22,9 +22,9 @@ impl std::fmt::Display for InstallMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = self
             .to_possible_value()
-            .map(|value| value.get_name())
-            .unwrap_or("unknown");
-        f.write_str(name)
+            .map(|value| value.get_name().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        f.write_str(&name)
     }
 }
 

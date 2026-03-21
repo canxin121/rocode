@@ -21,6 +21,14 @@ pub enum McpConnectionStatusWire {
 }
 
 impl McpConnectionStatusWire {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+
     pub fn from_str_lossy(value: &str) -> Option<Self> {
         let trimmed = value.trim();
         if trimmed.is_empty() {

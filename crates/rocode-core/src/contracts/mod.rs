@@ -1,7 +1,7 @@
 pub mod agent_tasks;
 pub mod attachments;
-pub mod execution;
 pub mod events;
+pub mod execution;
 pub mod fs;
 pub mod mcp;
 pub mod output_blocks;

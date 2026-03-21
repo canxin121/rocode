@@ -120,24 +120,14 @@ enum ServerEventWire {
     ConfigUpdated,
     #[serde(rename = "session.updated")]
     SessionUpdated {
-        #[serde(
-            rename = "sessionID",
-            alias = "sessionId",
-            alias = "session_id",
-            default
-        )]
+        #[serde(rename = "sessionID", default)]
         session_id: String,
         #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         source: Option<String>,
     },
     #[serde(rename = "session.status")]
     SessionStatus {
-        #[serde(
-            rename = "sessionID",
-            alias = "sessionId",
-            alias = "session_id",
-            default
-        )]
+        #[serde(rename = "sessionID", default)]
         session_id: String,
         status: SessionRunStatusWire,
     },
@@ -145,22 +135,12 @@ enum ServerEventWire {
     QuestionCreated(QuestionCreatedWire),
     #[serde(rename = "question.resolved")]
     QuestionResolved(QuestionResolvedWire),
-    #[serde(rename = "question.replied")]
-    QuestionReplied(QuestionResolvedWire),
-    #[serde(rename = "question.rejected")]
-    QuestionRejected(QuestionResolvedWire),
     #[serde(rename = "permission.requested")]
     PermissionRequested(PermissionRequestedWire),
     #[serde(rename = "permission.resolved")]
     PermissionResolved(PermissionResolvedWire),
-    #[serde(rename = "permission.replied")]
-    PermissionReplied(PermissionResolvedWire),
     #[serde(rename = "tool_call.lifecycle")]
     ToolCallLifecycle(ToolCallLifecycleWire),
-    #[serde(rename = "tool_call.start")]
-    ToolCallStart(ToolCallStartWire),
-    #[serde(rename = "tool_call.complete")]
-    ToolCallComplete(ToolCallCompleteWire),
     #[serde(rename = "child_session.attached")]
     ChildSessionAttached(ChildSessionWire),
     #[serde(rename = "child_session.detached")]
@@ -179,16 +159,11 @@ enum ServerEventWire {
 struct QuestionCreatedWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
     #[serde(
         rename = "requestID",
-        alias = "requestId",
-        alias = "request_id",
-        alias = "id",
         default
     )]
     request_id: String,
@@ -200,9 +175,6 @@ struct QuestionCreatedWire {
 struct QuestionResolvedWire {
     #[serde(
         rename = "requestID",
-        alias = "requestId",
-        alias = "request_id",
-        alias = "id",
         default
     )]
     request_id: String,
@@ -212,17 +184,11 @@ struct QuestionResolvedWire {
 struct PermissionRequestedWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
     #[serde(
         rename = "permissionID",
-        alias = "permissionId",
-        alias = "requestID",
-        alias = "requestId",
-        alias = "id",
         default
     )]
     permission_id: String,
@@ -234,10 +200,6 @@ struct PermissionRequestedWire {
 struct PermissionResolvedWire {
     #[serde(
         rename = "permissionID",
-        alias = "permissionId",
-        alias = "requestID",
-        alias = "requestId",
-        alias = "id",
         default
     )]
     permission_id: String,
@@ -247,16 +209,14 @@ struct PermissionResolvedWire {
 struct ToolCallLifecycleWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
-    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    #[serde(rename = "toolCallId", default)]
     tool_call_id: String,
     #[serde(default)]
     phase: String,
-    #[serde(rename = "toolName", alias = "tool_name", default)]
+    #[serde(rename = "toolName", default)]
     tool_name: String,
 }
 
@@ -264,14 +224,12 @@ struct ToolCallLifecycleWire {
 struct ToolCallStartWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
-    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    #[serde(rename = "toolCallId", default)]
     tool_call_id: String,
-    #[serde(rename = "toolName", alias = "tool_name", default)]
+    #[serde(rename = "toolName", default)]
     tool_name: String,
 }
 
@@ -279,12 +237,10 @@ struct ToolCallStartWire {
 struct ToolCallCompleteWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
-    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    #[serde(rename = "toolCallId", default)]
     tool_call_id: String,
 }
 
@@ -292,7 +248,7 @@ struct ToolCallCompleteWire {
 struct ChildSessionWire {
     #[serde(rename = "parentID", alias = "parentId", alias = "parent_id", default)]
     parent_id: String,
-    #[serde(rename = "childID", alias = "childId", alias = "child_id", default)]
+    #[serde(rename = "childID", default)]
     child_id: String,
 }
 
@@ -300,8 +256,6 @@ struct ChildSessionWire {
 struct OutputBlockWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
@@ -315,8 +269,6 @@ struct OutputBlockWire {
 struct ErrorWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
@@ -334,8 +286,6 @@ struct ErrorWire {
 struct UsageWire {
     #[serde(
         rename = "sessionID",
-        alias = "sessionId",
-        alias = "session_id",
         default
     )]
     session_id: String,
@@ -536,9 +486,7 @@ fn parse_event(
             session_id: event.session_id,
             questions_json: event.questions,
         }),
-        ServerEventWire::QuestionResolved(event)
-        | ServerEventWire::QuestionReplied(event)
-        | ServerEventWire::QuestionRejected(event) => Some(CliServerEvent::QuestionResolved {
+        ServerEventWire::QuestionResolved(event) => Some(CliServerEvent::QuestionResolved {
             request_id: event.request_id,
         }),
         ServerEventWire::PermissionRequested(event) => Some(CliServerEvent::PermissionRequested {
@@ -546,11 +494,9 @@ fn parse_event(
             permission_id: event.permission_id,
             info_json: event.info,
         }),
-        ServerEventWire::PermissionResolved(event) | ServerEventWire::PermissionReplied(event) => {
-            Some(CliServerEvent::PermissionResolved {
-                permission_id: event.permission_id,
-            })
-        }
+        ServerEventWire::PermissionResolved(event) => Some(CliServerEvent::PermissionResolved {
+            permission_id: event.permission_id,
+        }),
         ServerEventWire::ToolCallLifecycle(event) => match event.phase.as_str() {
             "start" => Some(CliServerEvent::ToolCallStarted {
                 session_id: event.session_id,
@@ -563,15 +509,6 @@ fn parse_event(
             }),
             _ => None,
         },
-        ServerEventWire::ToolCallStart(event) => Some(CliServerEvent::ToolCallStarted {
-            session_id: event.session_id,
-            tool_call_id: event.tool_call_id,
-            tool_name: event.tool_name,
-        }),
-        ServerEventWire::ToolCallComplete(event) => Some(CliServerEvent::ToolCallCompleted {
-            session_id: event.session_id,
-            tool_call_id: event.tool_call_id,
-        }),
         ServerEventWire::ChildSessionAttached(event) => {
             Some(CliServerEvent::ChildSessionAttached {
                 parent_id: event.parent_id,

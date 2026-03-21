@@ -192,7 +192,6 @@ impl SessionPrompt {
         };
 
         for msg in messages {
-            // Prefer the strongly-typed usage field populated by provider stream/final responses.
             if let Some(msg_usage) = msg.usage.as_ref() {
                 usage.input += msg_usage.input_tokens;
                 usage.output += msg_usage.output_tokens;
@@ -200,27 +199,6 @@ impl SessionPrompt {
                 usage.cache_write += msg_usage.cache_write_tokens;
                 continue;
             }
-
-            // Fallback to metadata for backward compatibility with historical snapshots.
-            let meta = parse_message_metadata(&msg.metadata);
-            let historical_usage = meta.usage.unwrap_or_default();
-
-            usage.input += meta
-                .tokens_input
-                .or(historical_usage.prompt_tokens)
-                .unwrap_or(0);
-            usage.output += meta
-                .tokens_output
-                .or(historical_usage.completion_tokens)
-                .unwrap_or(0);
-            usage.cache_read += meta
-                .tokens_cache_read
-                .or(historical_usage.cache_read_tokens)
-                .unwrap_or(0);
-            usage.cache_write += meta
-                .tokens_cache_write
-                .or(historical_usage.cache_write_tokens)
-                .unwrap_or(0);
         }
         usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
         usage

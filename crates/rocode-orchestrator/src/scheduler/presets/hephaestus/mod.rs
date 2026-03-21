@@ -1,8 +1,5 @@
 use serde_json::json;
 
-use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
-use rocode_core::contracts::tools::BuiltinToolName;
-
 use super::{
     default_effect_dispatch, default_resolve_stage_kinds, default_transition_graph,
     passthrough_route_decision,
@@ -20,6 +17,7 @@ use crate::scheduler::{
     SchedulerExecutionVerificationMode, SchedulerExecutionWorkflowPolicy,
     SchedulerFinalizationMode, SchedulerProfilePlan,
 };
+use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
 
 pub fn hephaestus_workflow_todos_payload() -> serde_json::Value {
     json!({
@@ -31,7 +29,7 @@ pub fn hephaestus_workflow_todos_payload() -> serde_json::Value {
     })
 }
 
-const HEPHAESTUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &[BuiltinToolName::TodoWrite.as_str()];
+const HEPHAESTUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &["todo_write"];
 
 fn validate_hephaestus_runtime_orchestration_tool(tool_name: &str) -> Result<(), String> {
     validate_runtime_orchestration_tool(

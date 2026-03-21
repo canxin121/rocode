@@ -2,7 +2,6 @@ use super::*;
 
 impl App {
     pub(super) fn question_info_to_prompt(question: &QuestionInfo) -> Option<QuestionRequest> {
-        // Prefer full-fidelity `items` field; fallback to legacy `questions`/`options`.
         if let Some(item) = question.items.first() {
             let mut options: Vec<QuestionOption> = item
                 .options
@@ -37,43 +36,7 @@ impl App {
                 options,
             });
         }
-
-        // Legacy path: consume `questions`/`options` fields.
-        let prompt_text = question.questions.first()?.clone();
-        let option_labels = question
-            .options
-            .as_ref()
-            .and_then(|all| all.first().cloned())
-            .unwrap_or_default();
-        let mut options = option_labels
-            .into_iter()
-            .map(|label| QuestionOption {
-                id: label.clone(),
-                label,
-                description: None,
-            })
-            .collect::<Vec<_>>();
-        if !options
-            .iter()
-            .any(|option| option.id.eq_ignore_ascii_case(OTHER_OPTION_ID))
-        {
-            options.push(QuestionOption {
-                id: OTHER_OPTION_ID.to_string(),
-                label: OTHER_OPTION_LABEL.to_string(),
-                description: None,
-            });
-        }
-        let question_type = if options.is_empty() {
-            QuestionType::Text
-        } else {
-            QuestionType::SingleChoice
-        };
-        Some(QuestionRequest {
-            id: question.id.clone(),
-            question: prompt_text,
-            question_type,
-            options,
-        })
+        None
     }
 
     pub(super) fn clear_question_tracking(&mut self, question_id: &str) {
@@ -174,21 +137,22 @@ impl App {
             .filter(|answer| !answer.is_empty())
             .collect::<Vec<_>>();
         if first_answer.is_empty() {
-            if let Some(default_option) = question
-                .as_ref()
-                .and_then(|q| q.options.as_ref())
-                .and_then(|all| all.first())
-                .and_then(|opts| {
-                    opts.iter()
-                        .find(|option| !option.eq_ignore_ascii_case(OTHER_OPTION_LABEL))
-                        .cloned()
-                })
+            if let Some(default_option) =
+                question
+                    .as_ref()
+                    .and_then(|q| q.items.first())
+                    .and_then(|item| {
+                        item.options
+                            .iter()
+                            .find(|option| !option.label.eq_ignore_ascii_case(OTHER_OPTION_LABEL))
+                            .map(|option| option.label.clone())
+                    })
             {
                 first_answer.push(default_option);
             }
         }
 
-        let question_count = question.as_ref().map(|q| q.questions.len()).unwrap_or(1);
+        let question_count = question.as_ref().map(|q| q.items.len()).unwrap_or(1);
         let mut answers = vec![Vec::<String>::new(); question_count.max(1)];
         answers[0] = first_answer;
 

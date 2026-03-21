@@ -668,8 +668,6 @@ impl RuntimeControlRegistry {
         let info = QuestionInfo {
             id: request_id.clone(),
             session_id: session_id.clone(),
-            questions: questions.iter().map(|q| q.question.clone()).collect(),
-            options: normalize_question_options(&questions),
             items: questions
                 .iter()
                 .map(|q| QuestionItemInfo {
@@ -701,7 +699,7 @@ impl RuntimeControlRegistry {
             session_id,
             kind: ExecutionKind::Question,
             status: ExecutionStatus::Waiting,
-            label: Some(format!("Question ({})", info.questions.len())),
+            label: Some(format!("Question ({})", info.items.len())),
             parent_id,
             stage_id,
             waiting_on: Some("user".to_string()),

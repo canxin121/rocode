@@ -27,6 +27,16 @@ pub enum FileWatcherEventKind {
     Unlink,
 }
 
+impl FileWatcherEventKind {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

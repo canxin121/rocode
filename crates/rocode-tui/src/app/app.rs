@@ -1794,29 +1794,10 @@ mod tests {
         let prompt = App::question_info_to_prompt(&QuestionInfo {
             id: "q1".to_string(),
             session_id: "s1".to_string(),
-            questions: vec!["Pick one".to_string()],
-            options: Some(vec![vec!["Yes".to_string(), "No".to_string()]]),
             items: Vec::new(),
         })
-        .expect("prompt should exist");
-
-        assert_eq!(prompt.question_type, QuestionType::SingleChoice);
-        assert_eq!(
-            prompt.options.last().map(|option| option.id.as_str()),
-            Some(OTHER_OPTION_ID)
-        );
-        assert_eq!(
-            prompt.options.last().map(|option| option.label.as_str()),
-            Some(OTHER_OPTION_LABEL)
-        );
-        assert_eq!(
-            prompt
-                .options
-                .iter()
-                .filter(|option| option.id == OTHER_OPTION_ID)
-                .count(),
-            1
-        );
+        .is_none();
+        assert!(prompt);
     }
 
     #[test]

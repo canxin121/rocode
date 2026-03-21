@@ -12,7 +12,9 @@ use crate::mcp_oauth::{
     McpServerInfo as McpServerInfoStruct, McpServerLogEntry, RemoteMcpConfig,
 };
 use crate::{ApiError, Result, ServerState};
-use rocode_config::{McpOAuthConfig as LoadedMcpOAuthConfig, McpServerConfig as LoadedMcpServerConfig};
+use rocode_config::{
+    McpOAuthConfig as LoadedMcpOAuthConfig, McpServerConfig as LoadedMcpServerConfig,
+};
 
 pub(crate) fn mcp_routes() -> Router<Arc<ServerState>> {
     Router::new()

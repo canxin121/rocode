@@ -1,7 +1,5 @@
 pub mod json {
-    use rocode_core::contracts::patch::keys as patch_keys;
-    use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
-    use serde::Serialize;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     fn parse_json_object(input: &str) -> Option<serde_json::Value> {
         serde_json::from_str::<serde_json::Value>(input)
@@ -21,440 +19,24 @@ pub mod json {
     ///
     /// Returns `Some(Value::Object)` on success, `None` otherwise.
     pub fn try_parse_json_object_robust(input: &str) -> Option<serde_json::Value> {
-        if let Some(val) = parse_json_object_with_recovery(input) {
-            return Some(val);
-        }
-        if let Ok(inner) = serde_json::from_str::<String>(input) {
-            if let Some(val) = parse_json_object_with_recovery(&inner) {
-                return Some(val);
-            }
-        }
-        None
+        parse_json_object_with_recovery(input)
     }
 
-    /// Backward-compatible helper retained for existing call sites.
     pub fn try_parse_json_object(input: &str) -> Option<serde_json::Value> {
-        try_parse_json_object_robust(input)
+        parse_json_object_with_recovery(input)
     }
 
-    /// Best-effort recovery for truncated/malformed JSON-ish tool argument strings.
-    /// Returns an object only when required fields for the given tool can be extracted.
     pub fn recover_tool_arguments_from_jsonish(
         tool_name: &str,
         input: &str,
     ) -> Option<serde_json::Value> {
-        let _tool = BuiltinToolName::parse(tool_name)?;
-        try_parse_json_object_robust(input)
+        let _tool = tool_name.parse::<BuiltinToolName>().ok()?;
+        try_parse_json_object(input)
     }
 
-    // -----------------------------------------------------------------------
-    // Ultra tool-call recovery: "Never repair JSON. Recover structure."
-    // -----------------------------------------------------------------------
-
-    /// Top-level entry point for structural recovery of malformed tool-call
-    /// arguments.  Works through six stages, from cheapest to most aggressive.
     pub fn recover_tool_call_ultra(tool: &str, raw: &str) -> Option<serde_json::Value> {
-        let _tool = BuiltinToolName::parse(tool)?;
+        let _tool = tool.parse::<BuiltinToolName>().ok()?;
         try_parse_json_object_robust(raw)
-    }
-
-    // -- Stage 1 helpers ----------------------------------------------------
-
-    fn ultra_clean_raw(raw: &str) -> String {
-        // Delegate to the unified sanitize phase (Phase 0 only) which handles
-        // BOM, ANSI escapes, XML/HTML wrappers, markdown fences, and trailing
-        // semicolons — without modifying JSON structure.
-        let (sanitized, _) = crate::jsonish_parse::sanitize_standalone(raw);
-        sanitized
-    }
-
-    // -- Stage 2 helpers ----------------------------------------------------
-
-    /// Extract multiple `{…}` candidate regions and pick the one most likely
-    /// to be the actual tool-call JSON (scored by presence of expected keys
-    /// and parsability).
-    fn ultra_pick_best_candidate(input: &str) -> Option<String> {
-        let last_brace = input.rfind('}')?;
-        let candidates = ultra_extract_candidates(input, last_brace);
-        candidates
-            .into_iter()
-            .max_by_key(|c| ultra_score_candidate(c))
-            .map(|s| s.to_string())
-    }
-
-    /// Generate candidate regions by pairing each `{` with the last `}`.
-    fn ultra_extract_candidates(input: &str, last_brace: usize) -> Vec<&str> {
-        let mut res = Vec::new();
-        let mut pos = 0;
-        while let Some(offset) = input[pos..].find('{') {
-            let start = pos + offset;
-            if start < last_brace {
-                res.push(&input[start..=last_brace]);
-            }
-            pos = start + 1;
-            // Limit candidates to avoid quadratic behaviour on huge inputs.
-            if res.len() >= 16 {
-                break;
-            }
-        }
-        // Also try the truncated tail (no closing brace) for stream-cut JSON.
-        if res.is_empty() {
-            if let Some(offset) = input.find('{') {
-                res.push(&input[offset..]);
-            }
-        }
-        res
-    }
-
-    /// Score a candidate region: higher = more likely to be the real tool call.
-    fn ultra_score_candidate(s: &str) -> i32 {
-        let mut score: i32 = 0;
-        // Presence of known tool-call keys (quoted to avoid HTML attribute matches).
-        if s.contains("\"file_path\"") || s.contains("\"filePath\"") {
-            score += 100;
-        }
-        if s.contains("\"content\"") {
-            score += 80;
-        }
-        if s.contains("\"command\"") || s.contains("\"old_string\"") || s.contains("\"new_string\"")
-        {
-            score += 60;
-        }
-        // Shorter candidates are preferred (less garbage included).
-        score -= (s.len() / 1000) as i32;
-        // Bonus if it actually parses.
-        if serde_json::from_str::<serde_json::Value>(s).is_ok() {
-            score += 200;
-        }
-        score
-    }
-
-    // -- Stage 4 helpers ----------------------------------------------------
-
-    fn ultra_repair_truncated(input: &str) -> Option<serde_json::Value> {
-        // Use the full repair pipeline in aggressive mode — handles unclosed
-        // strings, missing commas/colons, bracket balancing, escape repair, etc.
-        let (repaired, _) = crate::jsonish_parse::repair_json_standalone(input, true);
-        if let Ok(v @ serde_json::Value::Object(_)) =
-            serde_json::from_str::<serde_json::Value>(&repaired)
-        {
-            return Some(v);
-        }
-
-        // Fallback: naive quote + brace balancing for edge cases the pipeline misses
-        let mut s = input.to_string();
-        if !ultra_count_unescaped_quotes(&s).is_multiple_of(2) {
-            s.push('"');
-        }
-        let open = s.chars().filter(|&c| c == '{').count();
-        let close = s.chars().filter(|&c| c == '}').count();
-        for _ in 0..open.saturating_sub(close) {
-            s.push('}');
-        }
-        if let Ok(v @ serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(&s)
-        {
-            return Some(v);
-        }
-        None
-    }
-
-    /// Count `"` that are NOT preceded by an odd run of backslashes.
-    fn ultra_count_unescaped_quotes(s: &str) -> usize {
-        let mut count = 0;
-        let bytes = s.as_bytes();
-        for i in 0..bytes.len() {
-            if bytes[i] == b'"' {
-                let mut backslashes = 0;
-                let mut j = i;
-                while j > 0 && bytes[j - 1] == b'\\' {
-                    backslashes += 1;
-                    j -= 1;
-                }
-                if backslashes % 2 == 0 {
-                    count += 1;
-                }
-            }
-        }
-        count
-    }
-
-    // -- Stage 5 helpers ----------------------------------------------------
-
-    fn ultra_recover_loose_object(input: &str) -> Option<serde_json::Value> {
-        let mut map = serde_json::Map::new();
-        let mut pos = 0;
-        while let Some((k, v, next)) = ultra_scan_field(input, pos) {
-            map.insert(k, serde_json::Value::String(v));
-            pos = next;
-        }
-        if map.is_empty() {
-            return None;
-        }
-        Some(serde_json::Value::Object(map))
-    }
-
-    /// Scan for the next `"key": "value"` pair starting at `start`.
-    fn ultra_scan_field(input: &str, start: usize) -> Option<(String, String, usize)> {
-        let rest = &input[start..];
-        // Find opening quote of key.
-        let k1 = rest.find('"')? + start;
-        let k2 = input[k1 + 1..].find('"')? + k1 + 1;
-        let key = &input[k1 + 1..k2];
-
-        // Find colon after key.
-        let after_key = &input[k2 + 1..];
-        let colon = after_key.find(':')?;
-        let value_region = &input[k2 + 1 + colon + 1..];
-
-        // Find opening quote of value.
-        let q_offset = value_region.find('"')?;
-        let val_start = k2 + 1 + colon + 1 + q_offset + 1;
-        let tail = &input[val_start..];
-
-        // Find end of value: next `","` or `"}` boundary.
-        let next_key = tail.find("\",\"");
-        let end_obj = tail.find("\"}");
-
-        let end = [next_key, end_obj]
-            .iter()
-            .filter_map(|x| *x)
-            .min()
-            .unwrap_or(tail.len());
-
-        Some((
-            key.to_string(),
-            tail[..end].to_string(),
-            val_start + end + 1,
-        ))
-    }
-
-    // -- Stage 6: write -----------------------------------------------------
-
-    fn ultra_recover_write(input: &str) -> Option<serde_json::Value> {
-        #[derive(Serialize)]
-        struct WriteArgs {
-            file_path: String,
-            content: String,
-        }
-
-        let file_path = ultra_extract_short_field(
-            input,
-            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
-        )?;
-        // Require content to be present — an empty default would silently
-        // overwrite files with nothing, which is worse than failing recovery.
-        let content = ultra_extract_large_field(
-            input,
-            "content",
-            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
-        )?;
-        to_json_value(WriteArgs { file_path, content })
-    }
-
-    // -- Stage 6: edit ------------------------------------------------------
-
-    fn ultra_recover_edit(input: &str) -> Option<serde_json::Value> {
-        #[derive(Serialize)]
-        struct EditArgs {
-            file_path: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            old_string: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            new_string: Option<String>,
-        }
-
-        let file_path = ultra_extract_short_field(
-            input,
-            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
-        )?;
-        let old_string = ultra_extract_large_field(
-            input,
-            patch_keys::OLD_STRING,
-            &[
-                patch_keys::NEW_STRING,
-                "newString",
-                patch_keys::FILE_PATH_SNAKE,
-                patch_keys::FILE_PATH,
-            ],
-        );
-        let new_string = ultra_extract_large_field(
-            input,
-            patch_keys::NEW_STRING,
-            &[
-                patch_keys::OLD_STRING,
-                "oldString",
-                patch_keys::FILE_PATH_SNAKE,
-                patch_keys::FILE_PATH,
-            ],
-        );
-        // Also try camelCase variants.
-        let old_string = old_string.or_else(|| {
-            ultra_extract_large_field(
-                input,
-                "oldString",
-                &[
-                    patch_keys::NEW_STRING,
-                    "newString",
-                    patch_keys::FILE_PATH_SNAKE,
-                    patch_keys::FILE_PATH,
-                ],
-            )
-        });
-        let new_string = new_string.or_else(|| {
-            ultra_extract_large_field(
-                input,
-                "newString",
-                &[
-                    patch_keys::OLD_STRING,
-                    "oldString",
-                    patch_keys::FILE_PATH_SNAKE,
-                    patch_keys::FILE_PATH,
-                ],
-            )
-        });
-
-        to_json_value(EditArgs {
-            file_path,
-            old_string,
-            new_string,
-        })
-    }
-
-    // -- Shared extraction helpers ------------------------------------------
-
-    /// Extract a short, well-formed field value (like a file path).
-    /// Stops at the first unescaped `"`.
-    /// Uses structure-aware scanning to skip keys that appear inside string values.
-    fn ultra_extract_short_field(input: &str, keys: &[&str]) -> Option<String> {
-        for key in keys {
-            let needle = format!("\"{}\"", key);
-            if let Some(idx) = find_top_level_key(input, &needle) {
-                let after = &input[idx + needle.len()..];
-                let colon = after.find(':')?;
-                let rest = &after[colon + 1..];
-                let q = rest.find('"')?;
-                let val_start = &rest[q + 1..];
-                // Read until next unescaped quote.
-                if let Some(end) = find_unescaped_quote(val_start) {
-                    return Some(val_start[..end].to_string());
-                }
-            }
-        }
-        None
-    }
-
-    /// Extract a potentially huge field value (like HTML content).
-    /// Instead of relying on closing quotes, uses the position of the next
-    /// known field key (or `}` at end-of-object) as the boundary.
-    /// Uses structure-aware scanning to skip keys that appear inside string values.
-    fn ultra_extract_large_field(input: &str, key: &str, stop_keys: &[&str]) -> Option<String> {
-        let needle = format!("\"{}\"", key);
-        let kpos = find_top_level_key(input, &needle)?;
-        let after = &input[kpos + needle.len()..];
-        let colon = after.find(':')?;
-        let rest = &after[colon + 1..];
-        let q = rest.find('"')?;
-        let val_abs_start = kpos + needle.len() + colon + 1 + q + 1;
-        let tail = &input[val_abs_start..];
-
-        // Find the earliest stop boundary.
-        let mut end = tail.len();
-
-        for sk in stop_keys {
-            let pat = format!("\"{}\"", sk);
-            if let Some(i) = tail.find(&pat) {
-                end = end.min(i);
-            }
-        }
-        // Also stop at the last `}` if it's before any stop key.
-        if let Some(i) = tail.rfind('}') {
-            end = end.min(i);
-        }
-
-        Some(ultra_trim_tail(&tail[..end]))
-    }
-
-    /// Find a `"key"` pattern at the top level of the JSON structure,
-    /// skipping occurrences that appear inside string values.
-    /// Returns the byte offset of the match, or None.
-    fn find_top_level_key(input: &str, needle: &str) -> Option<usize> {
-        let bytes = input.as_bytes();
-        let needle_bytes = needle.as_bytes();
-        let mut i = 0;
-        let mut in_string = false;
-        let mut escape = false;
-
-        while i < bytes.len() {
-            let b = bytes[i];
-
-            if in_string {
-                if escape {
-                    escape = false;
-                    i += 1;
-                    continue;
-                }
-                if b == b'\\' {
-                    escape = true;
-                    i += 1;
-                    continue;
-                }
-                if b == b'"' {
-                    in_string = false;
-                }
-                i += 1;
-                continue;
-            }
-
-            // Outside a string — check for needle match
-            if b == b'"' {
-                if bytes[i..].starts_with(needle_bytes) {
-                    // Verify this looks like a key: preceded by `{`, `,`, or whitespace
-                    let prev_significant =
-                        bytes[..i].iter().rev().find(|&&c| !c.is_ascii_whitespace());
-                    if matches!(prev_significant, Some(b'{') | Some(b',') | None) {
-                        return Some(i);
-                    }
-                }
-                // Enter the string (whether it matched or not)
-                in_string = true;
-            }
-            i += 1;
-        }
-        None
-    }
-
-    /// Find the position of the first `"` not preceded by an odd number of `\`.
-    fn find_unescaped_quote(s: &str) -> Option<usize> {
-        let bytes = s.as_bytes();
-        for i in 0..bytes.len() {
-            if bytes[i] == b'"' {
-                let mut backslashes = 0;
-                let mut j = i;
-                while j > 0 && bytes[j - 1] == b'\\' {
-                    backslashes += 1;
-                    j -= 1;
-                }
-                if backslashes % 2 == 0 {
-                    return Some(i);
-                }
-            }
-        }
-        None
-    }
-
-    /// Trim trailing JSON noise: quotes, commas, whitespace.
-    fn ultra_trim_tail(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut end = bytes.len();
-        while end > 0 {
-            match bytes[end - 1] {
-                b'"' | b',' | b'\n' | b'\r' | b' ' | b'\t' => end -= 1,
-                _ => break,
-            }
-        }
-        // Safety: we only trimmed single-byte ASCII, so `end` is always a
-        // valid UTF-8 boundary.
-        s[..end].to_string()
     }
 }
 
@@ -817,12 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn try_parse_json_object_robust_parses_stringified_object() {
+    fn try_parse_json_object_robust_rejects_stringified_object() {
         let inner = r#"{"file_path":"/tmp/a","content":"hello"}"#;
         let outer = serde_json::to_string(inner).expect("stringify should succeed");
-        let val = json::try_parse_json_object_robust(&outer).expect("should parse object");
-        assert_eq!(val["file_path"], "/tmp/a");
-        assert_eq!(val["content"], "hello");
+        assert!(json::try_parse_json_object_robust(&outer).is_none());
     }
 
     #[test]
@@ -863,11 +443,7 @@ mod tests {
     #[test]
     fn recover_tool_arguments_from_jsonish_returns_none_for_unknown_tool() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"hello\"";
-        assert!(json::recover_tool_arguments_from_jsonish(
-            BuiltinToolName::Read.as_str(),
-            malformed
-        )
-        .is_none());
+        assert!(json::recover_tool_arguments_from_jsonish("unknown", malformed).is_none());
     }
 
     #[test]

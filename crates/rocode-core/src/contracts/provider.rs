@@ -86,6 +86,16 @@ pub enum ProviderFinishReasonWire {
     Unknown,
 }
 
+impl ProviderFinishReasonWire {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}
+
 /// Canonical "tool_name" strings used for **provider-managed** tool calls.
 ///
 /// These are used for providers that surface internal tool calls as streaming
@@ -134,6 +144,16 @@ pub enum ProviderToolCallNameWire {
         serialize = "local-shell-call"
     )]
     LocalShell,
+}
+
+impl ProviderToolCallNameWire {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }
 
 #[cfg(test)]

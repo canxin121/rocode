@@ -277,6 +277,14 @@ pub enum BuiltinToolName {
 }
 
 impl BuiltinToolName {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Question => "Question",

@@ -4,7 +4,7 @@ use crate::cli_style::CliStyle;
 pub use rocode_content::output_blocks::*;
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
 use rocode_core::contracts::output_blocks::{BlockToneWire, DisplayPreviewKindWire, ToolPhaseWire};
-use rocode_core::contracts::scheduler::{SchedulerDecisionSectionSpacing, SchedulerStageStatus};
+use rocode_core::contracts::scheduler::SchedulerStageStatus;
 use rocode_core::contracts::tools::BuiltinToolName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,10 +87,10 @@ fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
 
 fn render_tool_block(tool: &ToolBlock) -> String {
     let phase = match tool.phase {
-        ToolPhase::Start => ToolPhaseWire::Start.as_str(),
-        ToolPhase::Running => ToolPhaseWire::Running.as_str(),
-        ToolPhase::Done => ToolPhaseWire::Done.as_str(),
-        ToolPhase::Error => ToolPhaseWire::Error.as_str(),
+        ToolPhase::Start => ToolPhaseWire::Start.as_ref(),
+        ToolPhase::Running => ToolPhaseWire::Running.as_ref(),
+        ToolPhase::Done => ToolPhaseWire::Done.as_ref(),
+        ToolPhase::Error => ToolPhaseWire::Error.as_ref(),
     };
     match &tool.detail {
         Some(detail) if !detail.trim().is_empty() => {
@@ -221,7 +221,7 @@ fn render_scheduler_stage_block(stage: &SchedulerStageBlock) -> String {
             ));
         }
         for section in &decision.sections {
-            if decision.spec.section_spacing == SchedulerDecisionSectionSpacing::Loose.as_str() {
+            if decision.spec.section_spacing == "loose" {
                 out.push('\n');
             }
             out.push_str(&format!("  ✦ {}\n", section.title));
@@ -468,7 +468,7 @@ fn render_tool_rich(tool: &ToolBlock, style: &CliStyle) -> String {
 
 fn render_session_event_rich(event: &SessionEventBlock, style: &CliStyle) -> String {
     let status = event.status.as_deref().unwrap_or("");
-    let heading = match AgentTaskStatusKind::parse(status) {
+    let heading = match status.parse::<AgentTaskStatusKind>().ok() {
         Some(AgentTaskStatusKind::Completed) => style.green(&event.title),
         Some(AgentTaskStatusKind::Failed) => style.red(&event.title),
         Some(AgentTaskStatusKind::Running) => style.yellow(&event.title),
@@ -681,7 +681,7 @@ pub(crate) fn tool_web_preview(tool: &ToolBlock) -> Option<ToolWebPreview> {
         ToolStructuredDetail::FileEdit { diff_preview, .. }
         | ToolStructuredDetail::FileWrite { diff_preview, .. } => {
             diff_preview.as_ref().map(|diff| ToolWebPreview {
-                kind: DisplayPreviewKindWire::Diff.as_str().to_string(),
+                kind: DisplayPreviewKindWire::Diff.as_ref().to_string(),
                 text: diff.clone(),
                 truncated: false,
             })
@@ -691,7 +691,7 @@ pub(crate) fn tool_web_preview(tool: &ToolBlock) -> Option<ToolWebPreview> {
             truncated,
             ..
         } => output_preview.as_ref().map(|preview| ToolWebPreview {
-            kind: DisplayPreviewKindWire::Code.as_str().to_string(),
+            kind: DisplayPreviewKindWire::Code.as_ref().to_string(),
             text: preview.clone(),
             truncated: *truncated,
         }),
@@ -704,7 +704,7 @@ fn render_scheduler_stage_rich(stage: &SchedulerStageBlock, style: &CliStyle) ->
     let status = stage
         .status
         .as_deref()
-        .and_then(SchedulerStageStatus::parse);
+        .and_then(|value| value.parse::<SchedulerStageStatus>().ok());
     let header_rendered = match status {
         Some(SchedulerStageStatus::Done) => style.bold_green(&header),
         Some(SchedulerStageStatus::Blocked) | Some(SchedulerStageStatus::Cancelled) => {
@@ -982,7 +982,7 @@ fn stage_tree_decision_field(style: &CliStyle, field: &SchedulerDecisionField) -
 }
 
 fn scheduler_status_label(status: &str) -> &str {
-    match SchedulerStageStatus::parse(status) {
+    match status.parse::<SchedulerStageStatus>().ok() {
         Some(SchedulerStageStatus::Waiting) => "? waiting",
         Some(SchedulerStageStatus::Running) => "@ running",
         Some(SchedulerStageStatus::Cancelling) => "~ cancelling",
@@ -1003,13 +1003,17 @@ fn decision_field_rendered_value_text(
     value: &str,
     style: &CliStyle,
 ) -> String {
-    match field.tone.as_deref().and_then(BlockToneWire::parse) {
+    match field
+        .tone
+        .as_deref()
+        .and_then(|value| value.parse::<BlockToneWire>().ok())
+    {
         Some(BlockToneWire::Success) => style.bold_green(value),
         Some(BlockToneWire::Warning) => style.bold_yellow(value),
         Some(BlockToneWire::Error) => style.bold_red(value),
         Some(BlockToneWire::Info) => style.bold_cyan(value),
         Some(BlockToneWire::Muted) => style.dim(value),
-        Some(BlockToneWire::Status) => match SchedulerStageStatus::parse(value) {
+        Some(BlockToneWire::Status) => match value.parse::<SchedulerStageStatus>().ok() {
             Some(SchedulerStageStatus::Done) => style.bold_green(value),
             Some(SchedulerStageStatus::Blocked) => style.bold_red(value),
             _ => style.bold_yellow(value),
@@ -1284,7 +1288,7 @@ mod tests {
         let line = render_cli_block(&OutputBlock::SessionEvent(SessionEventBlock {
             event: "subtask".to_string(),
             title: "Subtask · inspect scheduler".to_string(),
-            status: Some(AgentTaskStatusKind::Pending.as_str().to_string()),
+            status: Some(AgentTaskStatusKind::Pending.as_ref().to_string()),
             summary: Some("Subtask `task_1` is `pending`.".to_string()),
             fields: vec![SessionEventField {
                 label: "ID".to_string(),
@@ -1318,7 +1322,7 @@ mod tests {
                 stage_index: Some(2),
                 stage_total: Some(5),
                 step: Some(3),
-                status: Some(SchedulerStageStatus::Running.as_str().to_string()),
+                status: Some(SchedulerStageStatus::Running.as_ref().to_string()),
                 focus: Some("planning".to_string()),
                 last_event: Some("Tool finished: Read".to_string()),
                 waiting_on: Some("model".to_string()),
@@ -1568,7 +1572,7 @@ mod tests {
                 stage_index: Some(3),
                 stage_total: Some(4),
                 step: Some(2),
-                status: Some(SchedulerStageStatus::Waiting.as_str().to_string()),
+                status: Some(SchedulerStageStatus::Waiting.as_ref().to_string()),
                 focus: Some("verification".to_string()),
                 last_event: Some("Question started".to_string()),
                 waiting_on: Some("user".to_string()),
@@ -1639,7 +1643,7 @@ mod tests {
                 stage_index: Some(1),
                 stage_total: Some(5),
                 step: Some(1),
-                status: Some(SchedulerStageStatus::Running.as_str().to_string()),
+                status: Some(SchedulerStageStatus::Running.as_ref().to_string()),
                 focus: Some("Decide the correct workflow and preserve request intent for a very long biomedical planning request".to_string()),
                 last_event: Some("Step 1 started with model analysis and route rubric evaluation".to_string()),
                 waiting_on: Some("model".to_string()),
@@ -1718,7 +1722,7 @@ mod tests {
             stage_index: None,
             stage_total: None,
             step: None,
-            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
+            status: Some(SchedulerStageStatus::Running.as_ref().to_string()),
             focus: None,
             last_event: None,
             waiting_on: None,
@@ -1759,7 +1763,7 @@ mod tests {
             stage_index: None,
             stage_total: None,
             step: None,
-            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
+            status: Some(SchedulerStageStatus::Running.as_ref().to_string()),
             focus: None,
             last_event: None,
             waiting_on: None,
@@ -1799,7 +1803,7 @@ mod tests {
             stage_index: Some(1),
             stage_total: Some(3),
             step: Some(2),
-            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
+            status: Some(SchedulerStageStatus::Running.as_ref().to_string()),
             focus: Some("code analysis".to_string()),
             last_event: Some("tool_call".to_string()),
             waiting_on: None,

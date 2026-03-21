@@ -32,8 +32,8 @@ struct CancelTaskResponse {
 
 fn status_str(status: &AgentTaskStatus) -> String {
     match status {
-        AgentTaskStatus::Failed { error } => format!("{}: {}", status.kind().as_str(), error),
-        _ => status.kind().as_str().to_string(),
+        AgentTaskStatus::Failed { error } => format!("{}: {}", status.kind(), error),
+        _ => status.kind().to_string(),
     }
 }
 

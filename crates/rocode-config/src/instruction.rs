@@ -52,21 +52,14 @@ fn env_var_any(names: &[&str]) -> Option<String> {
 }
 
 fn is_project_config_disabled() -> bool {
-    env_truthy_any(&[
-        "ROCODE_DISABLE_PROJECT_CONFIG",
-        "OPENCODE_DISABLE_PROJECT_CONFIG",
-    ])
+    env_truthy_any(&["ROCODE_DISABLE_PROJECT_CONFIG"])
 }
 fn rocode_config_dir_env() -> Option<String> {
-    env_var_any(&["ROCODE_CONFIG_DIR", "OPENCODE_CONFIG_DIR"])
+    env_var_any(&["ROCODE_CONFIG_DIR"])
 }
 
 fn global_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("rocode"))
-}
-
-fn legacy_global_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("opencode"))
 }
 
 fn global_files() -> Vec<PathBuf> {
@@ -79,14 +72,7 @@ fn global_files() -> Vec<PathBuf> {
     if let Some(cfg) = global_config_dir() {
         files.push(cfg.join(AGENTS_MD));
     }
-    if let Some(legacy_cfg) = legacy_global_config_dir() {
-        files.push(legacy_cfg.join(AGENTS_MD));
-    }
-
-    if !env_truthy_any(&[
-        "ROCODE_DISABLE_CLAUDE_CODE_PROMPT",
-        "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
-    ]) {
+    if !env_truthy_any(&["ROCODE_DISABLE_CLAUDE_CODE_PROMPT"]) {
         if let Some(home) = dirs::home_dir() {
             files.push(home.join(".claude").join(CLAUDE_MD));
         }

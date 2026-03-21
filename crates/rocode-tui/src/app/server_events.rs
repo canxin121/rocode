@@ -196,10 +196,6 @@ enum ServerEvent {
     QuestionCreated(QuestionEvent),
     #[serde(rename = "question.resolved")]
     QuestionResolved(QuestionEvent),
-    #[serde(rename = "question.replied")]
-    QuestionReplied(QuestionEvent),
-    #[serde(rename = "question.rejected")]
-    QuestionRejected(QuestionEvent),
     #[serde(rename = "permission.requested")]
     PermissionRequested {
         #[serde(rename = "sessionID", alias = "sessionId")]
@@ -208,14 +204,8 @@ enum ServerEvent {
     },
     #[serde(rename = "permission.resolved")]
     PermissionResolved(PermissionResolvedEvent),
-    #[serde(rename = "permission.replied")]
-    PermissionReplied(PermissionResolvedEvent),
     #[serde(rename = "tool_call.lifecycle")]
     ToolCallLifecycle(ToolCallLifecycleEvent),
-    #[serde(rename = "tool_call.start")]
-    ToolCallStart(ToolCallStartEvent),
-    #[serde(rename = "tool_call.complete")]
-    ToolCallComplete(ToolCallCompleteEvent),
     #[serde(rename = "execution.topology.changed")]
     TopologyChanged {
         #[serde(rename = "sessionID", alias = "sessionId")]
@@ -223,8 +213,6 @@ enum ServerEvent {
     },
     #[serde(rename = "diff.updated")]
     DiffUpdated(DiffEvent),
-    #[serde(rename = "session.diff")]
-    SessionDiff(DiffEvent),
     #[serde(rename = "output_block")]
     OutputBlock(OutputBlockEvent),
     #[serde(other)]
@@ -425,9 +413,7 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 },
             ))));
         }
-        ServerEvent::QuestionResolved(event)
-        | ServerEvent::QuestionReplied(event)
-        | ServerEvent::QuestionRejected(event) => {
+        ServerEvent::QuestionResolved(event) => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::QuestionResolved {
                     session_id: event.session_id,
@@ -443,7 +429,7 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 },
             ))));
         }
-        ServerEvent::PermissionResolved(event) | ServerEvent::PermissionReplied(event) => {
+        ServerEvent::PermissionResolved(event) => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::PermissionResolved {
                     session_id: event.session_id().to_string(),
@@ -486,46 +472,12 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 }
             }
         }
-        ServerEvent::ToolCallStart(event) => {
-            tracing::info!("Received tool_call.start event");
-            let Some(tool_call_id) = event.tool_call_id.as_deref() else {
-                tracing::warn!("tool_call.start missing toolCallId");
-                return;
-            };
-            let Some(tool_name) = event.tool_name.as_deref() else {
-                tracing::warn!("tool_call.start missing toolName");
-                return;
-            };
-            tracing::info!(
-                "Sending ToolCallStarted: id={}, name={}",
-                tool_call_id,
-                tool_name
-            );
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::ToolCallStarted {
-                    session_id: event.session_id,
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                },
-            ))));
-        }
-        ServerEvent::ToolCallComplete(event) => {
-            let Some(tool_call_id) = event.tool_call_id.as_deref() else {
-                return;
-            };
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::ToolCallCompleted {
-                    session_id: event.session_id,
-                    tool_call_id: tool_call_id.to_string(),
-                },
-            ))));
-        }
         ServerEvent::TopologyChanged { session_id } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::TopologyChanged { session_id },
             ))));
         }
-        ServerEvent::DiffUpdated(event) | ServerEvent::SessionDiff(event) => {
+        ServerEvent::DiffUpdated(event) => {
             let diffs = event
                 .diff
                 .into_iter()
@@ -641,6 +593,6 @@ mod tests {
 
         assert_eq!(session_id, "session-1");
         assert_eq!(permission.id, "permission-1");
-        assert_eq!(permission.tool.as_str(), "bash");
+        assert_eq!(permission.tool.to_string(), "bash");
     }
 }

@@ -5,7 +5,6 @@ use std::sync::Arc;
 #[cfg(test)]
 use chrono::Utc;
 use rocode_core::bus::{Bus, BusEventDef};
-use rocode_core::contracts::events::BusEventName;
 #[cfg(test)]
 use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_plugin::{HookContext, HookEvent};
@@ -23,28 +22,19 @@ pub use crate::session_model::{
 // Bus Event Definitions (matches TS Session.Event)
 // ============================================================================
 
-pub static SESSION_CREATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::SessionCreated.as_str());
-pub static SESSION_UPDATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::SessionUpdated.as_str());
-pub static SESSION_DELETED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::SessionDeleted.as_str());
-pub static SESSION_DIFF_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionDiff.as_str());
-pub static SESSION_ERROR_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionError.as_str());
+pub static SESSION_CREATED_EVENT: BusEventDef = BusEventDef::new("session.created");
+pub static SESSION_UPDATED_EVENT: BusEventDef = BusEventDef::new("session.updated");
+pub static SESSION_DELETED_EVENT: BusEventDef = BusEventDef::new("session.deleted");
+pub static SESSION_DIFF_EVENT: BusEventDef = BusEventDef::new("session.diff");
+pub static SESSION_ERROR_EVENT: BusEventDef = BusEventDef::new("session.error");
 
 // Message-level events (matches TS MessageV2.Event)
-pub static MESSAGE_UPDATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::MessageUpdated.as_str());
-pub static MESSAGE_REMOVED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::MessageRemoved.as_str());
-pub static PART_UPDATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::MessagePartUpdated.as_str());
-pub static PART_REMOVED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::MessagePartRemoved.as_str());
-pub static PART_DELTA_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::MessagePartDelta.as_str());
-pub static COMMAND_EXECUTED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::CommandExecuted.as_str());
+pub static MESSAGE_UPDATED_EVENT: BusEventDef = BusEventDef::new("message.updated");
+pub static MESSAGE_REMOVED_EVENT: BusEventDef = BusEventDef::new("message.removed");
+pub static PART_UPDATED_EVENT: BusEventDef = BusEventDef::new("message.part.updated");
+pub static PART_REMOVED_EVENT: BusEventDef = BusEventDef::new("message.part.removed");
+pub static PART_DELTA_EVENT: BusEventDef = BusEventDef::new("message.part.delta");
+pub static COMMAND_EXECUTED_EVENT: BusEventDef = BusEventDef::new("command.executed");
 
 pub fn sanitize_display_text(text: &str) -> String {
     let mut lines = Vec::new();

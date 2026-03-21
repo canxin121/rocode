@@ -26,7 +26,7 @@ impl App {
             id: permission.id.clone(),
             permission: permission.tool.clone(),
             resource,
-            tool_name: permission.tool.as_str().to_string(),
+            tool_name: permission.tool.to_string(),
         }
     }
 

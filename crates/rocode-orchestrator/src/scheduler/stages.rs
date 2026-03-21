@@ -6,18 +6,11 @@ use crate::{
     ToolOutput, ToolRunner,
 };
 use async_trait::async_trait;
-use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_permission::allowlist_allows_tool;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub const READ_ONLY_STAGE_TOOLS: &[&str] = &[
-    BuiltinToolName::Read.as_str(),
-    BuiltinToolName::Glob.as_str(),
-    BuiltinToolName::Grep.as_str(),
-    BuiltinToolName::Ls.as_str(),
-    BuiltinToolName::AstGrepSearch.as_str(),
-];
+pub const READ_ONLY_STAGE_TOOLS: &[&str] = &["read", "glob", "grep", "ls", "ast_grep_search"];
 
 pub type StageToolArgumentValidator =
     fn(&str, &serde_json::Value, &crate::ExecutionContext) -> Result<(), ToolExecError>;

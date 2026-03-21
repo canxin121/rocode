@@ -38,6 +38,16 @@ pub enum TodoStatus {
     Cancelled,
 }
 
+impl TodoStatus {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}
+
 /// Canonical todo priority strings.
 ///
 /// Wire format: lowercase strings (`"high"`, `"medium"`, `"low"`).
@@ -50,4 +60,14 @@ pub enum TodoPriority {
     High,
     Medium,
     Low,
+}
+
+impl TodoPriority {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }

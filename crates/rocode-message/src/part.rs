@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use strum_macros::{Display, EnumString};
+use strum_macros::{AsRefStr, Display, EnumString};
 
 use crate::id::new_part_id;
 use crate::status::ToolCallStatus;
@@ -15,7 +15,9 @@ fn default_pending_status() -> String {
 }
 
 /// Canonical part kind string used for indexing/filtering.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display, AsRefStr, EnumString,
+)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum PartKind {
     #[serde(rename = "text")]
@@ -48,6 +50,16 @@ pub enum PartKind {
     Retry,
     #[serde(rename = "compaction")]
     Compaction,
+}
+
+impl PartKind {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

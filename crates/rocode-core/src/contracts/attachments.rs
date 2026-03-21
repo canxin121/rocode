@@ -43,3 +43,13 @@ pub mod keys {
 pub enum AttachmentTypeWire {
     File,
 }
+
+impl AttachmentTypeWire {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+}

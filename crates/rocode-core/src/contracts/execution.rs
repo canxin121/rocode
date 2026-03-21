@@ -46,7 +46,6 @@ pub struct SessionExecutionNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionTopology {
-    #[serde(alias = "sessionID", alias = "sessionId")]
     pub session_id: String,
     pub active_count: usize,
     #[serde(default)]
