@@ -728,33 +728,39 @@ fn aggressive_close(input: &str, repairs: &mut Vec<String>) -> String {
 pub(super) fn detect_tool(value: &Value, schemas: &[ToolSchema]) -> Option<String> {
     let obj = value.as_object()?;
 
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(Value::String(value)) => Some(value),
-            Some(Value::Number(value)) => Some(value.to_string()),
-            Some(Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum StringLike {
+        String(String),
+        Number(serde_json::Number),
+        Bool(bool),
+    }
+
+    impl StringLike {
+        fn into_string(self) -> String {
+            match self {
+                Self::String(value) => value,
+                Self::Number(value) => value.to_string(),
+                Self::Bool(value) => value.to_string(),
+            }
+        }
     }
 
     #[derive(Debug, Default, Deserialize)]
     struct ToolNameProbeWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        name: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        tool: Option<String>,
+        #[serde(default)]
+        name: Option<StringLike>,
+        #[serde(default)]
+        tool: Option<StringLike>,
     }
 
     // Direct name field takes priority
     if let Ok(probe) = serde_json::from_value::<ToolNameProbeWire>(value.clone()) {
         if let Some(name_str) = probe
             .name
+            .map(StringLike::into_string)
+            .or_else(|| probe.tool.map(StringLike::into_string))
             .as_deref()
-            .or(probe.tool.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
